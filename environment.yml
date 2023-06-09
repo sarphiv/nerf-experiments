@@ -1,0 +1,21 @@
+name: nerf-experiments-env
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - pip
+  - python=3.10.8
+  - pip:
+    - ipython
+    - ipykernel
+    - ipympl
+    - tqdm
+    - numpy
+    - matplotlib
+    - scikit-learn
+    - scipy
+    - torch
+    - torchvision
+    - torchaudio
+    - pytorch-lightning
+    - wandb
