@@ -43,7 +43,7 @@ model = Nerf2d(
     fourier_levels=10,
     learning_rate=1e-4,
     learning_rate_decay=0.5,
-    learning_rate_decay_patience=20,
+    learning_rate_decay_patience=80,
     weight_decay=0
 )
 
