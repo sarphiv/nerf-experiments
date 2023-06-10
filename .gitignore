@@ -162,6 +162,9 @@ cython_debug/
 # Pytorch Lightning
 lightning_logs/
 
+# Weights and Biases
+wandb-logs
+
 
 # Data folders
 data/

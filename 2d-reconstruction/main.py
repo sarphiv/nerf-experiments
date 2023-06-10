@@ -1,50 +1,73 @@
 import torch as th
 import pytorch_lightning as pl
-import numpy as np
-import matplotlib.pyplot as plt
-from PIL import Image
-import os
+from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.callbacks import LearningRateMonitor
 
 from model import Nerf2d
 from data_loader import SingleImageDataModule
+from image_logger import Log2dImageReconstruction
 
 
 
+# Set seeds
+pl.seed_everything(1337)
 
+
+# Set up weights and biases logger
+wandb_logger = WandbLogger(
+    project="nerf-experiments", 
+    entity="metrics_logger",
+    save_dir="./wandb-logs"
+)
+
+
+# Set up data module
 dm = SingleImageDataModule(
     # image_path="data/morten-lena.png",
     image_path="data/banana.jpg",
     pixel_shuffle_seed=1337,
     pixel_split_sizes=(0.9, 0.05, 0.05),
     batch_size=256,
-    num_workers=1,
-    shuffle=True,
+    num_workers=3,
+    shuffle=True
 )
-
 dm.setup(None)
+
+
+# Set up model
+th.set_float32_matmul_precision("medium")
 
 model = Nerf2d(
     width=dm.image_width, 
     height=dm.image_height, 
     fourier_levels=10,
     learning_rate=1e-4,
-    weight_decay=0)
-
-# th.set_float32_matmul_precision("medium")
-trainer = pl.Trainer(
-    accelerator="auto",
-    max_epochs=512,
-    # precision="16-mixed"
+    learning_rate_decay=0.5,
+    learning_rate_decay_patience=20,
+    weight_decay=0
 )
 
 
-plt.ion()
-plt.show()
+# Set up trainer
+trainer = pl.Trainer(
+    accelerator="auto",
+    max_epochs=512,
+    precision="16-mixed",
+    logger=wandb_logger,
+    callbacks=[
+        Log2dImageReconstruction(
+            wandb_logger=wandb_logger,
+            epoch_period=20,
+            width=dm.image_width, 
+            height=dm.image_height
+        ),
+        LearningRateMonitor(
+            logging_interval="epoch"
+        )
+    ]
+)
 
 
-# TODO: Refactor image drawing into a hook
-# TODO: The hook should work with wandb logging
-
-
+# Start training
 trainer.fit(model, dm)
 

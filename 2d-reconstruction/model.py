@@ -1,8 +1,6 @@
 import torch as th
 import torch.nn as nn
 import pytorch_lightning as pl
-import numpy as np
-import matplotlib.pyplot as plt
 
 
 class FourierFeatures(nn.Module):
@@ -31,16 +29,22 @@ class Nerf2d(pl.LightningModule):
         height: int, 
         fourier_levels: int,
         learning_rate: float = 1e-3,
+        learning_rate_decay: float = 0.5,
+        learning_rate_decay_patience: int = 20,
         weight_decay: float = 0.0,
     ):
         super().__init__()
-        
+        self.save_hyperparameters()
+
         self.width = width
         self.height = height
         
         self.fourier_levels = fourier_levels
         
         self.learning_rate = learning_rate
+        self.learning_rate_decay = learning_rate_decay
+        self.learning_rate_decay_patience = learning_rate_decay_patience
+        
         self.weight_decay = weight_decay
         
         
@@ -71,13 +75,6 @@ class Nerf2d(pl.LightningModule):
         loss = nn.functional.mse_loss(y_hat, y)
         self.log("train_loss", loss)
 
-
-        # Draw training image
-        # plt.scatter(x[:, 1].cpu().numpy(), x[:, 0].cpu().numpy(), c=y.cpu().numpy(), s=0.2)
-        # plt.draw()
-        # plt.pause(0.005)
-        
-
         return loss
 
 
@@ -89,34 +86,17 @@ class Nerf2d(pl.LightningModule):
         self.log('val_loss', loss)
 
 
-        if np.random.rand() > 0.99:
-            x, y = th.meshgrid(
-                th.linspace(0, 1, self.width, device=self.device), 
-                th.linspace(0, 1, self.height, device=self.device),
-                indexing="ij"
-            )
-            location = th.hstack((
-                x.flatten().unsqueeze(1),
-                y.flatten().unsqueeze(1)
-            ))
-            
-            print(loss.item())
-            rgb = self(location).view(self.width, self.height, 3).permute(1, 0, 2).to("cpu").detach().numpy()
-            rgb = np.array(rgb, dtype=np.float32)
-
-            plt.imshow(rgb)
-            plt.draw()
-            plt.pause(0.5)
-
-
     def configure_optimizers(self):
         optimizer = th.optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
-        # scheduler = th.optim.lr_scheduler.ReduceLROnPlateau(
-        #     optimizer, mode="max", factor=0.5, patience=1
-        # )
+        scheduler = th.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, 
+            mode="min", 
+            factor=self.learning_rate_decay, 
+            patience=self.learning_rate_decay_patience
+        )
 
         return {
             "optimizer": optimizer,
-            # "lr_scheduler": scheduler,
-            # "monitor": "train_loss"
+            "lr_scheduler": scheduler,
+            "monitor": "train_loss"
         }
