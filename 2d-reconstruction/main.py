@@ -9,10 +9,11 @@ from image_logger import Log2dImageReconstruction
 
 
 
+# Set seeds
+pl.seed_everything(1337)
+
 
 if __name__ == "__main__":
-    # Set seeds
-    pl.seed_everything(1337)
     # Set up weights and biases logger
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
