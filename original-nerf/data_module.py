@@ -8,13 +8,13 @@ import pytorch_lightning as pl
 import torch as th
 import torchvision as tv
 from PIL import Image
-from torch.utils.data import DataLoader, IterableDataset
+from torch.utils.data import DataLoader, Dataset
 
 
-DatasetOutput = tuple[th.Tensor, th.Tensor]
+DatasetOutput = tuple[th.Tensor, th.Tensor, th.Tensor]
 
 
-class ImageSyntheticDataLoader(IterableDataset[DatasetOutput]):
+class ImageSyntheticDataset(Dataset[DatasetOutput]):
     def __init__(self, camera_path: str, images_path: str) -> None:
         super().__init__()
         
@@ -24,48 +24,101 @@ class ImageSyntheticDataLoader(IterableDataset[DatasetOutput]):
         self.transform = cast(
             Callable[[Image.Image], th.Tensor], 
             tv.transforms.Compose([
-                tv.transforms.ToTensor()
+                # Transform form PIL image to Tensor
+                tv.transforms.ToTensor(),
+                # Transform alpha to white background (removes alpha too)
+                tv.transforms.Lambda(lambda img: img[-1] * img[:3] + (1 - img[-1])),
+                # Permute channels to (H, W, C)
+                # WARN: This is against the convention of PyTorch.
+                #  Doing it to enable easier batching of rays.
+                tv.transforms.Lambda(lambda img: img.permute(1, 2, 0))
             ])
         )
 
 
         # Load each image, transform, and store
-        self.images = { pathlib.PurePath(path).stem:  self.transform(
+        self.images = { pathlib.PurePath(path).stem: self.transform(
                             Image.open(str(pathlib.PurePath(images_path, path)))
                         )
                         for path in os.listdir(self.images_path) }
         
         # Store image dimensions
-        self.width, self.height = next(iter(self.images.values())).shape[-2:]
+        self.height, self.width = next(iter(self.images.values())).shape[:2]
+        self.image_batch_size = self.width * self.height
 
 
         # Load camera data from json
         camera_data = json.loads(open(self.camera_path).read())
         
         self.focal_length = self.width / 2 / math.tan(camera_data["camera_angle_x"] / 2)
-        self.camera_to_world = { pathlib.PurePath(path).stem: th.tensor(camera_to_world) 
-                                 for frame in camera_data["frames"] 
-                                 for path, rotation, camera_to_world in [frame.values()] }
+        self.camera_to_world: dict[str, th.Tensor] = { 
+            pathlib.PurePath(path).stem: th.tensor(camera_to_world) / camera_to_world[-1][-1]
+            for frame in camera_data["frames"] 
+            for path, rotation, camera_to_world in [frame.values()] 
+        }
 
-        # Store inverse projection matrix and image
-        self.dataset = [(self.camera_to_world[image_name], image) 
-                        for image_name, image in self.images.items()]
 
+        # Create unit directions (H, W, 3) in camera space
+        # NOTE: Initially normalized such that z=-1 via the focal length.
+        #  Camera is looking in the negative z direction.
+        #  y-axis is also flipped.
+        i, j = th.meshgrid(
+            -th.linspace(-0.5, 0.5, self.height) / self.focal_length,
+            th.linspace(-0.5, 0.5, self.width) / self.focal_length,
+            indexing="ij"
+        )
+        directions = th.stack((j, i, -th.ones_like(j)), dim=-1)
+        directions /= th.norm(directions, p=2, dim=-1, keepdim=True)
+
+        # Rotate directions (H, W, 3) to world via R (3, 3).
+        #  Denote dir (row vector) as one of the directions in the directions tensor.
+        #  Then R @ dir.T = (dir @ R.T).T. 
+        #  This would yield a column vector as output. 
+        #  To get a row vector as output again, simply omit the last transpose.
+        #  The inside of the parenthesis on the right side 
+        #  is conformant for matrix multiplication with the directions tensor.
+        # NOTE: Assuming scale of projection matrix is 1
+        self.directions: dict[str, th.Tensor] = { 
+            image_name: directions @ camera_to_world[:3, :3].T
+            for image_name, camera_to_world in self.camera_to_world.items()
+        }
+
+        # Get directions directly from camera to world projection
+        self.origins = {
+            image_name: camera_to_world[:3, 3].expand_as(directions)
+            for image_name, camera_to_world in self.camera_to_world.items()
+        }
+
+
+        # Store dataset output
+        self.dataset = [
+            (
+                self.camera_to_world[image_name], 
+                self.origins[image_name],
+                self.directions[image_name], 
+                image
+            ) 
+            for image_name, image in self.images.items()
+        ]
 
 
     def __getitem__(self, index: int) -> DatasetOutput:
-        return self.dataset[index]
+        # Get dataset via image index
+        P, o, d, c = self.dataset[index // self.image_batch_size]
+        # Get pixel index
+        i = index % self.image_batch_size
 
-    def __iter__(self) -> Iterator[DatasetOutput]:
-        return iter(self.dataset)
+        return o.view(-1, 3)[i], d.view(-1, 3)[i], c.view(-1, 3)[i]
+
+    def __len__(self) -> int:
+        return len(self.dataset) * self.image_batch_size
 
 
 
 class ImageSyntheticDataModule(pl.LightningDataModule):
     """Data module for loading images from a synthetic dataset.
-    Each dataset yields a tuple of (camera_to_world, image),
-    where camera_to_world is a tensor of shape (4, 4),
-    and image is a tensor of shape (4, height, width).
+    Each dataset yields a tuple of (ray_origin, ray_direction, pixel_color).
+    All are tensors of shape (3,).
     """
     def __init__(
         self, 
@@ -87,11 +140,11 @@ class ImageSyntheticDataModule(pl.LightningDataModule):
     def setup(self, stage: Literal["fit", "test", "predict"]):
         match stage:
             case "fit":
-                self.dataset_train = ImageSyntheticDataLoader(
+                self.dataset_train = ImageSyntheticDataset(
                     camera_path=os.path.join(self.scene_path, "transforms_train.json"),
                     images_path=os.path.join(self.scene_path, "train-tiny")
                 )
-                self.dataset_val = ImageSyntheticDataLoader(
+                self.dataset_val = ImageSyntheticDataset(
                     camera_path=os.path.join(self.scene_path, "transforms_val.json"),
                     images_path=os.path.join(self.scene_path, "val-tiny")
                 )
@@ -101,7 +154,7 @@ class ImageSyntheticDataModule(pl.LightningDataModule):
 
 
             case "test":
-                self.dataset_test = ImageSyntheticDataLoader(
+                self.dataset_test = ImageSyntheticDataset(
                     camera_path=os.path.join(self.scene_path, "transforms_test.json"),
                     images_path=os.path.join(self.scene_path, "test-tiny")
                 )
@@ -114,6 +167,19 @@ class ImageSyntheticDataModule(pl.LightningDataModule):
                 pass
 
 
+
+    def _disable_shuffle_arg(self, args: tuple, kwargs: dict) -> Any:
+        kwargs = {**kwargs}
+        
+        if len(args) > 2:
+            args = (*args[:2], False, *args[3:])
+
+        if "shuffle" in kwargs:
+            kwargs["shuffle"] = False
+
+        return args, kwargs
+
+
     def train_dataloader(self):
         return DataLoader(
             self.dataset_train,
@@ -122,15 +188,17 @@ class ImageSyntheticDataModule(pl.LightningDataModule):
         )
 
     def val_dataloader(self):
+        args, kwargs = self._disable_shuffle_arg(self.args, self.kwargs)
         return DataLoader(
             self.dataset_val,
-            *self.args,
-            **self.kwargs
+            *args,
+            **kwargs
         )
 
     def test_dataloader(self):
+        args, kwargs = self._disable_shuffle_arg(self.args, self.kwargs)
         return DataLoader(
             self.dataset_test,
-            *self.args,
-            **self.kwargs
+            *args,
+            **kwargs
         )

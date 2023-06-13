@@ -24,9 +24,14 @@ if __name__ == "__main__":
 
 
     # Set up data module
+    
+    # TODO: Set up resize transformation
+    
     dm = ImageSyntheticDataModule(
         scene_path="data/lego",
-        num_workers=3
+        batch_size=1024,
+        num_workers=4,
+        shuffle=True,
     )
     dm.setup("fit")
 
@@ -44,10 +49,10 @@ if __name__ == "__main__":
         callbacks=[
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
+                validation_image_name="r_2",
                 epoch_period=1,
                 width=dm.image_width, 
-                height=dm.image_height,
-                camera_to_world=dm.dataset_val[3][0]
+                height=dm.image_height
             ),
             LearningRateMonitor(
                 logging_interval="epoch"
@@ -63,14 +68,12 @@ if __name__ == "__main__":
         focal_length=dm.focal_length,
         near_sphere_normalized=2,
         far_sphere_normalized=6,
-        # rays_per_image=4096,
-        rays_per_image=1024,
-        samples_per_ray=192,
+        samples_per_ray=64,
         fourier_levels_pos=10,
         fourier_levels_dir=4,
-        learning_rate=1e-4,
+        learning_rate=1e-3,
         learning_rate_decay=0.5,
-        learning_rate_decay_patience=80,
+        learning_rate_decay_patience=5,
         weight_decay=0
     )
 

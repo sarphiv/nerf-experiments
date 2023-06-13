@@ -2,6 +2,8 @@ import torch as th
 import torch.nn as nn
 import pytorch_lightning as pl
 
+from data_module import DatasetOutput
+
 
 
 class FourierFeatures(nn.Module):
@@ -140,7 +142,6 @@ class NerfOriginal(pl.LightningModule):
         focal_length: float,
         near_sphere_normalized: float,
         far_sphere_normalized: float,
-        rays_per_image: int,
         samples_per_ray: int,
         fourier_levels_pos: int,
         fourier_levels_dir: int,
@@ -158,8 +159,7 @@ class NerfOriginal(pl.LightningModule):
         self.focal_length = focal_length
         self.near_sphere_normalized = near_sphere_normalized
         self.far_sphere_normalized = far_sphere_normalized
-        
-        self.rays_per_image = rays_per_image
+
         self.samples_per_ray = samples_per_ray
         
         self.fourier_levels_pos = fourier_levels_pos
@@ -172,9 +172,9 @@ class NerfOriginal(pl.LightningModule):
         self.weight_decay = weight_decay
         
         
-        self.model_coarse = NerfOriginalCoarse(
-            fourier_levels_pos=self.fourier_levels_pos
-        )
+        # self.model_coarse = NerfOriginalCoarse(
+        #     fourier_levels_pos=self.fourier_levels_pos
+        # )
         self.model_fine = NerfOriginalFine(
             fourier_levels_pos=self.fourier_levels_pos, 
             fourier_levels_dir=self.fourier_levels_dir
@@ -182,79 +182,17 @@ class NerfOriginal(pl.LightningModule):
 
 
 
-    def _get_random_pixels(self):
-        pixel_coords = th.rand((self.rays_per_image, 2), device=self.device)
-        pixel_coords[:, 0] *= self.width
-        pixel_coords[:, 1] *= self.height
-
-        return pixel_coords.int()
-
-    
-    def _get_rays(self, pixel_coords: th.Tensor, camera_to_world: th.Tensor):
-        # Conversion from pixel coordinates to camera coordinates
-        image_size = th.tensor([self.width, self.height], device=self.device)
-        
-        # NOTE: Normalized such that z=-1 via the focal length.
-        #  Camera is looking in the negative z direction.
-        
-        
-        
-        
-        
-        # WARN: This matrix multiplication may be wrong
-        directions = (camera_to_world[:3, :3] @ th.hstack((
-            (pixel_coords/image_size - 0.5) / self.focal_length, 
-            -th.ones((pixel_coords.shape[0], 1), device=self.device)
-        )).T).T
-        # directions = (camera_to_world[:3, :3].T @ th.hstack((
-        #     (pixel_coords/image_size - 0.5) / self.focal_length, 
-        #     -th.ones((pixel_coords.shape[0], 1), device=self.device)
-        # )).T).T
-        # directions = (camera_to_world[:3, :3].T @ th.hstack((
-        #     (pixel_coords/image_size - 0.5) / self.focal_length, 
-        #     th.ones((pixel_coords.shape[0], 1), device=self.device)
-        # )).T).T
-        # directions = (th.hstack((
-        #     (pixel_coords/image_size - 0.5) / self.focal_length, 
-        #     -th.ones((pixel_coords.shape[0], 1), device=self.device)
-        # )) @ camera_to_world[:3, :3].T)
-        # x, y = th.meshgrid(
-        #     th.linspace(-0.5, 0.5, self.width, device=self.device) / self.focal_length,
-        #     th.linspace(-0.5, 0.5, self.height, device=self.device) / self.focal_length,
-        #     indexing="xy"
-        # )
-        # directions = (th.stack((x, y, th.ones_like(x, device=self.device)), dim=-1) @ camera_to_world[:3, :3].T).view(-1, 3)
-        # directions = directions[th.randint(0, directions.shape[0], (pixel_coords.shape[0],))]
-
-
-
-
-
-
-
-
-
-        # Normalizing directions again such that distance calculations are simpler and faster
-        directions /= th.norm(directions, dim=1, p=2, keepdim=True)
-        
-
-        # Retrieve ray origin and repeat it for each ray
-        origins = camera_to_world[:3, 3].expand(pixel_coords.shape[0], 3)
-
-
-        return origins, directions
-
-
     def _get_sample_positions(self, origins: th.Tensor, directions: th.Tensor):
         # Amount of rays
         rays_n = origins.shape[0]
         
-        # Calculate interval size for each ray sample
-        interval_size = (self.far_sphere_normalized - self.near_sphere_normalized) / self.samples_per_ray
+        # Calculate interval size for each ray sample.
+        #  Solve for interval in: near + interval*(samples+1) = far
+        interval_size = (self.far_sphere_normalized - self.near_sphere_normalized) / (self.samples_per_ray + 1)
         
         # Calculate direction scaling range for each ray,
-        #  such that they start at the near plane and end at the far plane
-        # NOTE: Subtracting one interval size to avoid sampling past far plane.
+        #  such that they start at the near sphere and end at the far sphere
+        # NOTE: Subtracting one interval size to avoid sampling past far sphere
         t = th.linspace(
             self.near_sphere_normalized, 
             self.far_sphere_normalized - interval_size, 
@@ -305,14 +243,9 @@ class NerfOriginal(pl.LightningModule):
 
 
 
-    def forward(self, pixel_coords: th.Tensor, camera_to_world: th.Tensor):
+    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor):
         # Amount of pixels to render
-        pixels_n = pixel_coords.shape[0]
-
-        # Get ray origins and directions from pixel coordinates and projection matrix
-        ray_origs, ray_dirs  = self._get_rays(pixel_coords, camera_to_world)
-        
-        
+        rays_n = ray_origs.shape[0]
         
         
         
@@ -327,8 +260,8 @@ class NerfOriginal(pl.LightningModule):
         sample_pos_fine, sample_dir_fine, sample_dist_fine = self._get_sample_positions(ray_origs, ray_dirs)
 
         # Ungroup samples by ray
-        sample_pos_fine = sample_pos_fine.view(pixels_n * self.samples_per_ray, 3)
-        sample_dir_fine = sample_dir_fine.view(pixels_n * self.samples_per_ray, 3)
+        sample_pos_fine = sample_pos_fine.view(rays_n * self.samples_per_ray, 3)
+        sample_dir_fine = sample_dir_fine.view(rays_n * self.samples_per_ray, 3)
 
 
         # Evaluate density and color at sample positions
@@ -336,8 +269,8 @@ class NerfOriginal(pl.LightningModule):
 
 
         # Group samples by ray
-        sample_density_fine = sample_density_fine.view(pixels_n, self.samples_per_ray)
-        sample_color_fine = sample_rgb_fine.view(pixels_n, self.samples_per_ray, 3)
+        sample_density_fine = sample_density_fine.view(rays_n, self.samples_per_ray)
+        sample_color_fine = sample_rgb_fine.view(rays_n, self.samples_per_ray, 3)
 
 
         # Compute color for each pixel
@@ -349,33 +282,22 @@ class NerfOriginal(pl.LightningModule):
 
 
 
-    def training_step(self, batch: tuple[th.Tensor, th.Tensor], batch_idx: int):
-        # NOTE: Batch size is 1
-        camera_to_world, image = batch
-        camera_to_world, image = camera_to_world[0], image[0]
-
-        pixel_coords = self._get_random_pixels()
+    def training_step(self, batch: DatasetOutput, batch_idx: int):
+        ray_origs, ray_dirs, ray_colors = batch
         
-        color = image[:3, pixel_coords[:, 1], pixel_coords[:, 0]].permute(1, 0)
-        color_pred = self(pixel_coords.float(), camera_to_world)
+        ray_colors_pred = self(ray_origs, ray_dirs)
 
-        loss = nn.functional.mse_loss(color_pred, color)
+        loss = nn.functional.mse_loss(ray_colors_pred, ray_colors)
         self.log("train_loss", loss)
 
         return loss
 
-
-    def validation_step(self, batch, batch_idx):
-        # NOTE: Batch size is 1
-        camera_to_world, image = batch
-        camera_to_world, image = camera_to_world[0], image[0]
-
-        pixel_coords = self._get_random_pixels()
+    def validation_step(self, batch: DatasetOutput, batch_idx: int):
+        ray_origs, ray_dirs, ray_colors = batch
         
-        color = image[:3, pixel_coords[:, 1], pixel_coords[:, 0]].permute(1, 0)
-        color_pred = self(pixel_coords.float(), camera_to_world)
+        ray_colors_pred = self(ray_origs, ray_dirs)
 
-        loss = nn.functional.mse_loss(color_pred, color)
+        loss = nn.functional.mse_loss(ray_colors_pred, ray_colors)
         self.log("val_loss", loss)
 
         return loss
