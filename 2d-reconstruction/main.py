@@ -1,6 +1,6 @@
 import torch as th
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.loggers import WandbLogger # type: ignore
 from pytorch_lightning.callbacks import LearningRateMonitor
 
 from model import Nerf2d
@@ -16,8 +16,7 @@ pl.seed_everything(1337)
 # Set up weights and biases logger
 wandb_logger = WandbLogger(
     project="nerf-experiments", 
-    entity="metrics_logger",
-    save_dir="./wandb-logs"
+    entity="metrics_logger"
 )
 
 
