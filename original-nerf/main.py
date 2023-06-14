@@ -38,21 +38,19 @@ if __name__ == "__main__":
     
     dm = ImageSyntheticDataModule(
         scene_path="data/lego",
+        validation_fraction=0.05,
+        validation_fraction_shuffle=1234,
         batch_size=1024*4,
         num_workers=4,
-        # shuffle=True,
-        shuffle=False,
+        shuffle=True,
     )
-    dm.setup("fit")
 
 
     # Set up trainer
     th.set_float32_matmul_precision("medium")
-    # th.set_float32_matmul_precision("high")
 
     trainer = pl.Trainer(
         accelerator="auto",
-        # accelerator="cpu",
         max_epochs=512,
         precision="16-mixed",
         logger=wandb_logger,
@@ -73,8 +71,6 @@ if __name__ == "__main__":
 
     # Set up model
     model = NerfOriginal(
-        width=dm.image_width, 
-        height=dm.image_height, 
         focal_length=dm.focal_length,
         near_sphere_normalized=2,
         far_sphere_normalized=7,

@@ -143,8 +143,6 @@ class NerfOriginalFine(nn.Module):
 class NerfOriginal(pl.LightningModule):
     def __init__(
         self, 
-        width: int, 
-        height: int, 
         focal_length: float,
         near_sphere_normalized: float,
         far_sphere_normalized: float,
@@ -159,9 +157,6 @@ class NerfOriginal(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
-        self.width = width
-        self.height = height
-        
         self.focal_length = focal_length
         self.near_sphere_normalized = near_sphere_normalized
         self.far_sphere_normalized = far_sphere_normalized
