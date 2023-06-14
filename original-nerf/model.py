@@ -14,7 +14,9 @@ class FourierFeatures(nn.Module):
 
 
     def forward(self, x: th.Tensor):
-        scale = (2**th.arange(self.levels) * th.pi) \
+        # NOTE: Not multiplying with pi as in the original paper,
+        #  because their own implementation does not do this.
+        scale = (2**th.arange(self.levels)) \
             .repeat(x.shape[1]) \
             .to(x.device)
         args = x.repeat_interleave(self.levels, dim=1) * scale
@@ -126,8 +128,10 @@ class NerfOriginalFine(nn.Module):
         
         z = self.model_density_1(fourier_pos)
         z = self.model_density_2(th.cat((z, fourier_pos), dim=1))
-        
-        density = th.relu(z[:, 256])
+
+        # NOTE: Using exp instead of ReLU as in the original paper.
+        #  The weight initialization seemed to cause negative initial values.
+        density = th.exp(z[:, 256])
         rgb = self.model_color(th.cat((z[:, :256], fourier_dir), dim=1))
 
         return density, rgb
@@ -204,8 +208,8 @@ class NerfOriginal(pl.LightningModule):
         t += th.rand_like(t, device=self.device) * interval_size
         
         # Repeat origins and directions for each sample
-        origins = origins.repeat(self.samples_per_ray, 1)
-        directions = directions.repeat(self.samples_per_ray, 1)
+        origins = origins.repeat_interleave(self.samples_per_ray, dim=0)
+        directions = directions.repeat_interleave(self.samples_per_ray, dim=0)
         
         # Calculate sample positions
         positions = origins + t * directions
@@ -250,7 +254,11 @@ class NerfOriginal(pl.LightningModule):
         
         
         
+        
+        
         # TODO: Implement hiarchical sampling
+        
+        
         
         
         

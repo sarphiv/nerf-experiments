@@ -1,6 +1,3 @@
-import os
-from typing import cast
-
 import pytorch_lightning as pl
 import torch as th
 from pytorch_lightning.callbacks import LearningRateMonitor
@@ -25,13 +22,26 @@ if __name__ == "__main__":
 
     # Set up data module
     
+    
+    
+    
+    
+    
+    
     # TODO: Set up resize transformation
+    
+    
+    
+    
+    
+    
     
     dm = ImageSyntheticDataModule(
         scene_path="data/lego",
         batch_size=1024,
         num_workers=4,
-        shuffle=True,
+        # shuffle=True,
+        shuffle=False,
     )
     dm.setup("fit")
 
@@ -67,11 +77,11 @@ if __name__ == "__main__":
         height=dm.image_height, 
         focal_length=dm.focal_length,
         near_sphere_normalized=2,
-        far_sphere_normalized=6,
-        samples_per_ray=64,
+        far_sphere_normalized=7,
+        samples_per_ray=128,
         fourier_levels_pos=10,
         fourier_levels_dir=4,
-        learning_rate=1e-3,
+        learning_rate=1e-4,
         learning_rate_decay=0.5,
         learning_rate_decay_patience=5,
         weight_decay=0
@@ -80,4 +90,3 @@ if __name__ == "__main__":
 
     # Start training
     trainer.fit(model, dm)
-
