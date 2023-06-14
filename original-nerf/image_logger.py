@@ -7,7 +7,7 @@ from pytorch_lightning.callbacks import Callback
 from pytorch_lightning.loggers import WandbLogger #type: ignore
 import wandb
 
-from data_module import ImageSyntheticDataset
+from data_module import ImagePoseDataset
 
 
 class Log2dImageReconstruction(Callback):
@@ -35,7 +35,7 @@ class Log2dImageReconstruction(Callback):
 
 
         # Retrieve validation dataset from trainer
-        dataset = cast(ImageSyntheticDataset, trainer.datamodule.dataset_val) # type: ignore
+        dataset = cast(ImagePoseDataset, trainer.datamodule.dataset_val) # type: ignore
 
         # Set up data loader for validation image
         data_loader = DataLoader(
@@ -50,7 +50,7 @@ class Log2dImageReconstruction(Callback):
 
 
         # Iterate over batches of rays to get RGB values
-        rgb = th.empty((dataset.height*dataset.width, 3), dtype=cast(th.dtype, model.dtype))
+        rgb = th.empty((dataset.image_height*dataset.image_width, 3), dtype=cast(th.dtype, model.dtype))
         i = 0
         
         for ray_origs, ray_dirs in data_loader:
@@ -72,5 +72,5 @@ class Log2dImageReconstruction(Callback):
         # NOTE: Cannot pass tensor as channel dimension is in numpy format
         self.logger.log_image(
             key="val_img", 
-            images=[rgb.view(dataset.height, dataset.width, 3).numpy()]
+            images=[rgb.view(dataset.image_height, dataset.image_width, 3).numpy()]
         )

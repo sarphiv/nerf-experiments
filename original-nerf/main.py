@@ -3,7 +3,7 @@ import torch as th
 from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.loggers import WandbLogger  # type: ignore
 
-from data_module import ImageSyntheticDataModule
+from data_module import ImagePoseDataModule
 from image_logger import Log2dImageReconstruction
 from model import NerfOriginal
 
@@ -21,25 +21,13 @@ if __name__ == "__main__":
 
 
     # Set up data module
-    
-    
-    
-    
-    
-    
-    
-    # TODO: Set up resize transformation
-    
-    
-    
-    
-    
-    
-    
-    dm = ImageSyntheticDataModule(
+    dm = ImagePoseDataModule(
+        image_width=100,
+        image_height=100,
         scene_path="data/lego",
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
+
         batch_size=1024*4,
         num_workers=4,
         shuffle=True,
@@ -71,7 +59,6 @@ if __name__ == "__main__":
 
     # Set up model
     model = NerfOriginal(
-        focal_length=dm.focal_length,
         near_sphere_normalized=2,
         far_sphere_normalized=7,
         samples_per_ray=128,

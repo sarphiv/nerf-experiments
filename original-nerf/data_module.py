@@ -15,18 +15,26 @@ from torch.utils.data import DataLoader, Dataset, Subset
 DatasetOutput = tuple[th.Tensor, th.Tensor, th.Tensor]
 
 
-class ImageSyntheticDataset(Dataset[DatasetOutput]):
-    def __init__(self, camera_path: str, images_path: str) -> None:
+class ImagePoseDataset(Dataset[DatasetOutput]):
+    def __init__(self, image_width: int, image_height: int, images_path: str, pose_path: str) -> None:
         super().__init__()
         
-        self.camera_path = camera_path
-        self.images_path = images_path
+        # Store image dimensions
+        self.image_height, self.image_width = image_width, image_height
+        self.image_batch_size = self.image_width * self.image_height
         
+        # Store paths
+        self.images_path = images_path
+        self.pose_path = pose_path
+
+        # Transform from PIL image to Tensor
         self.transform = cast(
             Callable[[Image.Image], th.Tensor], 
             tv.transforms.Compose([
                 # Transform form PIL image to Tensor
                 tv.transforms.ToTensor(),
+                # Resize image
+                tv.transforms.Resize((self.image_height, self.image_width), antialias=True), # type: ignore
                 # Transform alpha to white background (removes alpha too)
                 tv.transforms.Lambda(lambda img: img[-1] * img[:3] + (1 - img[-1])),
                 # Permute channels to (H, W, C)
@@ -43,15 +51,11 @@ class ImageSyntheticDataset(Dataset[DatasetOutput]):
                         )
                         for path in os.listdir(self.images_path) }
 
-        # Store image dimensions
-        self.height, self.width = next(iter(self.images.values())).shape[:2]
-        self.image_batch_size = self.width * self.height
-
 
         # Load camera data from json
-        camera_data = json.loads(open(self.camera_path).read())
+        camera_data = json.loads(open(self.pose_path).read())
         
-        self.focal_length = self.width / 2 / math.tan(camera_data["camera_angle_x"] / 2)
+        self.focal_length = self.image_width / 2 / math.tan(camera_data["camera_angle_x"] / 2)
         self.camera_to_world: dict[str, th.Tensor] = { 
             pathlib.PurePath(path).stem: th.tensor(camera_to_world) / camera_to_world[-1][-1]
             for frame in camera_data["frames"] 
@@ -64,8 +68,8 @@ class ImageSyntheticDataset(Dataset[DatasetOutput]):
         #  Camera is looking in the negative z direction.
         #  y-axis is also flipped.
         i, j = th.meshgrid(
-            -th.linspace(-self.height/2, self.height/2, self.height) / self.focal_length,
-            th.linspace(-self.width/2, self.width/2, self.width) / self.focal_length,
+            -th.linspace(-self.image_height/2, self.image_height/2, self.image_height) / self.focal_length,
+            th.linspace(-self.image_width/2, self.image_width/2, self.image_width) / self.focal_length,
             indexing="ij"
         )
         directions = th.stack((j, i, -th.ones_like(j)), dim=-1)
@@ -116,7 +120,7 @@ class ImageSyntheticDataset(Dataset[DatasetOutput]):
 
 
 
-class ImageSyntheticDataModule(pl.LightningDataModule):
+class ImagePoseDataModule(pl.LightningDataModule):
     """Data module for loading images from a synthetic dataset.
     Each dataset yields a tuple of (ray_origin, ray_direction, pixel_color).
     All are tensors of shape (3,).
@@ -124,6 +128,8 @@ class ImageSyntheticDataModule(pl.LightningDataModule):
     def __init__(
         self, 
         scene_path: str, 
+        image_width: int,
+        image_height: int,
         validation_fraction: float = 1.0,
         validation_fraction_shuffle: Literal["disabled", "random"] | int = "disabled",
         *args, **kwargs
@@ -132,6 +138,8 @@ class ImageSyntheticDataModule(pl.LightningDataModule):
 
         Args:
             scene_path (str): Path to the scene directory containing the camera and image data.
+            image_width (int): Width to resize images to.
+            image_height (int): Height to resize images to.
             validation_fraction (float, optional): Fraction of the dataset to use for validation. Defaults to 1.0.
             validation_fraction_shuffle (Literal["disabled", "random"] | int, optional): Whether to shuffle the validation data. 
                 If "disabled", validation data is not shuffled. If "random", validation data is shuffled randomly. 
@@ -144,14 +152,12 @@ class ImageSyntheticDataModule(pl.LightningDataModule):
         assert 0 <= validation_fraction <= 1, "Validation fraction must be between 0 and 1."
 
         self.scene_path = scene_path
+        self.image_width = image_width
+        self.image_height = image_height
+
         self.validation_fraction = validation_fraction
         self.validation_fraction_shuffle = validation_fraction_shuffle
-        
-        self.image_width: int = 0
-        self.image_height: int = 0
-        self.focal_length: float = 0.0
-        
-        
+
         self.args = args
         self.kwargs = kwargs
 
@@ -159,17 +165,18 @@ class ImageSyntheticDataModule(pl.LightningDataModule):
     def setup(self, stage: Literal["fit", "test", "predict"]):
         match stage:
             case "fit":
-                self.dataset_train = ImageSyntheticDataset(
-                    camera_path=os.path.join(self.scene_path, "transforms_train.json"),
-                    images_path=os.path.join(self.scene_path, "train")
+                self.dataset_train = ImagePoseDataset(
+                    image_width=self.image_width,
+                    image_height=self.image_height,
+                    images_path=os.path.join(self.scene_path, "train"),
+                    pose_path=os.path.join(self.scene_path, "transforms_train.json"),
                 )
-                self.dataset_val = ImageSyntheticDataset(
-                    camera_path=os.path.join(self.scene_path, "transforms_val.json"),
-                    images_path=os.path.join(self.scene_path, "val")
+                self.dataset_val = ImagePoseDataset(
+                    image_width=self.image_width,
+                    image_height=self.image_height,
+                    images_path=os.path.join(self.scene_path, "val"),
+                    pose_path=os.path.join(self.scene_path, "transforms_val.json"),
                 )
-
-                self.image_width, self.image_height = self.dataset_train.width, self.dataset_train.height
-                self.focal_length = self.dataset_train.focal_length
 
                 # Prepare cache of validation data
                 self._dataset_val_cache = None
@@ -178,13 +185,12 @@ class ImageSyntheticDataModule(pl.LightningDataModule):
 
 
             case "test":
-                self.dataset_test = ImageSyntheticDataset(
-                    camera_path=os.path.join(self.scene_path, "transforms_test.json"),
-                    images_path=os.path.join(self.scene_path, "test")
+                self.dataset_test = ImagePoseDataset(
+                    image_width=self.image_width,
+                    image_height=self.image_height,
+                    images_path=os.path.join(self.scene_path, "test"),
+                    pose_path=os.path.join(self.scene_path, "transforms_test.json"),
                 )
-                
-                self.image_width, self.image_height = self.dataset_test.width, self.dataset_test.height
-                self.focal_length = self.dataset_test.focal_length
 
 
             case "predict":
