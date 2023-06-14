@@ -41,7 +41,7 @@ class ImageSyntheticDataset(Dataset[DatasetOutput]):
                             Image.open(str(pathlib.PurePath(images_path, path)))
                         )
                         for path in os.listdir(self.images_path) }
-        
+
         # Store image dimensions
         self.height, self.width = next(iter(self.images.values())).shape[:2]
         self.image_batch_size = self.width * self.height
@@ -142,11 +142,11 @@ class ImageSyntheticDataModule(pl.LightningDataModule):
             case "fit":
                 self.dataset_train = ImageSyntheticDataset(
                     camera_path=os.path.join(self.scene_path, "transforms_train.json"),
-                    images_path=os.path.join(self.scene_path, "train-tiny")
+                    images_path=os.path.join(self.scene_path, "train-small")
                 )
                 self.dataset_val = ImageSyntheticDataset(
                     camera_path=os.path.join(self.scene_path, "transforms_val.json"),
-                    images_path=os.path.join(self.scene_path, "val-tiny")
+                    images_path=os.path.join(self.scene_path, "val-small")
                 )
                 
                 self.image_width, self.image_height = self.dataset_train.width, self.dataset_train.height
@@ -156,7 +156,7 @@ class ImageSyntheticDataModule(pl.LightningDataModule):
             case "test":
                 self.dataset_test = ImageSyntheticDataset(
                     camera_path=os.path.join(self.scene_path, "transforms_test.json"),
-                    images_path=os.path.join(self.scene_path, "test-tiny")
+                    images_path=os.path.join(self.scene_path, "test-small")
                 )
                 
                 self.image_width, self.image_height = self.dataset_test.width, self.dataset_test.height

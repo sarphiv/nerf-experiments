@@ -38,7 +38,7 @@ if __name__ == "__main__":
     
     dm = ImageSyntheticDataModule(
         scene_path="data/lego",
-        batch_size=1024,
+        batch_size=1024*4,
         num_workers=4,
         # shuffle=True,
         shuffle=False,
@@ -59,10 +59,10 @@ if __name__ == "__main__":
         callbacks=[
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
-                validation_image_name="r_2",
                 epoch_period=1,
-                width=dm.image_width, 
-                height=dm.image_height
+                validation_image_name="r_2",
+                batch_size=1024*4,
+                num_workers=4
             ),
             LearningRateMonitor(
                 logging_interval="epoch"
@@ -81,9 +81,9 @@ if __name__ == "__main__":
         samples_per_ray=128,
         fourier_levels_pos=10,
         fourier_levels_dir=4,
-        learning_rate=1e-4,
+        learning_rate=5e-4,
         learning_rate_decay=0.5,
-        learning_rate_decay_patience=5,
+        learning_rate_decay_patience=10,
         weight_decay=0
     )
 

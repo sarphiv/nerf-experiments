@@ -113,7 +113,9 @@ class NerfOriginalFine(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(256, 256+1),
         )
-        
+
+        self.softplus = nn.Softplus(threshold=8)
+
         self.model_color = nn.Sequential(
             nn.Linear(256 + 3*2*self.fourier_levels_dir, 128),
             nn.ReLU(inplace=True),
@@ -129,9 +131,9 @@ class NerfOriginalFine(nn.Module):
         z = self.model_density_1(fourier_pos)
         z = self.model_density_2(th.cat((z, fourier_pos), dim=1))
 
-        # NOTE: Using exp instead of ReLU as in the original paper.
+        # NOTE: Using shifted softplus like mip-NeRF instead of ReLU as in the original paper.
         #  The weight initialization seemed to cause negative initial values.
-        density = th.exp(z[:, 256])
+        density = self.softplus(z[:, 256] - 1)
         rgb = self.model_color(th.cat((z[:, :256], fourier_dir), dim=1))
 
         return density, rgb
@@ -285,7 +287,7 @@ class NerfOriginal(pl.LightningModule):
         rgb = self._render(sample_density_fine, sample_color_fine, sample_dist_fine)
 
 
-        # Return colors for the given pixel coordinates
+        # Return colors for the given pixel coordinates (batch_size, 3)
         return rgb
 
 
