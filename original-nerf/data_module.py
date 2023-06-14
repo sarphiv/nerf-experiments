@@ -63,8 +63,8 @@ class ImageSyntheticDataset(Dataset[DatasetOutput]):
         #  Camera is looking in the negative z direction.
         #  y-axis is also flipped.
         i, j = th.meshgrid(
-            -th.linspace(-0.5, 0.5, self.height) / self.focal_length,
-            th.linspace(-0.5, 0.5, self.width) / self.focal_length,
+            -th.linspace(-self.height/2, self.height/2, self.height) / self.focal_length,
+            th.linspace(-self.width/2, self.width/2, self.width) / self.focal_length,
             indexing="ij"
         )
         directions = th.stack((j, i, -th.ones_like(j)), dim=-1)
@@ -93,12 +93,12 @@ class ImageSyntheticDataset(Dataset[DatasetOutput]):
         # Store dataset output
         self.dataset = [
             (
-                self.camera_to_world[image_name], 
+                camera_to_world, 
                 self.origins[image_name],
                 self.directions[image_name], 
-                image
+                self.images[image_name]
             ) 
-            for image_name, image in self.images.items()
+            for image_name, camera_to_world in self.camera_to_world.items()
         ]
 
 
