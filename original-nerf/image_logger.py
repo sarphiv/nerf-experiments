@@ -50,7 +50,7 @@ class Log2dImageReconstruction(Callback):
 
 
         # Iterate over batches of rays to get RGB values
-        rgb = th.empty((dataset.image_height*dataset.image_width, 3), dtype=cast(th.dtype, model.dtype))
+        rgb = th.empty((dataset.image_batch_size, 3), dtype=cast(th.dtype, model.dtype))
         i = 0
         
         for ray_origs, ray_dirs in data_loader:

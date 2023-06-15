@@ -150,7 +150,6 @@ class NerfOriginal(pl.LightningModule):
         fourier_levels_dir: int,
         learning_rate: float = 1e-4,
         learning_rate_decay: float = 0.5,
-        learning_rate_decay_patience: int = 80,
         weight_decay: float = 0.0,
     ):
         super().__init__()
@@ -166,7 +165,6 @@ class NerfOriginal(pl.LightningModule):
         
         self.learning_rate = learning_rate
         self.learning_rate_decay = learning_rate_decay
-        self.learning_rate_decay_patience = learning_rate_decay_patience
         
         self.weight_decay = weight_decay
         
@@ -312,15 +310,12 @@ class NerfOriginal(pl.LightningModule):
             lr=self.learning_rate, 
             weight_decay=self.weight_decay
         )
-        scheduler = th.optim.lr_scheduler.ReduceLROnPlateau(
+        scheduler = th.optim.lr_scheduler.ExponentialLR(
             optimizer, 
-            mode="min", 
-            factor=self.learning_rate_decay, 
-            patience=self.learning_rate_decay_patience
+            gamma=self.learning_rate_decay
         )
 
         return {
             "optimizer": optimizer,
             "lr_scheduler": scheduler,
-            "monitor": "train_loss"
         }

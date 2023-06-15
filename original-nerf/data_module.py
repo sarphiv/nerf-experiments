@@ -255,7 +255,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
             # NOTE: Shallow copy of dataset
             #  so that the rest of the data is still available
             dataset = copy(self.dataset_val)
-            print(indices)
+
             # Retrieve subset of dataset
             dataset.dataset = [dataset.dataset[i] for i in indices]
 
