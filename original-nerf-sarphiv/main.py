@@ -24,13 +24,13 @@ if __name__ == "__main__":
 
     # Set up data module
     dm = ImagePoseDataModule(
-        image_width=800,
-        image_height=800,
-        scene_path="data/lego",
+        image_width=100,
+        image_height=100,
+        scene_path="../data/lego",
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
 
-        batch_size=1024*8,
+        batch_size=1024*4,
         num_workers=8,
         shuffle=True,
     )
@@ -49,7 +49,7 @@ if __name__ == "__main__":
                 wandb_logger=wandb_logger,
                 epoch_period=1,
                 validation_image_name="r_2",
-                batch_size=1024*8,
+                batch_size=1024*4,
                 num_workers=8
             ),
             LearningRateMonitor(

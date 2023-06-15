@@ -26,7 +26,7 @@ if __name__ == "__main__":
     # Set up data module
     dm = SingleImageDataModule(
         # image_path="data/morten-lena.png",
-        image_path="data/banana.jpg",
+        image_path="../data/2d-reconstruction/banana.jpg",
         pixel_shuffle_seed=1337,
         pixel_split_sizes=(0.9, 0.05, 0.05),
         batch_size=256,
