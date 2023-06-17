@@ -88,7 +88,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             for image_name, camera_to_world in self.camera_to_world.items()
         }
 
-        # Get directions directly from camera to world projection
+        # Get origins directly from camera to world projection
         self.origins = {
             image_name: camera_to_world[:3, 3].expand_as(directions)
             for image_name, camera_to_world in self.camera_to_world.items()
@@ -105,6 +105,16 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             ) 
             for image_name, camera_to_world in self.camera_to_world.items()
         ]
+
+
+    # def _open_image(self, path: str) -> th.Tensor:
+    #     """
+    #     Open image at path and transform to tensor.
+    #     And close file afterwards - see https://pillow.readthedocs.io/en/stable/reference/open_files.html
+    #     """
+    #     with Image.open(path) as img:
+    #         img = self.transform(img)
+    #     return img
 
 
     def __getitem__(self, index: int) -> DatasetOutput:
@@ -279,3 +289,6 @@ class ImagePoseDataModule(pl.LightningDataModule):
             *args,
             **kwargs
         )
+    
+if __name__ == "__main__":
+    print("Hello world!")
