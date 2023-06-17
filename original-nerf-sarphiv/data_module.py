@@ -16,6 +16,13 @@ DatasetOutput = tuple[th.Tensor, th.Tensor, th.Tensor]
 
 
 class ImagePoseDataset(Dataset[DatasetOutput]):
+
+    @staticmethod
+    def transform_alpha_to_white(img: th.Tensor): return img[-1] * img[:3] + (1 - img[-1])
+    
+    @staticmethod
+    def permute_channels(img: th.Tensor): return img.permute(1, 2, 0)
+
     def __init__(self, image_width: int, image_height: int, images_path: str, pose_path: str) -> None:
         super().__init__()
         
@@ -36,20 +43,17 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
                 # Resize image
                 tv.transforms.Resize((self.image_height, self.image_width), antialias=True), # type: ignore
                 # Transform alpha to white background (removes alpha too)
-                tv.transforms.Lambda(lambda img: img[-1] * img[:3] + (1 - img[-1])),
+                tv.transforms.Lambda(ImagePoseDataset.transform_alpha_to_white),
                 # Permute channels to (H, W, C)
                 # WARN: This is against the convention of PyTorch.
                 #  Doing it to enable easier batching of rays.
-                tv.transforms.Lambda(lambda img: img.permute(1, 2, 0))
+                tv.transforms.Lambda(ImagePoseDataset.permute_channels)
             ])
         )
 
 
         # Load each image, transform, and store
-        self.images = { pathlib.PurePath(path).stem: self.transform(
-                            Image.open(str(pathlib.PurePath(images_path, path)))
-                        )
-                        for path in os.listdir(self.images_path) }
+        self.images = {pathlib.PurePath(path).stem: self._open_image(path) for path in os.listdir(self.images_path) }
 
 
         # Load camera data from json
@@ -107,14 +111,14 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         ]
 
 
-    # def _open_image(self, path: str) -> th.Tensor:
-    #     """
-    #     Open image at path and transform to tensor.
-    #     And close file afterwards - see https://pillow.readthedocs.io/en/stable/reference/open_files.html
-    #     """
-    #     with Image.open(path) as img:
-    #         img = self.transform(img)
-    #     return img
+    def _open_image(self, path: str) -> th.Tensor:
+        """
+        Open image at path and transform to tensor.
+        And close file afterwards - see https://pillow.readthedocs.io/en/stable/reference/open_files.html
+        """
+        with Image.open(os.path.join(self.images_path, path)) as img:
+            img = self.transform(img)
+        return img
 
 
     def __getitem__(self, index: int) -> DatasetOutput:
@@ -142,7 +146,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         image_height: int,
         validation_fraction: float = 1.0,
         validation_fraction_shuffle: Literal["disabled", "random"] | int = "disabled",
-        *args, **kwargs
+        *dataloader_args, **dataloader_kwargs
     ):
         """Initialize the data module.
 
@@ -150,7 +154,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
             scene_path (str): Path to the scene directory containing the camera and image data.
             image_width (int): Width to resize images to.
             image_height (int): Height to resize images to.
-            validation_fraction (float, optional): Fraction of the dataset to use for validation. Defaults to 1.0.
+            validation_fraction (float, optional): Fraction of the validation dataset to use for validation. Defaults to 1.0.
             validation_fraction_shuffle (Literal["disabled", "random"] | int, optional): Whether to shuffle the validation data. 
                 If "disabled", validation data is not shuffled. If "random", validation data is shuffled randomly. 
                 If an integer, validation data is shuffled using the given random seed. Defaults to "disabled".
@@ -168,25 +172,32 @@ class ImagePoseDataModule(pl.LightningDataModule):
         self.validation_fraction = validation_fraction
         self.validation_fraction_shuffle = validation_fraction_shuffle
 
-        self.args = args
-        self.kwargs = kwargs
+        self.dataloader_args = dataloader_args
+        self.dataloader_kwargs = dataloader_kwargs
 
+    def _get_dataset(self, purpose: Literal["train", "val", "test"]) -> ImagePoseDataset:
+        """Get dataset for given purpose.
+
+        Args:
+            purpose (Literal["train", "val", "test"]): Purpose of dataset.
+
+        Returns:
+            ImagePoseDataset: Dataset for given purpose.
+        """
+        dataset = ImagePoseDataset(
+            image_width=self.image_width,
+            image_height=self.image_height,
+            images_path=os.path.join(self.scene_path, purpose),
+            pose_path=os.path.join(self.scene_path, f"transforms_{purpose}.json"),
+        )
+
+        return dataset
 
     def setup(self, stage: Literal["fit", "test", "predict"]):
         match stage:
             case "fit":
-                self.dataset_train = ImagePoseDataset(
-                    image_width=self.image_width,
-                    image_height=self.image_height,
-                    images_path=os.path.join(self.scene_path, "train"),
-                    pose_path=os.path.join(self.scene_path, "transforms_train.json"),
-                )
-                self.dataset_val = ImagePoseDataset(
-                    image_width=self.image_width,
-                    image_height=self.image_height,
-                    images_path=os.path.join(self.scene_path, "val"),
-                    pose_path=os.path.join(self.scene_path, "transforms_val.json"),
-                )
+                self.dataset_train = self._get_dataset("train")
+                self.dataset_val = self._get_dataset("val")
 
                 # Prepare cache of validation data
                 self._dataset_val_cache = None
@@ -195,12 +206,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
 
 
             case "test":
-                self.dataset_test = ImagePoseDataset(
-                    image_width=self.image_width,
-                    image_height=self.image_height,
-                    images_path=os.path.join(self.scene_path, "test"),
-                    pose_path=os.path.join(self.scene_path, "transforms_test.json"),
-                )
+                self.dataset_test = self._get_dataset("test")
 
 
             case "predict":
@@ -208,28 +214,29 @@ class ImagePoseDataModule(pl.LightningDataModule):
 
 
 
-    def _disable_shuffle_arg(self, args: tuple, kwargs: dict) -> Any:
-        kwargs = {**kwargs}
+    def _disable_shuffle_arg(self, dataloader_args: tuple, dataloader_kwargs: dict) -> Any:
         
-        if len(args) > 2:
-            args = (*args[:2], False, *args[3:])
+        dataloader_kwargs = {**dataloader_kwargs}
+        
+        if len(dataloader_args) > 2:
+            dataloader_args = (*dataloader_args[:2], False, *dataloader_args[3:])
 
-        if "shuffle" in kwargs:
-            kwargs["shuffle"] = False
+        if "shuffle" in dataloader_kwargs:
+            dataloader_kwargs["shuffle"] = False
 
-        return args, kwargs
+        return dataloader_args, dataloader_kwargs
 
 
     def train_dataloader(self):
         return DataLoader(
             self.dataset_train,
-            *self.args,
-            **self.kwargs
+            *self.dataloader_args,
+            **self.dataloader_kwargs
         )
 
     def val_dataloader(self):
         # Disable shuffle on the data loader
-        args, kwargs = self._disable_shuffle_arg(self.args, self.kwargs)
+        args, kwargs = self._disable_shuffle_arg(self.dataloader_args, self.dataloader_kwargs)
 
 
         # If dataset has been cached and seeds match, return cached dataset
@@ -283,7 +290,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         )
 
     def test_dataloader(self):
-        args, kwargs = self._disable_shuffle_arg(self.args, self.kwargs)
+        args, kwargs = self._disable_shuffle_arg(self.dataloader_args, self.dataloader_kwargs)
         return DataLoader(
             self.dataset_test,
             *args,
