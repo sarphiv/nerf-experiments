@@ -1,6 +1,6 @@
 import torch as th
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.loggers import WandbLogger # type: ignore
 from pytorch_lightning.callbacks import LearningRateMonitor
 
 from model import Nerf2d
@@ -9,24 +9,24 @@ from image_logger import Log2dImageReconstruction
 
 
 
-# Set seeds
-pl.seed_everything(1337)
-
 
 
 if __name__ == "__main__":
+    # Set seeds
+    pl.seed_everything(1337)
+
+
     # Set up weights and biases logger
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
-        entity="metrics_logger",
-        save_dir="./wandb-logs"
+        entity="metrics_logger"
     )
 
 
     # Set up data module
     dm = SingleImageDataModule(
         # image_path="data/morten-lena.png",
-        image_path="data/banana.jpg",
+        image_path="../data/2d-reconstruction/banana.jpg",
         pixel_shuffle_seed=1337,
         pixel_split_sizes=(0.9, 0.05, 0.05),
         batch_size=256,
