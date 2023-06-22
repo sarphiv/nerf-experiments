@@ -63,7 +63,8 @@ if __name__ == "__main__":
     model = NerfOriginal(
         near_sphere_normalized=2,
         far_sphere_normalized=7,
-        samples_per_ray=192,
+        samples_per_ray_coarse=64,
+        samples_per_ray_fine=192,
         fourier_levels_pos=10,
         fourier_levels_dir=4,
         learning_rate=5e-4,

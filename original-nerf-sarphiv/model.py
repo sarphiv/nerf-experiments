@@ -171,12 +171,20 @@ class NerfOriginal(pl.LightningModule):
         # Calculate direction scaling range for each ray,
         #  such that they start at the near sphere and end at the far sphere
         # NOTE: Subtracting one interval size to avoid sampling past far sphere
+        # t = th.linspace(
+        #     self.near_sphere_normalized, 
+        #     self.far_sphere_normalized - interval_size, 
+        #     self.samples_per_ray_coarse, 
+        #     device=self.device
+        # ).unsqueeze(0).repeat(rays_n, 1)
+
+        # NOTE: using the same t for all samples - a bit hacky and not exactly the same as in the original paper
         t = th.linspace(
-            self.near_sphere_normalized, 
-            self.far_sphere_normalized - interval_size, 
-            self.samples_per_ray_coarse, 
+            self.near_sphere_normalized,
+            self.far_sphere_normalized - interval_size,
+            self.samples_per_ray_coarse,
             device=self.device
-        ).unsqueeze(1).repeat(rays_n, 1)
+        )
         
         # Perturb sample positions
         t += th.rand_like(t, device=self.device) * interval_size
@@ -203,31 +211,34 @@ class NerfOriginal(pl.LightningModule):
     def _compute_positions(self, origins: th.Tensor, directions: th.Tensor, t: th.Tensor):
 
         rays_n = origins.shape[0]
-        samples_n = t.shape[1]
-        assert rays_n == directions.shape[0] == t.shape[0], "Origins, directions and t must alll have the same number of rays"
+        samples_n = t.shape[0]
+        # assert rays_n == directions.shape[0] == t.shape[0], "Origins, directions and t must alll have the same number of rays"
         
         # Repeat origins and directions for each sample
-        origins = origins.repeat_interleave(samples_n, dim=0)
-        directions = directions.repeat_interleave(samples_n, dim=0)
+
+        # NOTE: using the same t for all samples - a bit hacky and not exactly the same as in the original paper
+        # origins = origins.repeat_interleave(samples_n, dim=0)
+        # directions = directions.repeat_interleave(samples_n, dim=0)
         
         # Calculate sample positions
-        positions = origins + t * directions
+        #TODO: I don't like these unsqueezes
+        positions = origins.unsqueeze(1) + t.unsqueeze(0).unsqueeze(2) * directions.unsqueeze(1)
 
 
         # Calculate distance between samples
         # NOTE: Direction vectors are normalized
         # t = t.view(rays_n, samples_n)
         distances = th.hstack((
-            t[:, 1:] - t[:, :-1],
-            self.far_sphere_normalized - t[:, -1:]
+            t[1:] - t[:-1],
+            self.far_sphere_normalized - t[-1]
         ))
 
         # Group samples by ray
-        positions = positions.view(rays_n, samples_n, 3)
-        directions = directions.view(rays_n, samples_n, 3)
+        # positions = positions.view(rays_n, samples_n, 3)
+        # directions = directions.view(rays_n, samples_n, 3)
 
         # Return sample positions and directions with correct shape
-        return positions, directions, distances
+        return positions, directions.unsqueeze(1).expand(positions.shape), distances
 
 
     def _render(self, densities: th.Tensor, colors: th.Tensor, distances: th.Tensor):
