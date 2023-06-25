@@ -9,6 +9,8 @@ from data_module import ImagePoseDataModule
 from image_logger import Log2dImageReconstruction
 from model import NerfOriginal
 
+from pytorch_lightning.profilers import AdvancedProfiler
+
 
 if __name__ == "__main__":
     # Set seeds
@@ -39,9 +41,12 @@ if __name__ == "__main__":
     # Set up trainer
     th.set_float32_matmul_precision("medium")
 
+    profiler = AdvancedProfiler(dirpath=".", filename="perf_logs")
+
     trainer = pl.Trainer(
         accelerator="auto",
-        max_epochs=256,
+        max_epochs=3,
+        # max_epochs=256,
         precision="16-mixed",
         logger=wandb_logger,
         callbacks=[
@@ -56,6 +61,7 @@ if __name__ == "__main__":
                 logging_interval="epoch"
             )
         ]
+        , profiler=profiler
     )
 
 

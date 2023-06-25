@@ -71,12 +71,12 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         # NOTE: Initially normalized such that z=-1 via the focal length.
         #  Camera is looking in the negative z direction.
         #  y-axis is also flipped.
-        i, j = th.meshgrid(
+        y, x = th.meshgrid(
             -th.linspace(-self.image_height/2, self.image_height/2, self.image_height) / self.focal_length,
             th.linspace(-self.image_width/2, self.image_width/2, self.image_width) / self.focal_length,
             indexing="ij"
         )
-        directions = th.stack((j, i, -th.ones_like(j)), dim=-1)
+        directions = th.stack((x, y, -th.ones_like(x)), dim=-1)
         directions /= th.norm(directions, p=2, dim=-1, keepdim=True)
 
         # Rotate directions (H, W, 3) to world via R (3, 3).
