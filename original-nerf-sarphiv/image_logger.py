@@ -7,6 +7,8 @@ from pytorch_lightning.callbacks import Callback
 from pytorch_lightning.loggers import WandbLogger #type: ignore
 import wandb
 
+import matplotlib.pyplot as plt
+
 from data_module import ImagePoseDataset
 
 
@@ -62,7 +64,7 @@ class Log2dImageReconstruction(Callback):
             batch_size = ray_origs.shape[0]
             
             # Predict RGB values
-            rgb[i:i+batch_size, :] = model(ray_origs, ray_dirs).cpu()
+            rgb[i:i+batch_size, :] = model(ray_origs, ray_dirs)[0].cpu()
         
             # Update write head
             i += batch_size
@@ -70,7 +72,9 @@ class Log2dImageReconstruction(Callback):
 
         # Log image
         # NOTE: Cannot pass tensor as channel dimension is in numpy format
+        image = rgb.view(dataset.image_height, dataset.image_width, 3).numpy().clip(0, 1)
+        plt.imsave("output_image.png", image)
         self.logger.log_image(
             key="val_img", 
-            images=[rgb.view(dataset.image_height, dataset.image_width, 3).numpy()]
+            images=[image]
         )

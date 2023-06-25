@@ -24,13 +24,14 @@ if __name__ == "__main__":
 
     # Set up data module
     dm = ImagePoseDataModule(
-        image_width=100,
-        image_height=100,
+        image_width=200,
+        image_height=200,
         scene_path="../data/lego",
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
 
-        batch_size=1024*4,
+        batch_size=1024*12,
+        # batch_size=1024*4,
         num_workers=8,
         shuffle=True,
     )

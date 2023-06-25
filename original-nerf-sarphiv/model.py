@@ -6,6 +6,31 @@ from typing import Any, Callable, Iterator, Literal, cast
 from data_module import DatasetOutput
 
 
+# def arange(n: th.Tensor) -> th.Tensor:
+#     out = []
+#     i = 0
+#     while i < n:
+#         out.append(i)
+#         i += 1
+#     return th.tensor(out, device=n.device)
+
+
+# def sample_fine_helper(t_start, t_stop, samples_per_bin):
+#     # sample t within each bin
+#     n = samples_per_bin + 1
+#     interval_size = (t_stop - t_start) / n
+#     t_fine = th.hstack([t_start[i] + arange(n[i])*interval_size[i] for i in range(len(n))])
+#     return t_fine
+
+# def sample_fine(t_start, t_stop, samples_per_bin):
+#      batch_size = samples_per_bin.shape[0]
+#      return th.stack([
+#             sample_fine_helper(t_start, t_stop, samples_per_bin[i])
+#             for i in range(batch_size)
+#         ])
+    
+
+# sample_fine = th.vmap(sample_fine_helper, in_dims=(None, None, 0))
 
 class FourierFeatures(nn.Module):
     def __init__(self, levels: int):
@@ -171,87 +196,101 @@ class NerfOriginal(pl.LightningModule):
         # Calculate direction scaling range for each ray,
         #  such that they start at the near sphere and end at the far sphere
         # NOTE: Subtracting one interval size to avoid sampling past far sphere
-        # t = th.linspace(
-        #     self.near_sphere_normalized, 
-        #     self.far_sphere_normalized - interval_size, 
-        #     self.samples_per_ray_coarse, 
-        #     device=self.device
-        # ).unsqueeze(0).repeat(rays_n, 1)
-
-        # NOTE: using the same t for all samples - a bit hacky and not exactly the same as in the original paper
+        
         t = th.linspace(
-            self.near_sphere_normalized,
-            self.far_sphere_normalized - interval_size,
-            self.samples_per_ray_coarse,
+            self.near_sphere_normalized, 
+            self.far_sphere_normalized - interval_size, 
+            self.samples_per_ray_coarse, 
             device=self.device
-        )
+        ).unsqueeze(0).repeat(rays_n, 1)
         
         # Perturb sample positions
         t += th.rand_like(t, device=self.device) * interval_size
 
         ### Calculate sample positions and directions
-        positions, directions, distances = self._compute_positions(origins, directions, t)
+        # positions, directions, distances = self._compute_positions(origins, directions, t)
+        positions = origins.unsqueeze(1) + t.unsqueeze(2) * directions.unsqueeze(1)
+        distances = th.hstack((
+            t[:,1:] - t[:,:-1],
+            self.far_sphere_normalized - t[:,-1:]
+        ))
+        directions = directions.unsqueeze(1).repeat(1, positions.shape[1], 1)
         return positions, directions, distances, t
     
 
     def _sample_fine(self, origins: th.Tensor, directions: th.Tensor, t_coarse: th.Tensor, weights: th.Tensor, distances_coarse: th.Tensor):
 
         ### Compute t
-        n = self.samples_per_ray_fine
-        samples_pr_bin = th.round(n*weights, decimals=0)
+        weights = weights.squeeze(2)
+        sample_idx = th.multinomial(weights, self.samples_per_ray_fine, replacement=True)
+        t_fine = t_coarse.gather(1, sample_idx)
+        t_fine += th.rand_like(t_fine, device=self.device) * distances_coarse.gather(1, sample_idx)
+        t_fine = th.cat((t_coarse, t_fine), dim=1)
+        t_fine = th.sort(t_fine, dim=1).values
 
-        # sample t within each bin
-        t_fine = th.stack([th.stack([th.linspace(t[i], t[i+1], samples_pr_bin[i], device=self.device) for i in range(len(t))], t[-1]) for t in t_coarse])
+
 
         ### Calculate sample positions and directions
-        positions, directions, distances = self._compute_positions(origins, directions, t_fine)
+        # positions, directions, distances = self._compute_positions(origins, directions, t_fine)
+        positions = origins.unsqueeze(1) + t_fine.unsqueeze(2) * directions.unsqueeze(1)
+        distances = th.hstack((
+            t_fine[:,1:] - t_fine[:,:-1],
+            self.far_sphere_normalized - t_fine[:,-1:]
+        ))
+        directions = directions.unsqueeze(1).repeat(1, positions.shape[1], 1)
         return positions, directions, distances, t_fine
 
 
-    def _compute_positions(self, origins: th.Tensor, directions: th.Tensor, t: th.Tensor):
+    # def _compute_positions(self, origins: th.Tensor, directions: th.Tensor, t: th.Tensor):
 
-        rays_n = origins.shape[0]
-        samples_n = t.shape[0]
-        # assert rays_n == directions.shape[0] == t.shape[0], "Origins, directions and t must alll have the same number of rays"
+    #     rays_n = origins.shape[0]
+    #     samples_n = t.shape[0]
+
+    #     # Repeat origins and directions for each sample
+    #     # origins = origins.repeat_interleave(samples_n, dim=0)
+    #     # directions = directions.repeat_interleave(samples_n, dim=0)
         
-        # Repeat origins and directions for each sample
-
-        # NOTE: using the same t for all samples - a bit hacky and not exactly the same as in the original paper
-        # origins = origins.repeat_interleave(samples_n, dim=0)
-        # directions = directions.repeat_interleave(samples_n, dim=0)
-        
-        # Calculate sample positions
-        #TODO: I don't like these unsqueezes
-        positions = origins.unsqueeze(1) + t.unsqueeze(0).unsqueeze(2) * directions.unsqueeze(1)
+    #     # Calculate sample positions
+    #     # NOTE: using the same t for all samples - a bit hacky and not exactly the same as in the original paper
+    #     # TODO: I don't like these unsqueezes
+    #     positions = origins.unsqueeze(1) + t.unsqueeze(0).unsqueeze(2) * directions.unsqueeze(1)
 
 
-        # Calculate distance between samples
-        # NOTE: Direction vectors are normalized
-        # t = t.view(rays_n, samples_n)
-        distances = th.hstack((
-            t[1:] - t[:-1],
-            self.far_sphere_normalized - t[-1]
-        ))
+    #     # Calculate distance between samples
+    #     # NOTE: Direction vectors are unit vectors
+    #     # t = t.view(rays_n, samples_n)
+    #     distances = th.hstack((
+    #         t[1:] - t[:-1],
+    #         self.far_sphere_normalized - t[-1]
+    #     ))
 
-        # Group samples by ray
-        # positions = positions.view(rays_n, samples_n, 3)
-        # directions = directions.view(rays_n, samples_n, 3)
+    #     # Group samples by ray
+    #     # positions = positions.view(rays_n, samples_n, 3)
+    #     # directions = directions.view(rays_n, samples_n, 3)
 
-        # Return sample positions and directions with correct shape
-        return positions, directions.unsqueeze(1).expand(positions.shape), distances
+    #     # Return sample positions and directions with correct shape
+    #     # return positions, directions.unsqueeze(1).expand(positions.shape), distances
+    #     return positions, directions.unsqueeze(1).repeat(1, positions.shape[1], 1), distances
 
 
     def _render(self, densities: th.Tensor, colors: th.Tensor, distances: th.Tensor):
         """Densities and colors are shaped [batch_size, samples_per_ray, ...]
         """
+        # blocking_neg = -sigma_j * delta_j
+        # alpha_j = 1 - exp(blocking_neg)
+        # alpha_int_i = T_i = exp(sum_{j=1}^{i-1} blocking_neg_j)
+        # output = sum_{j=1}^N alpha_int_j * alpha_j * c_j (c_j = color_j)
+
         blocking_neg = (-densities * distances).unsqueeze(-1)
         alpha = 1 - th.exp(blocking_neg)
         alpha_int = th.hstack((
             th.ones((blocking_neg.shape[0], 1, 1), device=self.device),
-            th.exp(th.cumsum(blocking_neg[:, :-1], dim=1))
+            th.exp(th.cumsum(blocking_neg[:, :-1, :], dim=1))
         ))
 
-        return th.sum(alpha_int*alpha*colors, dim=1), alpha_int*alpha
+        weights = alpha_int * alpha
+
+        return th.sum(weights*colors, dim=1), weights
 
 
 
@@ -281,13 +320,16 @@ class NerfOriginal(pl.LightningModule):
         # Sample positions and directions
         sample_pos_fine, sample_dir_fine, sample_dist_fine, t_fine = self._sample_fine(ray_origs, ray_dirs, t_coarse, weights, sample_dist_coarse)
         # Ungroup samples by ray
-        sample_pos_fine = sample_pos_fine.view(rays_n * self.samples_per_ray_fine, 3)
-        sample_dir_fine = sample_dir_fine.view(rays_n * self.samples_per_ray_fine, 3)
+
+        spr = self.samples_per_ray_fine + self.samples_per_ray_coarse
+
+        sample_pos_fine = sample_pos_fine.view(rays_n * spr, 3)
+        sample_dir_fine = sample_dir_fine.view(rays_n * spr, 3)
         # Evaluate density and color at sample positions
         sample_density_fine, sample_rgb_fine = self.model_fine(sample_pos_fine, sample_dir_fine)
         # Group samples by ray
-        sample_density_fine = sample_density_fine.view(rays_n, self.samples_per_ray_fine)
-        sample_color_fine = sample_rgb_fine.view(rays_n, self.samples_per_ray_fine, 3)
+        sample_density_fine = sample_density_fine.view(rays_n, spr)
+        sample_color_fine = sample_rgb_fine.view(rays_n, spr, 3)
 
         # Compute color for each pixel
         rgb_fine, _ = self._render(sample_density_fine, sample_color_fine, sample_dist_fine)
