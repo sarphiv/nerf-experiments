@@ -10,6 +10,7 @@ import wandb
 import matplotlib.pyplot as plt
 
 from data_module import ImagePoseDataset
+import os
 
 
 class Log2dImageReconstruction(Callback):
@@ -73,7 +74,7 @@ class Log2dImageReconstruction(Callback):
         # Log image
         # NOTE: Cannot pass tensor as channel dimension is in numpy format
         image = rgb.view(dataset.image_height, dataset.image_width, 3).numpy().clip(0, 1)
-        plt.imsave("output_image.png", image)
+        plt.imsave(f"output_images_res2/output_image_epoch={trainer.current_epoch}.png", image)
         self.logger.log_image(
             key="val_img", 
             images=[image]
