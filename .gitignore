@@ -2,6 +2,9 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*sprinkle*
+checkpoints*
+output_images*
 
 # C extensions
 *.so
