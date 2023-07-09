@@ -26,10 +26,10 @@ if __name__ == "__main__":
         print("Using CPU")
 
     # Set up weights and biases logger
-    # wandb_logger = WandbLogger(
-    #     project="nerf-experiments", 
-    #     entity="metrics_logger"
-    # )
+    wandb_logger = WandbLogger(
+        project="nerf-experiments", 
+        entity="metrics_logger"
+    )
 
 
     # Set up data module
