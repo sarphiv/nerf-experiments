@@ -6,9 +6,12 @@ from typing import Any, Callable, Iterator, Literal, cast
 from data_module import DatasetOutput
 
 
-
 class FourierFeatures(nn.Module):
     def __init__(self, levels: int):
+        """
+        Positional encoding using Fourier features.
+        
+        """
         super().__init__()
 
         self.levels = levels
@@ -29,16 +32,27 @@ class FourierFeatures(nn.Module):
 
 
 class NerfOriginalBase(nn.Module):
-    """
-    A base class for the original NeRF model.
-    with one change: uses shifted softplus instead of ReLU.
-    """
     def __init__(
         self,
         fourier_levels_pos: int,
         fourier_levels_dir: int,
         use_residual_color: bool = False,
     ):
+        """
+        A base class for the original NeRF model - the coarse and fine models that underlie the nerf model.
+        with two change:
+            1. uses shifted softplus instead of ReLU.
+            2. optional possibility to use a skip connection for the color.
+        
+        Parameters:
+        ----------
+        fourier_levels_pos: int
+            The number of levels to use for the positional encoding.
+        fourier_levels_dir: int
+            The number of levels to use for the directional encoding.
+        use_residual_color: bool
+            Whether to use a skip connection for the color.
+        """
         super().__init__()
 
         self.fourier_levels_pos = fourier_levels_pos
@@ -147,20 +161,16 @@ class NerfOriginal(pl.LightningModule):
             fourier_levels_dir=self.fourier_levels_dir,
             use_residual_color=self.use_residual_color
         )
-
-        # self.model_coarse = NerfOriginalCoarse(
-        #     fourier_levels_pos=self.fourier_levels_pos
-        # )
-        # self.model_fine = NerfOriginalFine(
-        #     fourier_levels_pos=self.fourier_levels_pos, 
-        #     fourier_levels_dir=self.fourier_levels_dir
-        # )
-
     
-    def _sample_coarse(self, origins: th.Tensor, directions: th.Tensor):
+    def _sample_t_coarse(self, batch_size):
+        """
+        Sample t for coarse sampling.
 
-        rays_n = origins.shape[0]
-
+        Returns:
+        --------
+            t_coarse: Tensor of shape (batch_size, samples_per_ray)
+        
+        """
 
         ### Compute t 
 
@@ -171,122 +181,214 @@ class NerfOriginal(pl.LightningModule):
         # Calculate direction scaling range for each ray,
         #  such that they start at the near sphere and end at the far sphere
         # NOTE: Subtracting one interval size to avoid sampling past far sphere
-        t = th.linspace(
+        
+        t_coarse = th.linspace(
             self.near_sphere_normalized, 
             self.far_sphere_normalized - interval_size, 
             self.samples_per_ray_coarse, 
             device=self.device
-        ).unsqueeze(1).repeat(rays_n, 1)
+        ).unsqueeze(0).repeat(batch_size, 1)
         
         # Perturb sample positions
-        t += th.rand_like(t, device=self.device) * interval_size
+        t_coarse += th.rand_like(t_coarse, device=self.device) * interval_size
 
-        ### Calculate sample positions and directions
-        positions, directions, distances = self._compute_positions(origins, directions, t)
-        return positions, directions, distances, t
+        return t_coarse
     
 
-    def _sample_fine(self, origins: th.Tensor, directions: th.Tensor, t_coarse: th.Tensor, weights: th.Tensor, distances_coarse: th.Tensor):
+    def _sample_t_fine(self, t_coarse: th.Tensor, weights: th.Tensor, distances_coarse: th.Tensor) -> th.Tensor:
+        """
+        Sample t using hierarchical sampling based on the weights from the coarse model.
+
+        Parameters:
+        -----------
+            t_coarse: Tensor of shape (batch_size, samples_per_ray_coarse)
+            weights: Tensor of shape (batch_size, samples_per_ray_coarse)
+            distances_coarse: Tensor of shape (batch_size, samples_per_ray_coarse)
+        
+        Returns:
+        --------
+            t_fine: Tensor of shape (batch_size, samples_per_ray_coarse + samples_per_ray_fine) (so it contains the t_coarse sample points as well)
+        
+        """
 
         ### Compute t
-        n = self.samples_per_ray_fine
-        samples_pr_bin = th.round(n*weights, decimals=0)
+        weights = weights.squeeze(2)
+        sample_idx = th.multinomial(weights, self.samples_per_ray_fine, replacement=True)
+        t_fine = t_coarse.gather(1, sample_idx)
+        t_fine += th.rand_like(t_fine, device=self.device) * distances_coarse.gather(1, sample_idx)
+        t_fine = th.cat((t_coarse, t_fine), dim=1)
+        t_fine = th.sort(t_fine, dim=1).values
 
-        # sample t within each bin
-        t_fine = th.stack([th.stack([th.linspace(t[i], t[i+1], samples_pr_bin[i], device=self.device) for i in range(len(t))], t[-1]) for t in t_coarse])
-
-        ### Calculate sample positions and directions
-        positions, directions, distances = self._compute_positions(origins, directions, t_fine)
-        return positions, directions, distances, t_fine
+        return t_fine
 
 
     def _compute_positions(self, origins: th.Tensor, directions: th.Tensor, t: th.Tensor):
+        """
+        Compute the positions, distances and directions for the given rays and t values.
 
-        rays_n = origins.shape[0]
-        samples_n = t.shape[1]
-        assert rays_n == directions.shape[0] == t.shape[0], "Origins, directions and t must alll have the same number of rays"
-        
-        # Repeat origins and directions for each sample
-        origins = origins.repeat_interleave(samples_n, dim=0)
-        directions = directions.repeat_interleave(samples_n, dim=0)
-        
-        # Calculate sample positions
-        positions = origins + t * directions
+        Parameters:
+        -----------
+            origins: Tensor of shape (batch_size, 3) - camera position, i.e. origin in camera coordinates
+            directions: Tensor of shape (batch_size, 3) - direction vectors (unit vectors) of the viewing directions
+            t: Tensor of shape (batch_size, samples_per_ray) - the t values to compute the positions for.
 
 
-        # Calculate distance between samples
-        # NOTE: Direction vectors are normalized
-        # t = t.view(rays_n, samples_n)
+        Returns:
+        --------
+            positions: Tensor of shape (batch_size, samples_per_ray, 3) - the positions for the given t values
+            distances: Tensor of shape (batch_size, samples_per_ray) - the distances between the positions - used for the weights
+                        Appended is the distance between the last position and the far sphere.
+            directions: Tensor of shape (batch_size, samples_per_ray, 3) - the directions for the given t values
+        """
+
+
+        positions = origins.unsqueeze(1) + t.unsqueeze(2) * directions.unsqueeze(1)
         distances = th.hstack((
-            t[:, 1:] - t[:, :-1],
-            self.far_sphere_normalized - t[:, -1:]
+            t[:,1:] - t[:,:-1],
+            self.far_sphere_normalized - t[:,-1:]
         ))
-
-        # Group samples by ray
-        positions = positions.view(rays_n, samples_n, 3)
-        directions = directions.view(rays_n, samples_n, 3)
-
-        # Return sample positions and directions with correct shape
+        directions = directions.unsqueeze(1).repeat(1, positions.shape[1], 1)
         return positions, directions, distances
 
 
-    def _render(self, densities: th.Tensor, colors: th.Tensor, distances: th.Tensor):
-        """Densities and colors are shaped [batch_size, samples_per_ray, ...]
+
+    def _render_rays(self, densities: th.Tensor, colors: th.Tensor, distances: th.Tensor):
         """
+        Render the rays using the given densities and colors.
+        I.e. this is just an implementation of equation 3.
+
+        Parameters:
+        -----------
+            densities: Tensor of shape (batch_size, samples_per_ray) - the densities for the given samples (sigma_j in the paper)
+            colors: Tensor of shape (batch_size, samples_per_ray, 3) - the colors for the given samples (c_j in the paper)
+            distances: Tensor of shape (batch_size, samples_per_ray) - the distances between the samples (delta_j in the paper)
+        
+        
+        Returns:
+        --------
+            rgb: Tensor of shape (batch_size, 3) - the rgb values for the given rays
+            weights: Tensor of shape (batch_size, samples_per_ray) - the weights used for the fine sampling
+
+        """
+
+        # blocking_neg = -sigma_j * delta_j
+        # alpha_j = 1 - exp(blocking_neg)
+        # alpha_int_i = T_i = exp(sum_{j=1}^{i-1} blocking_neg_j)
+        # output = sum_{j=1}^N alpha_int_j * alpha_j * c_j (c_j = color_j)
+
         blocking_neg = (-densities * distances).unsqueeze(-1)
         alpha = 1 - th.exp(blocking_neg)
         alpha_int = th.hstack((
             th.ones((blocking_neg.shape[0], 1, 1), device=self.device),
-            th.exp(th.cumsum(blocking_neg[:, :-1], dim=1))
+            th.exp(th.cumsum(blocking_neg[:, :-1, :], dim=1))
         ))
 
-        return th.sum(alpha_int*alpha*colors, dim=1), alpha_int*alpha
+        weights = alpha_int * alpha
+
+        return th.sum(weights*colors, dim=1), weights
+
+    
+    def _compute_color(self, model: NerfOriginalBase,
+                            t: th.Tensor,
+                            ray_origs: th.Tensor,
+                            ray_dirs: th.Tensor,
+                            batch_size: int,
+                            samples_per_ray: int) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
+        
+        """
+        A helper function to compute the color for the given model, t values, ray origins and ray directions.
+        Is just a wrapper around _compute_positions, model_base.forward and _render_rays.
+
+        Parameters:
+        -----------
+            model: The model to use for computing the color (either the coarse or fine model)
+            t: Tensor of shape (batch_size, samples_per_ray) - the t values to compute the positions for. (output of _sample_t_coarse or _sample_t_fine)
+            ray_origs: Tensor of shape (batch_size, 3) - camera position, i.e. origin in camera coordinates
+            ray_dirs: Tensor of shape (batch_size, 3) - direction vectors (unit vectors) of the viewing directions
+            batch_size: int - the batch size
+            samples_per_ray: int - the number of samples per ray
+        
+        Returns:
+        --------
+            rgb: Tensor of shape (batch_size, 3) - the rgb values for the given rays
+            weights: Tensor of shape (batch_size, samples_per_ray) - the weights used for the fine sampling
+            sample_dist: Tensor of shape (batch_size, samples_per_ray) - the distances between the samples (delta_j in the paper)
+        
+        """
+
+
+        sample_pos, sample_dir, sample_dist  = self._compute_positions(ray_origs, ray_dirs, t)
+        # Evaluate density and color at sample positions
+        # Ungroup samples by ray
+        sample_pos = sample_pos.view(batch_size * samples_per_ray, 3)
+        sample_dir = sample_dir.view(batch_size * samples_per_ray, 3)
+        # Evaluate density and color at sample positions
+        sample_density, sample_color = model(sample_pos, sample_dir)
+        # Group samples by ray
+        sample_density = sample_density.view(batch_size, samples_per_ray)
+        sample_color = sample_color.view(batch_size, samples_per_ray, 3)
+
+        # Compute the rgb of the rays, and the weights for fine sampling
+        rgb, weights = self._render_rays(sample_density, sample_color, sample_dist)
+        
+        return rgb, weights, sample_dist
 
 
 
     def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+        """
+        Forward pass of the model.
+        Given the ray origins and directions, compute the rgb values for the given rays.
+
+        Parameters:
+        -----------
+            ray_origs: Tensor of shape (batch_size, 3) - camera position, i.e. origin in camera coordinates
+            ray_dirs: Tensor of shape (batch_size, 3) - direction vectors (unit vectors) of the viewing directions
+
+        Returns:
+        --------
+            rgb_fine: Tensor of shape (batch_size, 3) - the rgb values for the given rays using fine model (the actual prediction)
+            rgb_coarse: Tensor of shape (batch_size, 3) - the rgb values for the given rays using coarse model (only used for the loss - not the rendering)
+        """
+
         # Amount of pixels to render
-        rays_n = ray_origs.shape[0]
-        
+        batch_size = ray_origs.shape[0]
         
         
         ### Coarse sampling
-        # Sample positions and directions
-        sample_pos_coarse, sample_dir_coarse, sample_dist_coarse, t_coarse = self._sample_coarse(ray_origs, ray_dirs)
-        # Ungroup samples by ray
-        sample_pos_coarse = sample_pos_coarse.view(rays_n * self.samples_per_ray_coarse, 3)
-        sample_dir_coarse = sample_dir_coarse.view(rays_n * self.samples_per_ray_coarse, 3)
-        # Evaluate density and color at sample positions
-        sample_density_coarse, sample_rgb_coarse = self.model_coarse(sample_pos_coarse, sample_dir_coarse)
-        # Group samples by ray
-        sample_density_coarse = sample_density_coarse.view(rays_n, self.samples_per_ray_coarse)
-        sample_color_coarse = sample_rgb_coarse.view(rays_n, self.samples_per_ray_coarse, 3)
-        
-        # Compute weights for fine sampling
-        rgb_coarse, weights = self._render(sample_density_coarse, sample_color_coarse, sample_dist_coarse)
+        # sample t
+        t_coarse = self._sample_t_coarse(batch_size)
+
+        #compute rgb
+        rgb_coarse, weights, sample_dist_coarse = self._compute_color(self.model_coarse,
+                                                t_coarse,
+                                                ray_origs,
+                                                ray_dirs,
+                                                batch_size,
+                                                self.samples_per_ray_coarse)
         
 
         ### Fine sampling
-        # Sample positions and directions
-        sample_pos_fine, sample_dir_fine, sample_dist_fine, t_fine = self._sample_fine(ray_origs, ray_dirs, t_coarse, weights, sample_dist_coarse)
-        # Ungroup samples by ray
-        sample_pos_fine = sample_pos_fine.view(rays_n * self.samples_per_ray_fine, 3)
-        sample_dir_fine = sample_dir_fine.view(rays_n * self.samples_per_ray_fine, 3)
-        # Evaluate density and color at sample positions
-        sample_density_fine, sample_rgb_fine = self.model_fine(sample_pos_fine, sample_dir_fine)
-        # Group samples by ray
-        sample_density_fine = sample_density_fine.view(rays_n, self.samples_per_ray_fine)
-        sample_color_fine = sample_rgb_fine.view(rays_n, self.samples_per_ray_fine, 3)
-
-        # Compute color for each pixel
-        rgb_fine, _ = self._render(sample_density_fine, sample_color_fine, sample_dist_fine)
-
+        # Sample t
+        t_fine = self._sample_t_fine(t_coarse, weights, sample_dist_coarse)
+        # compute rgb
+        rgb_fine, _, _ = self._compute_color(self.model_fine,
+                                                t_fine,
+                                                ray_origs,
+                                                ray_dirs,
+                                                batch_size,
+                                                self.samples_per_ray_coarse + self.samples_per_ray_fine)
 
         # Return colors for the given pixel coordinates (batch_size, 3)
         return rgb_fine, rgb_coarse
 
 
+    ############ pytorch lightning functions ##############3
+
     def _step_helpher(self, batch: DatasetOutput, batch_idx: int, stage: str):
+        """
+        general function for training and validation step
+        """
         ray_origs, ray_dirs, ray_colors = batch
         
         ray_colors_pred_coarse, ray_colors_pred_fine = self(ray_origs, ray_dirs)
