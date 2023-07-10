@@ -10,6 +10,7 @@ from image_logger import Log2dImageReconstruction
 from model import NerfOriginal
 
 import os
+from pytorch_lightning.profilers import AdvancedProfiler
 
 
 if __name__ == "__main__":
@@ -55,6 +56,8 @@ if __name__ == "__main__":
     # Set up trainer
     th.set_float32_matmul_precision("medium")
 
+    profiler = AdvancedProfiler(dirpath=".", filename="perf_logs")
+
     trainer = pl.Trainer(
         accelerator="auto",
         max_epochs=256,
@@ -75,6 +78,7 @@ if __name__ == "__main__":
             ),
             checkpoint_callback_time
         ]
+        , profiler=profiler
     )
 
 
