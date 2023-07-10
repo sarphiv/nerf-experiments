@@ -6,6 +6,121 @@ from typing import Any, Callable, Iterator, Literal, cast
 from data_module import DatasetOutput
 
 
+#test that shit
+def test():
+    class Tester():
+        def __init__(self, resolution, table_size, n_features):
+            self.resolution = resolution
+            self.table_size = table_size
+            self.n_features = n_features
+            self.idx_dict = dict()
+
+            self.table = (th.rand((self.table_size, self.n_features))*2 - 1)*10**(-4)
+
+    resolution = 6
+    table_size = 10
+    n_features = 2
+    
+    self = Tester(resolution, table_size, n_features)
+
+
+
+
+class INGPTable(nn.Module):
+    def __init__(self, resolution, table_size, n_features, pi1, pi2, pi3):
+        super().__init__()
+        self.resolution = resolution
+        self.table_size = table_size
+        self.n_features = n_features
+        self.pi1 = pi1
+        self.pi2 = pi2
+        self.pi3 = pi3
+
+        self.table = nn.Parameter(
+            (th.rand((self.table_size, self.n_features))*2 - 1)*10**(-4)
+            )
+    
+    def hash(self, x):
+        # x: (batch_size, 2**d, d) - d=3 (we are gonna have d 2's)
+        # output: (batch_size, 2**d)
+
+        y1 = self.pi1 * x[...,0]
+        y2 = self.pi2 * x[...,1]
+        y3 = self.pi3 * x[...,2]
+
+        y = th.bitwise_xor(y1, y2)
+        y = th.bitwise_xor(y, y3)
+        y = th.remainder(y, self.table_size)
+
+        return y
+
+    def forward(self, x: th.Tensor):
+        # x: (batch_size, data_dim)
+        # output: (batch_size, n_features)
+
+        batch_size, data_dim = x.shape
+
+        # get corners:
+        x_scaled = x * self.resolution
+        x_floor = th.floor(x_scaled)
+        x_ceil = x_floor + 1
+        x_lim = th.stack((x_floor, x_ceil), dim=1)
+
+        idx_list = [(0,0,0), (0,0,1), (0,1,0), (0,1,1), (1,0,0), (1,0,1), (1,1,0), (1,1,1)]
+
+        corners = th.stack(
+            [
+                x_lim[:,[i,j,k], th.arange(3)] for i,j,k in idx_list
+              ],
+        dim=1).to(th.int64)
+
+        feature_idx = self.hash(corners)
+        features = self.table[feature_idx]
+
+        # get weights:
+        x_diff = x_scaled - corners
+        x_diff = th.abs(x_diff)
+        weights = 1 - x_diff
+        weights = th.prod(weights, dim=-1)
+
+        # get output:
+        output = th.sum(features * weights.unsqueeze(-1), dim=1)
+
+        return output
+
+
+class INGPEncoding(nn.Module):
+    def __init__(self, resolution_max, resolution_min,
+                 table_size, n_features, n_layers,
+                 pi1=1, pi2=2654435761, pi3=805459861):
+        super().__init__()
+        self.resolution_max = resolution_max
+        self.resolution_min = resolution_min
+        self.table_size = table_size
+        self.n_features = n_features
+        self.n_layers = n_layers
+        self.b = th.exp(th.log(resolution_min) - th.log(resolution_max) / (n_layers-1))
+
+        self.resolution = th.floor(resolution_max * self.b**th.arange(n_layers))
+
+        self.encodings = nn.ModuleList(
+            [INGPTable(r, table_size, n_features, pi1, pi2, pi3) for r in self.resolution]
+        )
+    
+    def forward(self, x):
+        # x: (batch_size, data_dim)
+        # output: (batch_size, n_features*n_layers)
+
+        batch_size, data_dim = x.shape
+
+        output = th.stack([enc(x) for enc in self.encodings], dim=1)
+
+        return output
+
+
+
+
+
 class FourierFeatures(nn.Module):
     def __init__(self, levels: int):
         """

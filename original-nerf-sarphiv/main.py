@@ -16,6 +16,14 @@ if __name__ == "__main__":
     # Set seeds
     pl.seed_everything(1337)
 
+    print("Starting training...")
+    # check if we have a GPU available
+    if th.cuda.is_available():
+        device = th.device("cuda")
+        print("Using GPU")
+    else:
+        device = th.device("cpu")
+        print("Using CPU")
 
     # Set up weights and biases logger
     wandb_logger = WandbLogger(
@@ -52,8 +60,9 @@ if __name__ == "__main__":
     trainer = pl.Trainer(
         accelerator="auto",
         max_epochs=256,
-        precision="16-mixed",
-        logger=wandb_logger,
+        precision="bf16",
+        # precision="16-mixed",
+        # logger=wandb_logger,
         callbacks=[
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
