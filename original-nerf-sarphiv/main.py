@@ -26,8 +26,8 @@ if __name__ == "__main__":
 
     # Set up data module
     dm = ImagePoseDataModule(
-        image_width=50,
-        image_height=50,
+        image_width=800,
+        image_height=800,
         scene_path="../data/lego",
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
@@ -38,13 +38,13 @@ if __name__ == "__main__":
 
 
     checkpoint_callback_time = ModelCheckpoint(
-        dirpath='checkpoints_res2',
+        dirpath='checkpoints',
         filename='ckpt_epoch={epoch:02d}-val_loss={val_loss:.2f}',
         every_n_epochs=1,
         save_top_k=-1,
         )
 
-    os.makedirs("output_images_res2", exist_ok=True)
+    os.makedirs("output_images", exist_ok=True)
 
     # Set up trainer
     th.set_float32_matmul_precision("medium")

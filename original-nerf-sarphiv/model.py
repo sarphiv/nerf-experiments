@@ -195,7 +195,7 @@ class NerfOriginal(pl.LightningModule):
         return t_coarse
     
 
-    def _sample_t_fine(self, t_coarse: th.Tensor, weights: th.Tensor, distances_coarse: th.Tensor) -> th.Tensor:
+    def _sample_t_fine(self, t_coarse: th.Tensor, weights: th.Tensor, distances_coarse: th.Tensor, linspace=True) -> th.Tensor:
         """
         Sample t using hierarchical sampling based on the weights from the coarse model.
 
@@ -204,6 +204,7 @@ class NerfOriginal(pl.LightningModule):
             t_coarse: Tensor of shape (batch_size, samples_per_ray_coarse)
             weights: Tensor of shape (batch_size, samples_per_ray_coarse)
             distances_coarse: Tensor of shape (batch_size, samples_per_ray_coarse)
+            linspace: bool - whether to use linspace instead of multinomial sampling
         
         Returns:
         --------
@@ -213,11 +214,30 @@ class NerfOriginal(pl.LightningModule):
 
         ### Compute t
         weights = weights.squeeze(2)
-        sample_idx = th.multinomial(weights, self.samples_per_ray_fine, replacement=True)
-        t_fine = t_coarse.gather(1, sample_idx)
-        t_fine += th.rand_like(t_fine, device=self.device) * distances_coarse.gather(1, sample_idx)
-        t_fine = th.cat((t_coarse, t_fine), dim=1)
-        t_fine = th.sort(t_fine, dim=1).values
+        batch_size = t_coarse.shape[0]
+        device = t_coarse.device
+
+        if linspace:
+            fine_samples = th.round(weights*self.samples_per_ray_fine)
+            fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += self.samples_per_ray_fine - fine_samples.sum(dim=1)
+            fine_samples += 1
+            fine_samples_cum_sum = th.hstack((th.zeros(batch_size, 1, device=device), fine_samples.cumsum(dim=1)))
+            
+            arange = th.arange(self.samples_per_ray_fine + self.samples_per_ray_coarse, device=device).unsqueeze(0)
+            t_fine = th.zeros(batch_size, self.samples_per_ray_fine + self.samples_per_ray_coarse, device=device)
+
+            for i in range(self.samples_per_ray_coarse):
+                mask = (arange >= fine_samples_cum_sum[:, i].unsqueeze(-1)) & (arange < fine_samples_cum_sum[:, i+1].unsqueeze(-1))
+                t_fine += t_coarse[:, i].unsqueeze(-1)*mask
+                t_fine += (arange - fine_samples_cum_sum[:, i].unsqueeze(-1))*mask*distances_coarse[:, i].unsqueeze(-1)/fine_samples[:, i].unsqueeze(-1)
+
+        else:
+
+            sample_idx = th.multinomial(weights, self.samples_per_ray_fine, replacement=True)
+            t_fine = t_coarse.gather(1, sample_idx)
+            t_fine += th.rand_like(t_fine, device=self.device) * distances_coarse.gather(1, sample_idx)
+            t_fine = th.cat((t_coarse, t_fine), dim=1)
+            t_fine = th.sort(t_fine, dim=1).values
 
         return t_fine
 
@@ -383,7 +403,7 @@ class NerfOriginal(pl.LightningModule):
         return rgb_fine, rgb_coarse
 
 
-    ############ pytorch lightning functions ##############3
+    ############ pytorch lightning functions ############
 
     def _step_helpher(self, batch: DatasetOutput, batch_idx: int, stage: str):
         """
