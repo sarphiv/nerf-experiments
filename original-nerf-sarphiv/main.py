@@ -7,7 +7,7 @@ from pytorch_lightning.loggers import WandbLogger  # type: ignore
 
 from data_module import ImagePoseDataModule
 from image_logger import Log2dImageReconstruction
-from model import NerfOriginal
+from model import NerfOriginal, NaiveINGP
 
 from pytorch_lightning.profilers import AdvancedProfiler
 import os
@@ -18,7 +18,8 @@ if __name__ == "__main__":
     pl.seed_everything(1337)
 
     EXPERIMENTS_PATH = "experiments"
-    EXPERIMENT_NAME = "test_nerf_original"
+    EXPERIMENT_NAME = "test_nerf_naive_ingp"
+    # EXPERIMENT_NAME = "test_nerf_original"
     
 
 
@@ -83,14 +84,29 @@ if __name__ == "__main__":
 
 
     # Set up model
-    model = NerfOriginal(
+    # model = NerfOriginal(
+    #     near_sphere_normalized=2,
+    #     far_sphere_normalized=7,
+    #     samples_per_ray_coarse=64,
+    #     samples_per_ray_fine=192,
+    #     fourier_levels_pos=10,
+    #     fourier_levels_dir=4,
+    #     learning_rate=5e-4,
+    #     learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
+    #     weight_decay=0,
+    #     use_residual_color=True,
+    # )
+
+    model = NaiveINGP(
         near_sphere_normalized=2,
         far_sphere_normalized=7,
         samples_per_ray_coarse=64,
         samples_per_ray_fine=192,
-        fourier_levels_pos=10,
         fourier_levels_dir=4,
-        learning_rate=5e-4,
+        resolution_max=50,
+        resolution_min=4,
+        table_size=2**10,
+        learning_rate=1e-2,
         learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
         weight_decay=0,
         use_residual_color=True,

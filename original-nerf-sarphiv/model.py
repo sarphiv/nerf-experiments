@@ -4,6 +4,7 @@ import pytorch_lightning as pl
 from typing import Any, Callable, Iterator, Literal, cast
 
 from data_module import DatasetOutput
+import math
 
 
 #test that shit
@@ -78,7 +79,7 @@ class INGPTable(nn.Module):
         features = self.table[feature_idx]
 
         # get weights:
-        x_diff = x_scaled - corners
+        x_diff = x_scaled.unsqueeze(1) - corners
         x_diff = th.abs(x_diff)
         weights = 1 - x_diff
         weights = th.prod(weights, dim=-1)
@@ -105,7 +106,7 @@ class INGPEncoding(PositionalEncoding):
         self.table_size = table_size
         self.n_features = n_features
         self.n_levels = n_levels
-        self.b = th.exp(th.log(resolution_min) - th.log(resolution_max) / (n_levels-1))
+        self.b = math.exp(math.log(resolution_min) - math.log(resolution_max) / (n_levels-1))
 
         self.resolution = th.floor(resolution_max * self.b**th.arange(n_levels))
 
@@ -119,12 +120,9 @@ class INGPEncoding(PositionalEncoding):
 
         batch_size, data_dim = x.shape
 
-        output = th.stack([enc(x) for enc in self.encodings], dim=1)
+        output = th.cat([enc(x) for enc in self.encodings], dim=1)
 
         return output
-
-
-
 
 
 class FourierFeatures(PositionalEncoding):
@@ -153,12 +151,61 @@ class FourierFeatures(PositionalEncoding):
 
 
 class NerfModel(nn.Module):
-    def __init__(self, n_hidden: int, layer_size: int, pos_enc: PositionalEncoding, dir_enc: PositionalEncoding):
+    def __init__(self, n_hidden: int,
+                 hidden_dim: int,
+                 position_encoder: PositionalEncoding,
+                 direction_encoder: PositionalEncoding,
+                 use_residual_color: bool = True,):
         super().__init__()
         self.n_hidden = n_hidden
-        self.layer_size = layer_size
-        self.pos_enc = pos_enc
-        self.dir_enc = dir_enc
+        self.hidden_dim = hidden_dim
+        self.position_encoder = position_encoder
+        self.direction_encoder = direction_encoder
+        self.use_residual_color = use_residual_color
+
+        self.model_density_1 = self.contruct_model_density(self.position_encoder.output_dim,
+                                                           self.hidden_dim,
+                                                           self.hidden_dim)
+        
+        self.relu = nn.ReLU(inplace=True)
+        
+        self.model_density_2 = self.contruct_model_density(self.hidden_dim + self.position_encoder.output_dim,
+                                                           self.hidden_dim,
+                                                           self.hidden_dim + 1 + 3*self.use_residual_color)
+        
+        self.softplus = nn.Softplus(threshold=8)
+
+
+
+        self.model_color = nn.Sequential(
+            nn.Linear(self.hidden_dim + self.direction_encoder.output_dim, self.hidden_dim//2),
+            nn.ReLU(inplace=True),
+            nn.Linear(self.hidden_dim//2, 3)
+        )
+
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, pos: th.Tensor, dir: th.Tensor):
+        pos = self.position_encoder(pos)
+        dir = self.direction_encoder(dir)
+        
+        z = self.model_density_1(pos)
+        self.relu(z)
+        z = self.model_density_2(th.cat((z, pos), dim=1))
+
+        # NOTE: Using shifted softplus like mip-NeRF instead of ReLU as in the original paper.
+        #  The weight initialization seemed to cause negative initial values.
+
+        density = self.softplus(z[:, self.hidden_dim] - 1)
+        rgb = self.model_color(th.cat((z[:, :self.hidden_dim], dir), dim=1))
+
+        if self.use_residual_color:
+            rgb_base = z[:, (self.hidden_dim+1):]
+            rgb = self.sigmoid(rgb_base + rgb)
+        else:
+            rgb = self.sigmoid(rgb)
+
+        return density, rgb
 
     def contruct_model_density(self, input_dim, hidden_dim, output_dim):
         if self.n_hidden == 0:
@@ -167,123 +214,125 @@ class NerfModel(nn.Module):
             layer1 = nn.Linear(input_dim, hidden_dim)
             layer2 = nn.Linear(hidden_dim, output_dim)
             intermediate_layers = []
-            for _ in range(self.n_hidden):
-                intermediate_layers += [nn.ReLU(), nn.Linear(hidden_dim, hidden_dim)]
+            for _ in range(self.n_hidden-1):
+                intermediate_layers += [nn.ReLU(True), nn.Linear(hidden_dim, hidden_dim)]
             return nn.Sequential(layer1, *intermediate_layers, layer2)
     
     
 
-class NerfOriginalBase(nn.Module):
-    def __init__(
-        self,
-        fourier_levels_pos: int,
-        fourier_levels_dir: int,
-        use_residual_color: bool = False,
-    ):
-        """
-        A base class for the original NeRF model - the coarse and fine models that underlie the nerf model.
-        with two change:
-            1. uses shifted softplus instead of ReLU.
-            2. optional possibility to use a skip connection for the color.
+# class NerfOriginalBase_old(nn.Module):
+#     def __init__(
+#         self,
+#         fourier_levels_pos: int,
+#         fourier_levels_dir: int,
+#         use_residual_color: bool = False,
+#     ):
+#         """
+#         A base class for the original NeRF model - the coarse and fine models that underlie the nerf model.
+#         with two change:
+#             1. uses shifted softplus instead of ReLU.
+#             2. optional possibility to use a skip connection for the color.
         
-        Parameters:
-        ----------
-        fourier_levels_pos: int
-            The number of levels to use for the positional encoding.
-        fourier_levels_dir: int
-            The number of levels to use for the directional encoding.
-        use_residual_color: bool
-            Whether to use a skip connection for the color.
-        """
-        super().__init__()
+#         Parameters:
+#         ----------
+#         fourier_levels_pos: int
+#             The number of levels to use for the positional encoding.
+#         fourier_levels_dir: int
+#             The number of levels to use for the directional encoding.
+#         use_residual_color: bool
+#             Whether to use a skip connection for the color.
+#         """
+#         super().__init__()
 
-        self.fourier_levels_pos = fourier_levels_pos
-        self.fourier_levels_dir = fourier_levels_dir
-        self.use_residual_color = use_residual_color
+#         self.fourier_levels_pos = fourier_levels_pos
+#         self.fourier_levels_dir = fourier_levels_dir
+#         self.use_residual_color = use_residual_color
 
-        self.model_fourier_pos = FourierFeatures(levels=self.fourier_levels_pos)
-        self.model_fourier_dir = FourierFeatures(levels=self.fourier_levels_dir)
+#         self.model_fourier_pos = FourierFeatures(levels=self.fourier_levels_pos)
+#         self.model_fourier_dir = FourierFeatures(levels=self.fourier_levels_dir)
 
-        self.model_density_1 = nn.Sequential(
-            nn.Linear(3*2*self.fourier_levels_pos, 256),
-            nn.ReLU(inplace=True),
-            nn.Linear(256, 256),
-            nn.ReLU(inplace=True),
-            nn.Linear(256, 256),
-            nn.ReLU(inplace=True),
-            nn.Linear(256, 256),
-            nn.ReLU(inplace=True),
-            nn.Linear(256, 256),
-        )
-        self.model_density_2 = nn.Sequential(
-            nn.Linear(256 + 3*2*self.fourier_levels_pos, 256),
-            nn.ReLU(inplace=True),
-            nn.Linear(256, 256),
-            nn.ReLU(inplace=True),
-            nn.Linear(256, 256),
-            nn.ReLU(inplace=True),
-            nn.Linear(256, 256),
-            nn.ReLU(inplace=True),
-            nn.Linear(256, 256+1 + 3*self.use_residual_color),
-        )
+#         self.model_density_1 = nn.Sequential(
+#             nn.Linear(3*2*self.fourier_levels_pos, 256),
+#             nn.ReLU(inplace=True),
+#             nn.Linear(256, 256),
+#             nn.ReLU(inplace=True),
+#             nn.Linear(256, 256),
+#             nn.ReLU(inplace=True),
+#             nn.Linear(256, 256),
+#             nn.ReLU(inplace=True),
+#             nn.Linear(256, 256),
+#         )
+#         self.model_density_2 = nn.Sequential(
+#             nn.Linear(256 + 3*2*self.fourier_levels_pos, 256),
+#             nn.ReLU(inplace=True),
+#             nn.Linear(256, 256),
+#             nn.ReLU(inplace=True),
+#             nn.Linear(256, 256),
+#             nn.ReLU(inplace=True),
+#             nn.Linear(256, 256),
+#             nn.ReLU(inplace=True),
+#             nn.Linear(256, 256+1 + 3*self.use_residual_color),
+#         )
 
-        self.softplus = nn.Softplus(threshold=8)
+#         self.softplus = nn.Softplus(threshold=8)
 
-        self.model_color = nn.Sequential(
-            nn.Linear(256 + 3*2*self.fourier_levels_dir, 128),
-            nn.ReLU(inplace=True),
-            nn.Linear(128, 3)
-        )
+#         self.model_color = nn.Sequential(
+#             nn.Linear(256 + 3*2*self.fourier_levels_dir, 128),
+#             nn.ReLU(inplace=True),
+#             nn.Linear(128, 3)
+#         )
 
-        self.sigmoid = nn.Sigmoid()
+#         self.sigmoid = nn.Sigmoid()
 
 
-    def forward(self, pos: th.Tensor, dir: th.Tensor):
-        fourier_pos = self.model_fourier_pos(pos)
-        fourier_dir = self.model_fourier_dir(dir)
+#     def forward(self, pos: th.Tensor, dir: th.Tensor):
+#         fourier_pos = self.model_fourier_pos(pos)
+#         fourier_dir = self.model_fourier_dir(dir)
         
-        z = self.model_density_1(fourier_pos)
-        z = self.model_density_2(th.cat((z, fourier_pos), dim=1))
+#         z = self.model_density_1(fourier_pos)
+#         z = self.model_density_2(th.cat((z, fourier_pos), dim=1))
 
-        # NOTE: Using shifted softplus like mip-NeRF instead of ReLU as in the original paper.
-        #  The weight initialization seemed to cause negative initial values.
+#         # NOTE: Using shifted softplus like mip-NeRF instead of ReLU as in the original paper.
+#         #  The weight initialization seemed to cause negative initial values.
 
-        density = self.softplus(z[:, 256] - 1)
-        rgb = self.model_color(th.cat((z[:, :256], fourier_dir), dim=1))
+#         density = self.softplus(z[:, 256] - 1)
+#         rgb = self.model_color(th.cat((z[:, :256], fourier_dir), dim=1))
 
-        if self.use_residual_color:
-            rgb_base = z[:, 257:260]
-            rgb = self.sigmoid(rgb_base + rgb)
-        else:
-            rgb = self.sigmoid(rgb)
+#         if self.use_residual_color:
+#             rgb_base = z[:, 257:260]
+#             rgb = self.sigmoid(rgb_base + rgb)
+#         else:
+#             rgb = self.sigmoid(rgb)
 
-        return density, rgb
+#         return density, rgb
 
-class NerfOriginal(pl.LightningModule):
+
+
+
+class NerfOriginalBase(pl.LightningModule):
     def __init__(
         self, 
         near_sphere_normalized: float,
         far_sphere_normalized: float,
         samples_per_ray_fine: int,
         samples_per_ray_coarse: int,
-        fourier_levels_pos: int,
-        fourier_levels_dir: int,
+        position_encoder: PositionalEncoding,
+        direction_encoder: PositionalEncoding,
+        n_hidden: int,
+        hidden_dim: int,
         learning_rate: float = 1e-4,
         learning_rate_decay: float = 0.5,
         weight_decay: float = 0.0,
         use_residual_color: bool = False,
     ):
         super().__init__()
-        self.save_hyperparameters()
+        # self.save_hyperparameters()
 
         self.near_sphere_normalized = near_sphere_normalized
         self.far_sphere_normalized = far_sphere_normalized
 
         self.samples_per_ray_fine = samples_per_ray_fine
         self.samples_per_ray_coarse = samples_per_ray_coarse
-        
-        self.fourier_levels_pos = fourier_levels_pos
-        self.fourier_levels_dir = fourier_levels_dir
         
         self.learning_rate = learning_rate
         self.learning_rate_decay = learning_rate_decay
@@ -292,17 +341,35 @@ class NerfOriginal(pl.LightningModule):
         
         self.use_residual_color = use_residual_color
         
-        self.model_coarse = NerfOriginalBase(
-            fourier_levels_pos=self.fourier_levels_pos,
-            fourier_levels_dir=self.fourier_levels_dir,
+        self.model_coarse = NerfModel(
+            n_hidden=n_hidden,
+            hidden_dim=hidden_dim,
+            position_encoder=position_encoder,
+            direction_encoder=direction_encoder,
             use_residual_color=self.use_residual_color
         )
 
-        self.model_fine = NerfOriginalBase(
-            fourier_levels_pos=self.fourier_levels_pos,
-            fourier_levels_dir=self.fourier_levels_dir,
+        self.model_fine = NerfModel(
+            n_hidden=n_hidden,
+            hidden_dim=hidden_dim,
+            position_encoder=position_encoder,
+            direction_encoder=direction_encoder,
             use_residual_color=self.use_residual_color
         )
+
+
+
+        # self.model_coarse = NerfOriginalBase(
+        #     fourier_levels_pos=self.fourier_levels_pos,
+        #     fourier_levels_dir=self.fourier_levels_dir,
+        #     use_residual_color=self.use_residual_color
+        # )
+
+        # self.model_fine = NerfOriginalBase(
+        #     fourier_levels_pos=self.fourier_levels_pos,
+        #     fourier_levels_dir=self.fourier_levels_dir,
+        #     use_residual_color=self.use_residual_color
+        # )
     
     def _sample_t_coarse(self, batch_size):
         """
@@ -450,7 +517,7 @@ class NerfOriginal(pl.LightningModule):
         return th.sum(weights*colors, dim=1), weights
 
     
-    def _compute_color(self, model: NerfOriginalBase,
+    def _compute_color(self, model: NerfModel,
                             t: th.Tensor,
                             ray_origs: th.Tensor,
                             ray_dirs: th.Tensor,
@@ -574,7 +641,7 @@ class NerfOriginal(pl.LightningModule):
         optimizer = th.optim.Adam(
             self.parameters(), 
             lr=self.learning_rate, 
-            weight_decay=self.weight_decay
+            weight_decay=self.weight_decay,
         )
         scheduler = th.optim.lr_scheduler.ExponentialLR(
             optimizer, 
@@ -585,3 +652,108 @@ class NerfOriginal(pl.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": scheduler,
         }
+
+
+
+
+class NaiveINGP(NerfOriginalBase):
+    def __init__(
+            self,
+            near_sphere_normalized: float,
+            far_sphere_normalized: float,
+            samples_per_ray_fine: int,
+            samples_per_ray_coarse: int,
+            fourier_levels_dir: int,
+            resolution_max: int,
+            resolution_min: int,
+            table_size: int,
+            n_features=2,
+            n_levels=16,
+            pi1=1,
+            pi2=2654435761,
+            pi3=805459861,
+            learning_rate: float = 1e-2,
+            learning_rate_decay: float = 0.5,
+            weight_decay: float = 0.0,
+            use_residual_color: bool = False, 
+    ):
+        position_encoder = INGPEncoding(
+            resolution_max=resolution_max,
+            resolution_min=resolution_min,
+            table_size=table_size,
+            n_features=n_features,
+            n_levels=n_levels,
+            pi1=pi1,
+            pi2=pi2,
+            pi3=pi3,
+        )
+
+        direction_encoder = FourierFeatures(levels=fourier_levels_dir)
+
+        super().__init__(
+            near_sphere_normalized,
+            far_sphere_normalized,
+            samples_per_ray_fine,
+            samples_per_ray_coarse,
+            position_encoder,
+            direction_encoder,
+            1,
+            64,
+            learning_rate,
+            learning_rate_decay,
+            weight_decay,
+            use_residual_color,
+        )
+    def configure_optimizers(self):
+        optimizer = th.optim.Adam(
+            self.parameters(), 
+            lr=self.learning_rate, 
+            weight_decay=self.weight_decay,
+            eps=1e-15,
+            betas=(0.9, 0.99),
+        )
+        scheduler = th.optim.lr_scheduler.ExponentialLR(
+            optimizer, 
+            gamma=self.learning_rate_decay
+        )
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": scheduler,
+        }
+
+
+
+class NerfOriginal(NerfOriginalBase):
+    def __init__(
+                    self, 
+                    near_sphere_normalized: float,
+                    far_sphere_normalized: float,
+                    samples_per_ray_fine: int,
+                    samples_per_ray_coarse: int,
+                    fourier_levels_pos: int,
+                    fourier_levels_dir: int,
+                    learning_rate: float = 1e-4,
+                    learning_rate_decay: float = 0.5,
+                    weight_decay: float = 0.0,
+                    use_residual_color: bool = False,
+                ):
+        
+        position_encoder = FourierFeatures(levels=fourier_levels_pos)
+        direction_encoder = FourierFeatures(levels=fourier_levels_dir)
+
+        super().__init__(
+                    near_sphere_normalized,
+                    far_sphere_normalized,
+                    samples_per_ray_fine,
+                    samples_per_ray_coarse,
+                    position_encoder,
+                    direction_encoder,
+                    4,
+                    256,
+                    learning_rate,
+                    learning_rate_decay,
+                    weight_decay,
+                    use_residual_color,
+        )
+
