@@ -6,13 +6,134 @@ from typing import Any, Callable, Iterator, Literal, cast
 from data_module import DatasetOutput
 
 
-class FourierFeatures(nn.Module):
+#test that shit
+def test():
+    class Tester():
+        def __init__(self, resolution, table_size, n_features):
+            self.resolution = resolution
+            self.table_size = table_size
+            self.n_features = n_features
+            self.idx_dict = dict()
+
+            self.table = (th.rand((self.table_size, self.n_features))*2 - 1)*10**(-4)
+
+    resolution = 6
+    table_size = 10
+    n_features = 2
+    
+    self = Tester(resolution, table_size, n_features)
+
+
+
+
+class INGPTable(nn.Module):
+    def __init__(self, resolution, table_size, n_features, pi1, pi2, pi3):
+        super().__init__()
+        self.resolution = resolution
+        self.table_size = table_size
+        self.n_features = n_features
+        self.pi1 = pi1
+        self.pi2 = pi2
+        self.pi3 = pi3
+
+        self.table = nn.Parameter(
+            (th.rand((self.table_size, self.n_features))*2 - 1)*10**(-4)
+            )
+    
+    def hash(self, x):
+        # x: (batch_size, 2**d, d) - d=3 (we are gonna have d 2's)
+        # output: (batch_size, 2**d)
+
+        y1 = self.pi1 * x[...,0]
+        y2 = self.pi2 * x[...,1]
+        y3 = self.pi3 * x[...,2]
+
+        y = th.bitwise_xor(y1, y2)
+        y = th.bitwise_xor(y, y3)
+        y = th.remainder(y, self.table_size)
+
+        return y
+
+    def forward(self, x: th.Tensor):
+        # x: (batch_size, data_dim)
+        # output: (batch_size, n_features)
+
+        batch_size, data_dim = x.shape
+
+        # get corners:
+        x_scaled = x * self.resolution
+        x_floor = th.floor(x_scaled)
+        x_ceil = x_floor + 1
+        x_lim = th.stack((x_floor, x_ceil), dim=1)
+
+        idx_list = [(0,0,0), (0,0,1), (0,1,0), (0,1,1), (1,0,0), (1,0,1), (1,1,0), (1,1,1)]
+
+        corners = th.stack(
+            [
+                x_lim[:,[i,j,k], th.arange(3)] for i,j,k in idx_list
+              ],
+        dim=1).to(th.int64)
+
+        feature_idx = self.hash(corners)
+        features = self.table[feature_idx]
+
+        # get weights:
+        x_diff = x_scaled - corners
+        x_diff = th.abs(x_diff)
+        weights = 1 - x_diff
+        weights = th.prod(weights, dim=-1)
+
+        # get output:
+        output = th.sum(features * weights.unsqueeze(-1), dim=1)
+
+        return output
+
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, output_dim):
+        super().__init__()
+        self.output_dim = output_dim
+
+
+class INGPEncoding(PositionalEncoding):
+    def __init__(self, resolution_max, resolution_min,
+                 table_size, n_features, n_levels,
+                 pi1=1, pi2=2654435761, pi3=805459861):
+        super().__init__(output_dim=n_features*n_levels)
+        self.resolution_max = resolution_max
+        self.resolution_min = resolution_min
+        self.table_size = table_size
+        self.n_features = n_features
+        self.n_levels = n_levels
+        self.b = th.exp(th.log(resolution_min) - th.log(resolution_max) / (n_levels-1))
+
+        self.resolution = th.floor(resolution_max * self.b**th.arange(n_levels))
+
+        self.encodings = nn.ModuleList(
+            [INGPTable(r, table_size, n_features, pi1, pi2, pi3) for r in self.resolution]
+        )
+    
+    def forward(self, x):
+        # x: (batch_size, data_dim)
+        # output: (batch_size, n_features*n_levels)
+
+        batch_size, data_dim = x.shape
+
+        output = th.stack([enc(x) for enc in self.encodings], dim=1)
+
+        return output
+
+
+
+
+
+class FourierFeatures(PositionalEncoding):
     def __init__(self, levels: int):
         """
         Positional encoding using Fourier features.
         
         """
-        super().__init__()
+        super().__init__(3*2*levels)
 
         self.levels = levels
 
@@ -30,6 +151,27 @@ class FourierFeatures(nn.Module):
         #  so there should be no loss difference. Computation is faster with this.
         return th.hstack((th.cos(args), th.sin(args)))
 
+
+class NerfModel(nn.Module):
+    def __init__(self, n_hidden: int, layer_size: int, pos_enc: PositionalEncoding, dir_enc: PositionalEncoding):
+        super().__init__()
+        self.n_hidden = n_hidden
+        self.layer_size = layer_size
+        self.pos_enc = pos_enc
+        self.dir_enc = dir_enc
+
+    def contruct_model_density(self, input_dim, hidden_dim, output_dim):
+        if self.n_hidden == 0:
+            return nn.Linear(input_dim, output_dim)
+        else:
+            layer1 = nn.Linear(input_dim, hidden_dim)
+            layer2 = nn.Linear(hidden_dim, output_dim)
+            intermediate_layers = []
+            for _ in range(self.n_hidden):
+                intermediate_layers += [nn.ReLU(), nn.Linear(hidden_dim, hidden_dim)]
+            return nn.Sequential(layer1, *intermediate_layers, layer2)
+    
+    
 
 class NerfOriginalBase(nn.Module):
     def __init__(
@@ -195,7 +337,7 @@ class NerfOriginal(pl.LightningModule):
         return t_coarse
     
 
-    def _sample_t_fine(self, t_coarse: th.Tensor, weights: th.Tensor, distances_coarse: th.Tensor) -> th.Tensor:
+    def _sample_t_fine(self, t_coarse: th.Tensor, weights: th.Tensor, distances_coarse: th.Tensor, linspace=True) -> th.Tensor:
         """
         Sample t using hierarchical sampling based on the weights from the coarse model.
 
@@ -204,6 +346,7 @@ class NerfOriginal(pl.LightningModule):
             t_coarse: Tensor of shape (batch_size, samples_per_ray_coarse)
             weights: Tensor of shape (batch_size, samples_per_ray_coarse)
             distances_coarse: Tensor of shape (batch_size, samples_per_ray_coarse)
+            linspace: bool - whether to use linspace instead of multinomial sampling
         
         Returns:
         --------
@@ -213,11 +356,30 @@ class NerfOriginal(pl.LightningModule):
 
         ### Compute t
         weights = weights.squeeze(2)
-        sample_idx = th.multinomial(weights, self.samples_per_ray_fine, replacement=True)
-        t_fine = t_coarse.gather(1, sample_idx)
-        t_fine += th.rand_like(t_fine, device=self.device) * distances_coarse.gather(1, sample_idx)
-        t_fine = th.cat((t_coarse, t_fine), dim=1)
-        t_fine = th.sort(t_fine, dim=1).values
+        batch_size = t_coarse.shape[0]
+        device = t_coarse.device
+
+        if linspace:
+            fine_samples = th.round(weights*self.samples_per_ray_fine)
+            fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += self.samples_per_ray_fine - fine_samples.sum(dim=1)
+            fine_samples += 1
+            fine_samples_cum_sum = th.hstack((th.zeros(batch_size, 1, device=device), fine_samples.cumsum(dim=1)))
+            
+            arange = th.arange(self.samples_per_ray_fine + self.samples_per_ray_coarse, device=device).unsqueeze(0)
+            t_fine = th.zeros(batch_size, self.samples_per_ray_fine + self.samples_per_ray_coarse, device=device)
+
+            for i in range(self.samples_per_ray_coarse):
+                mask = (arange >= fine_samples_cum_sum[:, i].unsqueeze(-1)) & (arange < fine_samples_cum_sum[:, i+1].unsqueeze(-1))
+                t_fine += t_coarse[:, i].unsqueeze(-1)*mask
+                t_fine += (arange - fine_samples_cum_sum[:, i].unsqueeze(-1))*mask*distances_coarse[:, i].unsqueeze(-1)/fine_samples[:, i].unsqueeze(-1)
+
+        else:
+
+            sample_idx = th.multinomial(weights, self.samples_per_ray_fine, replacement=True)
+            t_fine = t_coarse.gather(1, sample_idx)
+            t_fine += th.rand_like(t_fine, device=self.device) * distances_coarse.gather(1, sample_idx)
+            t_fine = th.cat((t_coarse, t_fine), dim=1)
+            t_fine = th.sort(t_fine, dim=1).values
 
         return t_fine
 
@@ -383,7 +545,7 @@ class NerfOriginal(pl.LightningModule):
         return rgb_fine, rgb_coarse
 
 
-    ############ pytorch lightning functions ##############3
+    ############ pytorch lightning functions ############
 
     def _step_helpher(self, batch: DatasetOutput, batch_idx: int, stage: str):
         """

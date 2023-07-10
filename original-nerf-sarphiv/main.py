@@ -17,6 +17,12 @@ if __name__ == "__main__":
     # Set seeds
     pl.seed_everything(1337)
 
+    EXPERIMENTS_PATH = "experiments"
+    EXPERIMENT_NAME = "test_nerf_original"
+    
+
+
+    path = os.path.join(EXPERIMENTS_PATH, EXPERIMENT_NAME)
 
     # Set up weights and biases logger
     wandb_logger = WandbLogger(
@@ -39,13 +45,13 @@ if __name__ == "__main__":
 
 
     checkpoint_callback_time = ModelCheckpoint(
-        dirpath='checkpoints_res2',
+        dirpath=os.path.join(path,'checkpoints'),
         filename='ckpt_epoch={epoch:02d}-val_loss={val_loss:.2f}',
         every_n_epochs=1,
         save_top_k=-1,
         )
 
-    os.makedirs("output_images_res2", exist_ok=True)
+    os.makedirs(os.path.join(path, "output_images"), exist_ok=True)
 
     # Set up trainer
     th.set_float32_matmul_precision("medium")
@@ -54,17 +60,18 @@ if __name__ == "__main__":
 
     trainer = pl.Trainer(
         accelerator="auto",
-        max_epochs=3,
-        # max_epochs=256,
+        max_epochs=256,
+        # precision="bf16",
         precision="16-mixed",
-        logger=wandb_logger,
+        # logger=wandb_logger,
         callbacks=[
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
                 epoch_period=1,
                 validation_image_name="r_2",
                 batch_size=1024*4,
-                num_workers=4
+                num_workers=4,
+                path=os.path.join(path, "output_images"),
             ),
             LearningRateMonitor(
                 logging_interval="epoch"
