@@ -89,19 +89,25 @@ class INGPTable(nn.Module):
         return output
 
 
-class INGPEncoding(nn.Module):
-    def __init__(self, resolution_max, resolution_min,
-                 table_size, n_features, n_layers,
-                 pi1=1, pi2=2654435761, pi3=805459861):
+class PositionalEncoding(nn.Module):
+    def __init__(self, output_dim):
         super().__init__()
+        self.output_dim = output_dim
+
+
+class INGPEncoding(PositionalEncoding):
+    def __init__(self, resolution_max, resolution_min,
+                 table_size, n_features, n_levels,
+                 pi1=1, pi2=2654435761, pi3=805459861):
+        super().__init__(output_dim=n_features*n_levels)
         self.resolution_max = resolution_max
         self.resolution_min = resolution_min
         self.table_size = table_size
         self.n_features = n_features
-        self.n_layers = n_layers
-        self.b = th.exp(th.log(resolution_min) - th.log(resolution_max) / (n_layers-1))
+        self.n_levels = n_levels
+        self.b = th.exp(th.log(resolution_min) - th.log(resolution_max) / (n_levels-1))
 
-        self.resolution = th.floor(resolution_max * self.b**th.arange(n_layers))
+        self.resolution = th.floor(resolution_max * self.b**th.arange(n_levels))
 
         self.encodings = nn.ModuleList(
             [INGPTable(r, table_size, n_features, pi1, pi2, pi3) for r in self.resolution]
@@ -109,7 +115,7 @@ class INGPEncoding(nn.Module):
     
     def forward(self, x):
         # x: (batch_size, data_dim)
-        # output: (batch_size, n_features*n_layers)
+        # output: (batch_size, n_features*n_levels)
 
         batch_size, data_dim = x.shape
 
@@ -121,13 +127,13 @@ class INGPEncoding(nn.Module):
 
 
 
-class FourierFeatures(nn.Module):
+class FourierFeatures(PositionalEncoding):
     def __init__(self, levels: int):
         """
         Positional encoding using Fourier features.
         
         """
-        super().__init__()
+        super().__init__(3*2*levels)
 
         self.levels = levels
 
@@ -145,6 +151,27 @@ class FourierFeatures(nn.Module):
         #  so there should be no loss difference. Computation is faster with this.
         return th.hstack((th.cos(args), th.sin(args)))
 
+
+class NerfModel(nn.Module):
+    def __init__(self, n_hidden: int, layer_size: int, pos_enc: PositionalEncoding, dir_enc: PositionalEncoding):
+        super().__init__()
+        self.n_hidden = n_hidden
+        self.layer_size = layer_size
+        self.pos_enc = pos_enc
+        self.dir_enc = dir_enc
+
+    def contruct_model_density(self, input_dim, hidden_dim, output_dim):
+        if self.n_hidden == 0:
+            return nn.Linear(input_dim, output_dim)
+        else:
+            layer1 = nn.Linear(input_dim, hidden_dim)
+            layer2 = nn.Linear(hidden_dim, output_dim)
+            intermediate_layers = []
+            for _ in range(self.n_hidden):
+                intermediate_layers += [nn.ReLU(), nn.Linear(hidden_dim, hidden_dim)]
+            return nn.Sequential(layer1, *intermediate_layers, layer2)
+    
+    
 
 class NerfOriginalBase(nn.Module):
     def __init__(

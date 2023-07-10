@@ -16,14 +16,12 @@ if __name__ == "__main__":
     # Set seeds
     pl.seed_everything(1337)
 
-    print("Starting training...")
-    # check if we have a GPU available
-    if th.cuda.is_available():
-        device = th.device("cuda")
-        print("Using GPU")
-    else:
-        device = th.device("cpu")
-        print("Using CPU")
+    EXPERIMENTS_PATH = "experiments"
+    EXPERIMENT_NAME = "test_nerf_original"
+    
+
+
+    path = os.path.join(EXPERIMENTS_PATH, EXPERIMENT_NAME)
 
     # Set up weights and biases logger
     wandb_logger = WandbLogger(
@@ -34,8 +32,8 @@ if __name__ == "__main__":
 
     # Set up data module
     dm = ImagePoseDataModule(
-        image_width=800,
-        image_height=800,
+        image_width=50,
+        image_height=50,
         scene_path="../data/lego",
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
@@ -46,13 +44,13 @@ if __name__ == "__main__":
 
 
     checkpoint_callback_time = ModelCheckpoint(
-        dirpath='checkpoints',
+        dirpath=os.path.join(path,'checkpoints'),
         filename='ckpt_epoch={epoch:02d}-val_loss={val_loss:.2f}',
         every_n_epochs=1,
         save_top_k=-1,
         )
 
-    os.makedirs("output_images", exist_ok=True)
+    os.makedirs(os.path.join(path, "output_images"), exist_ok=True)
 
     # Set up trainer
     th.set_float32_matmul_precision("medium")
@@ -60,8 +58,8 @@ if __name__ == "__main__":
     trainer = pl.Trainer(
         accelerator="auto",
         max_epochs=256,
-        precision="bf16",
-        # precision="16-mixed",
+        # precision="bf16",
+        precision="16-mixed",
         # logger=wandb_logger,
         callbacks=[
             Log2dImageReconstruction(
@@ -69,7 +67,8 @@ if __name__ == "__main__":
                 epoch_period=1,
                 validation_image_name="r_2",
                 batch_size=1024*4,
-                num_workers=4
+                num_workers=4,
+                path=os.path.join(path, "output_images"),
             ),
             LearningRateMonitor(
                 logging_interval="epoch"

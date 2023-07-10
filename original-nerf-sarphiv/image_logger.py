@@ -21,6 +21,7 @@ class Log2dImageReconstruction(Callback):
         validation_image_name: str,
         batch_size: int,
         num_workers: int,
+        path: str
     ) -> None:
         super().__init__()
         self.logger = wandb_logger
@@ -29,6 +30,8 @@ class Log2dImageReconstruction(Callback):
         
         self.batch_size = batch_size
         self.num_workers = num_workers
+
+        self.path = path
 
 
     def on_validation_epoch_end(self, trainer: pl.Trainer, model: pl.LightningModule) -> None:
@@ -74,7 +77,7 @@ class Log2dImageReconstruction(Callback):
         # Log image
         # NOTE: Cannot pass tensor as channel dimension is in numpy format
         image = rgb.view(dataset.image_height, dataset.image_width, 3).numpy().clip(0, 1)
-        plt.imsave(f"output_images/output_image_epoch={trainer.current_epoch}.png", image)
+        plt.imsave(os.path.join(self.path, f"output_image_epoch={trainer.current_epoch}.png"), image)
         self.logger.log_image(
             key="val_img", 
             images=[image]
