@@ -18,7 +18,7 @@ if __name__ == "__main__":
     pl.seed_everything(1337)
 
     EXPERIMENTS_PATH = "experiments"
-    EXPERIMENT_NAME = "test_nerf_naive_ingp"
+    EXPERIMENT_NAME = "test_nerf_naive_ingp_2"
     # EXPERIMENT_NAME = "test_nerf_original"
     
 

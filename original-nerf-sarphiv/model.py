@@ -6,6 +6,8 @@ from typing import Any, Callable, Iterator, Literal, cast
 from data_module import DatasetOutput
 import math
 
+import numpy as np
+import os
 
 #test that shit
 def test():
@@ -52,6 +54,11 @@ class INGPTable(nn.Module):
         y = th.bitwise_xor(y1, y2)
         y = th.bitwise_xor(y, y3)
         y = th.remainder(y, self.table_size)
+
+        os.makedirs("test_hash", exist_ok=True)
+        v = len(os.listdir("test_hash"))
+        np.save(f"test_hash/hash_values.npy", y.detach().cpu().numpy())
+        np.save(f"test_hash/x.npy", x.detach().cpu().numpy())
 
         return y
 

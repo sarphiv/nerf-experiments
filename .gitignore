@@ -1,5 +1,6 @@
 experiments**
 .sprinkle**
+sprinkle-job-export.sh
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
