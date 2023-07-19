@@ -5,12 +5,8 @@ from torch.utils.data import DataLoader, TensorDataset
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import Callback
 from pytorch_lightning.loggers import WandbLogger #type: ignore
-import wandb
-
-import matplotlib.pyplot as plt
 
 from data_module import ImagePoseDataset
-import os
 
 
 class Log2dImageReconstruction(Callback):
@@ -21,7 +17,6 @@ class Log2dImageReconstruction(Callback):
         validation_image_name: str,
         batch_size: int,
         num_workers: int,
-        path: str
     ) -> None:
         super().__init__()
         self.logger = wandb_logger
@@ -30,8 +25,6 @@ class Log2dImageReconstruction(Callback):
         
         self.batch_size = batch_size
         self.num_workers = num_workers
-
-        self.path = path
 
 
     def on_validation_epoch_end(self, trainer: pl.Trainer, model: pl.LightningModule) -> None:
@@ -68,7 +61,7 @@ class Log2dImageReconstruction(Callback):
             batch_size = ray_origs.shape[0]
             
             # Predict RGB values
-            rgb[i:i+batch_size, :] = model(ray_origs, ray_dirs)[0].cpu()
+            rgb[i:i+batch_size, :] = model(ray_origs, ray_dirs)[0].clip(0, 1).cpu()
         
             # Update write head
             i += batch_size
@@ -76,8 +69,8 @@ class Log2dImageReconstruction(Callback):
 
         # Log image
         # NOTE: Cannot pass tensor as channel dimension is in numpy format
-        image = rgb.view(dataset.image_height, dataset.image_width, 3).numpy().clip(0, 1)
-        plt.imsave(os.path.join(self.path, f"output_image_epoch={trainer.current_epoch}.png"), image)
+        image = rgb.view(dataset.image_height, dataset.image_width, 3).numpy()
+
         self.logger.log_image(
             key="val_img", 
             images=[image]
