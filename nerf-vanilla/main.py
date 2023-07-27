@@ -42,9 +42,8 @@ if __name__ == "__main__":
     trainer = pl.Trainer(
         accelerator="auto",
         max_epochs=256,
-        # precision="bf16",
         precision="16-mixed",
-        # logger=wandb_logger,
+        logger=wandb_logger,
         callbacks=[
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
