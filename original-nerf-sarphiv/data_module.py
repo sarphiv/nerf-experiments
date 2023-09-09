@@ -117,8 +117,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         And close file afterwards - see https://pillow.readthedocs.io/en/stable/reference/open_files.html
         """
         with Image.open(os.path.join(self.images_path, path)) as img:
-            img = self.transform(img)
-        return img
+            return self.transform(img)
 
 
     def __getitem__(self, index: int) -> DatasetOutput:
@@ -296,6 +295,3 @@ class ImagePoseDataModule(pl.LightningDataModule):
             *args,
             **kwargs
         )
-    
-if __name__ == "__main__":
-    print("Hello world!")
