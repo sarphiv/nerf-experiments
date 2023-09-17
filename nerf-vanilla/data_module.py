@@ -66,6 +66,21 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             for path, rotation, camera_to_world in [frame.values()] 
         }
 
+        # Get average position of all cameras (get last columns and average over each entry)
+        camera_positions = th.vstack(tuple(self.camera_to_world.values()))[:, -1].reshape(-1, 4)
+        camera_average_position = camera_positions.mean(dim=0)
+        camera_average_position[-1] = 0
+        camera_average_position = th.hstack((th.zeros((4,3)), camera_average_position.unsqueeze(1)))
+
+        # Get the maximum distance of any two cameras 
+        camera_max_distance = th.cdist(camera_positions, camera_positions, compute_mode="donot_use_mm_for_euclid_dist").max()
+        camera_max_distance_matrix = th.ones((4, 4))
+        camera_max_distance_matrix[:-1, -1] = camera_max_distance*3
+        
+        # Move origin to average position of all cameras and scale world coordinates by the 3*the maximum distance of any two cameras
+        self.camera_to_world = {image_name: (camera_to_world - camera_average_position)/camera_max_distance_matrix
+                                for image_name, camera_to_world in self.camera_to_world.items()}
+
 
         # Create unit directions (H, W, 3) in camera space
         # NOTE: Initially normalized such that z=-1 via the focal length.
@@ -186,8 +201,8 @@ class ImagePoseDataModule(pl.LightningDataModule):
         dataset = ImagePoseDataset(
             image_width=self.image_width,
             image_height=self.image_height,
-            images_path=os.path.join(self.scene_path, purpose),
-            pose_path=os.path.join(self.scene_path, f"transforms_{purpose}.json"),
+            images_path=os.path.join(self.scene_path, purpose).replace("\\", "/"),
+            pose_path=os.path.join(self.scene_path, f"transforms_{purpose}.json").replace("\\", "/"),
         )
 
         return dataset
