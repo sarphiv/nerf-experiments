@@ -19,5 +19,3 @@ dependencies:
     - torchaudio
     - pytorch-lightning
     - wandb
-  - conda:
-    - cudatoolkit
