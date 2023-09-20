@@ -6,7 +6,7 @@ from data_module import DatasetOutput
 
 
 class FourierFeatures(nn.Module):
-    def __init__(self, levels: int):
+    def __init__(self, levels: int, scale: float = th.pi):
         """
         Positional encoding using Fourier features of "levels" periods. 
         
@@ -14,6 +14,7 @@ class FourierFeatures(nn.Module):
         super().__init__()
 
         self.levels = levels
+        self.scale = scale
 
 
     def forward(self, x: th.Tensor) -> th.Tensor:
@@ -21,8 +22,10 @@ class FourierFeatures(nn.Module):
         Gets the positional encoding of x for each channel.
         x_i in [-0.5, 0.5] -> function(x_i * pi * 2^j) for function in (cos, sin) for j in [0, levels-1]
         """
-        scale = 2*th.pi*(2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
+        # scale = 2*th.pi*(2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
+        # scale = 23.77744960784912*(2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
         # scale = (2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
+        scale = self.scale*(2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
         args = x.repeat_interleave(self.levels, dim=1) * scale
 
         return th.hstack((th.cos(args), th.sin(args)))
@@ -51,8 +54,9 @@ class NerfModel(nn.Module):
         super().__init__()
         self.n_hidden = n_hidden
         self.hidden_dim = hidden_dim
-        self.position_encoder = FourierFeatures(fourier_levels_pos)
-        self.direction_encoder = FourierFeatures(fourier_levels_dir)
+        # self.position_encoder = FourierFeatures(fourier_levels_pos, 1.0)
+        self.position_encoder = FourierFeatures(fourier_levels_pos, 23.77744960784912)
+        self.direction_encoder = FourierFeatures(fourier_levels_dir, 1.0)
 
         # Creates the first module of the network 
         self.model_density_1 = self.contruct_model_density(fourier_levels_pos*2*3,
@@ -314,7 +318,8 @@ class NerfOriginal(pl.LightningModule):
         """
 
         # Get the negative Optical Density 
-        blocking_neg = (-densities * distances)
+        blocking_neg = 3*(-densities * distances)/(th.sum(densities * distances, dim=1).unsqueeze(-1) + 1e-10)
+        # blocking_neg = (-densities * distances)
         # Get the absorped light over each ray segment 
         alpha = 1 - th.exp(blocking_neg)
         # Get the light that has made it through previous segments 
