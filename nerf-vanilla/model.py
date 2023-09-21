@@ -314,8 +314,8 @@ class NerfOriginal(pl.LightningModule):
         """
 
         # Get the negative Optical Density 
-        blocking_neg = 3*(-densities * distances)/(th.sum(densities * distances, dim=1).unsqueeze(-1) + 1e-10)
-        # blocking_neg = (-densities * distances)
+        # blocking_neg = 3*(-densities * distances)/(th.sum(densities * distances, dim=1).unsqueeze(-1) + 1e-10)
+        blocking_neg = (-densities * distances)*23
         # Get the absorped light over each ray segment 
         alpha = 1 - th.exp(blocking_neg)
         # Get the light that has made it through previous segments 

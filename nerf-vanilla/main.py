@@ -18,7 +18,8 @@ if __name__ == "__main__":
     # Set up weights and biases logger
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
-        entity="metrics_logger"
+        entity="metrics_logger",
+        name="scaled-camera-poses-23"
     )
 
 
