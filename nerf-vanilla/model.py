@@ -65,6 +65,7 @@ class NerfModel(nn.Module):
                                                            self.hidden_dim,
                                                            self.hidden_dim + 1)
         self.softplus = nn.Softplus(threshold=8)
+        self.exp = th.exp
 
         # Creates the final layer of the model that outputs the color
         self.model_color = nn.Sequential(
@@ -87,7 +88,8 @@ class NerfModel(nn.Module):
         # NOTE: Using shifted softplus like mip-NeRF instead of ReLU as in the original paper.
         #  The weight initialization seemed to cause negative initial values.
 
-        density = self.softplus(z[:, self.hidden_dim] - 1)
+        # density = self.softplus(z[:, self.hidden_dim] - 1)
+        density = self.exp(z[:, self.hidden_dim] - 1)
 
         # H(Hn(Hn(Ep(x)), Ep(x)), Ed(d))
         # Extract the color estimate
@@ -314,7 +316,7 @@ class NerfOriginal(pl.LightningModule):
         """
 
         # Get the negative Optical Density 
-        blocking_neg = 3*(-densities * distances)/(th.sum(densities * distances, dim=1).unsqueeze(-1) + 1e-10)
+        blocking_neg = 4*(-densities * distances)/(th.sum(densities * distances, dim=1).unsqueeze(-1) + 1e-10)
         # blocking_neg = (-densities * distances)
         # Get the absorped light over each ray segment 
         alpha = 1 - th.exp(blocking_neg)
