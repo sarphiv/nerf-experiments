@@ -26,8 +26,8 @@ if __name__ == "__main__":
     BATCH_SIZE = 1024*2
     
     dm = ImagePoseDataModule(
-        image_width=50,
-        image_height=50,
+        image_width=800,
+        image_height=800,
         scene_path="../data/lego",
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
@@ -66,16 +66,15 @@ if __name__ == "__main__":
 
     # Set up model
     model = NerfOriginal(
-        near_sphere_normalized=2,
-        far_sphere_normalized=7,
+        near_sphere_normalized=0.01,
+        far_sphere_normalized=1/3,
         samples_per_ray_coarse=64,
         samples_per_ray_fine=192,
         fourier_levels_pos=10,
         fourier_levels_dir=4,
         learning_rate=5e-4,
         learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
-        weight_decay=0,
-        use_residual_color=True
+        weight_decay=0
     )
 
 

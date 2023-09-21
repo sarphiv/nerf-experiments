@@ -3,7 +3,7 @@ import os
 import pathlib
 import math
 from copy import copy
-from typing import Any, Callable, Iterator, Literal, cast
+from typing import Any, Callable, Iterator, Optional, Literal, cast
 
 import pytorch_lightning as pl
 import torch as th
@@ -23,12 +23,13 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
     @staticmethod
     def permute_channels(img: th.Tensor): return img.permute(1, 2, 0)
 
-    def __init__(self, image_width: int, image_height: int, images_path: str, pose_path: str) -> None:
+    def __init__(self, image_width: int, image_height: int, images_path: str, pose_path: str, space_transform: Optional[tuple[float, th.Tensor]]=None) -> None:
         super().__init__()
         
         # Store image dimensions
         self.image_height, self.image_width = image_width, image_height
         self.image_batch_size = self.image_width * self.image_height
+        self.space_transform = space_transform
         
         # Store paths
         self.images_path = images_path
@@ -66,6 +67,35 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             for path, rotation, camera_to_world in [frame.values()] 
         }
 
+
+        # If space transform is given, initialize transform parameters from data
+        if self.space_transform is None:
+            # Get average position of all cameras (get last columns and average over each entry)
+            camera_positions = th.vstack(tuple(self.camera_to_world.values()))[:, -1].reshape(-1, 4)
+            camera_average_position = camera_positions.mean(dim=0)
+            camera_average_position[-1] = 0
+
+            # Get the maximum distance of any two cameras 
+            camera_max_distance: float = 3*th.cdist(camera_positions, camera_positions, compute_mode="donot_use_mm_for_euclid_dist").max().item()
+            
+            # Define space transform 
+            self.space_transform = (camera_max_distance, camera_average_position)
+
+
+        # Get the space transform matrices 
+        (camera_max_distance, camera_average_position) = self.space_transform
+
+        # Only move the offset
+        camera_average_position = th.hstack((th.zeros((4,3)), camera_average_position.unsqueeze(1)))
+
+        # Scale the camera distances
+        camera_max_distance_matrix = th.ones((4, 4))
+        camera_max_distance_matrix[:-1, -1] = camera_max_distance
+
+        # Move origin to average position of all cameras and scale world coordinates by the 3*the maximum distance of any two cameras
+        self.camera_to_world = { image_name: (camera_to_world - camera_average_position)/camera_max_distance_matrix
+                                 for image_name, camera_to_world 
+                                 in self.camera_to_world.items() }
 
         # Create unit directions (H, W, 3) in camera space
         # NOTE: Initially normalized such that z=-1 via the focal length.
@@ -173,6 +203,9 @@ class ImagePoseDataModule(pl.LightningDataModule):
 
         self.dataloader_args = dataloader_args
         self.dataloader_kwargs = dataloader_kwargs
+        
+        self.space_transform: Optional[tuple[float, th.Tensor]] = None
+
 
     def _get_dataset(self, purpose: Literal["train", "val", "test"]) -> ImagePoseDataset:
         """Get dataset for given purpose.
@@ -186,16 +219,20 @@ class ImagePoseDataModule(pl.LightningDataModule):
         dataset = ImagePoseDataset(
             image_width=self.image_width,
             image_height=self.image_height,
-            images_path=os.path.join(self.scene_path, purpose),
-            pose_path=os.path.join(self.scene_path, f"transforms_{purpose}.json"),
+            images_path=os.path.join(self.scene_path, purpose).replace("\\", "/"),
+            pose_path=os.path.join(self.scene_path, f"transforms_{purpose}.json").replace("\\", "/"),
+            space_transform=self.space_transform
         )
 
         return dataset
 
     def setup(self, stage: Literal["fit", "test", "predict"]):
+        self.dataset_train = self._get_dataset("train")
+        self.space_transform = self.dataset_train.space_transform
+
+
         match stage:
             case "fit":
-                self.dataset_train = self._get_dataset("train")
                 self.dataset_val = self._get_dataset("val")
 
                 # Prepare cache of validation data
