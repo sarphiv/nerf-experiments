@@ -54,8 +54,8 @@ class NerfModel(nn.Module):
         super().__init__()
         self.n_hidden = n_hidden
         self.hidden_dim = hidden_dim
-        # self.position_encoder = FourierFeatures(fourier_levels_pos, 1.0)
-        self.position_encoder = FourierFeatures(fourier_levels_pos, 23.77744960784912)
+        self.position_encoder = FourierFeatures(fourier_levels_pos, th.pi*2)
+        # self.position_encoder = FourierFeatures(fourier_levels_pos, 23.77744960784912)
         self.direction_encoder = FourierFeatures(fourier_levels_dir, 1.0)
 
         # Creates the first module of the network 
