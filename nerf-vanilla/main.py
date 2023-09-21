@@ -47,6 +47,7 @@ if __name__ == "__main__":
         callbacks=[
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
+                batch_period=100,
                 epoch_period=1,
                 validation_image_name="r_2",
                 batch_size=BATCH_SIZE,

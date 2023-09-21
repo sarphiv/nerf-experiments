@@ -13,13 +13,25 @@ class Log2dImageReconstruction(Callback):
     def __init__(
         self, 
         wandb_logger: WandbLogger, 
+        batch_period: int,
         epoch_period: int,
         validation_image_name: str,
         batch_size: int,
         num_workers: int,
     ) -> None:
+        """Log a 2D image reconstruction of the validation image.
+        
+        Args:
+            wandb_logger (WandbLogger): Weights and biases logger.
+            step_period (int): Period of logging in steps. Set to 0 to disable.
+            epoch_period (int): Period of logging in epochs. Set to 0 to disable.
+            validation_image_name (str): Name of validation image to use.
+            batch_size (int): Size of batch to use for validation.
+            num_workers (int): Number of workers to use for validation data loader.
+        """
         super().__init__()
         self.logger = wandb_logger
+        self.batch_period = batch_period
         self.epoch_period = epoch_period
         self.validation_image_name = validation_image_name
         
@@ -27,9 +39,18 @@ class Log2dImageReconstruction(Callback):
         self.num_workers = num_workers
 
 
-    def on_validation_epoch_end(self, trainer: pl.Trainer, model: pl.LightningModule) -> None:
-        # If not at the right epoch, skip
-        if trainer.current_epoch % self.epoch_period != 0:
+    @th.no_grad()
+    def on_train_batch_start(self, trainer: pl.Trainer, model: pl.LightningModule, batch: th.Tensor, batch_idx: int) -> None:
+        # Decide whether to log generated image
+        log_batch = False
+
+        # If at the right batch, log
+        log_batch |= self.batch_period != 0 and batch_idx % self.batch_period == 0
+        # If at the right epoch, log
+        log_batch |= self.epoch_period != 0 and batch_idx == 0 and trainer.current_epoch % self.epoch_period == 0
+
+        # If skipping, return
+        if not log_batch:
             return
 
 
