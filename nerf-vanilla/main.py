@@ -18,7 +18,8 @@ if __name__ == "__main__":
     # Set up weights and biases logger
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
-        entity="metrics_logger"
+        entity="metrics_logger",
+        name="og-vanilla"
     )
 
 
@@ -67,8 +68,8 @@ if __name__ == "__main__":
 
     # Set up model
     model = NerfOriginal(
-        near_sphere_normalized=0.01,
-        far_sphere_normalized=1/3,
+        near_sphere_normalized=2,
+        far_sphere_normalized=7,
         samples_per_ray_coarse=64,
         samples_per_ray_fine=192,
         fourier_levels_pos=10,

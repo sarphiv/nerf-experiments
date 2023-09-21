@@ -22,7 +22,8 @@ class FourierFeatures(nn.Module):
         Gets the positional encoding of x for each channel.
         x_i in [-0.5, 0.5] -> function(x_i * pi * 2^j) for function in (cos, sin) for j in [0, levels-1]
         """
-        scale = self.scale*(2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
+        # scale = self.scale*(2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
+        scale = (2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
         args = x.repeat_interleave(self.levels, dim=1) * scale
 
         return th.hstack((th.cos(args), th.sin(args)))
@@ -314,8 +315,8 @@ class NerfOriginal(pl.LightningModule):
         """
 
         # Get the negative Optical Density 
-        blocking_neg = 3*(-densities * distances)/(th.sum(densities * distances, dim=1).unsqueeze(-1) + 1e-10)
-        # blocking_neg = (-densities * distances)
+        # blocking_neg = 3*(-densities * distances)/(th.sum(densities * distances, dim=1).unsqueeze(-1) + 1e-10)
+        blocking_neg = (-densities * distances)
         # Get the absorped light over each ray segment 
         alpha = 1 - th.exp(blocking_neg)
         # Get the light that has made it through previous segments 
