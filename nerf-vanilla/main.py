@@ -18,7 +18,8 @@ if __name__ == "__main__":
     # Set up weights and biases logger
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
-        entity="metrics_logger"
+        entity="metrics_logger",
+        name="constant-transmittance-0.02"
     )
 
 
@@ -47,7 +48,7 @@ if __name__ == "__main__":
         callbacks=[
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
-                batch_period=100,
+                batch_period=50,
                 epoch_period=1,
                 validation_image_name="r_2",
                 batch_size=BATCH_SIZE,
