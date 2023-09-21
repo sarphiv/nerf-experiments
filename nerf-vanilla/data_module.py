@@ -96,11 +96,6 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         self.camera_to_world = { image_name: (camera_to_world - camera_average_position)/camera_max_distance_matrix
                                  for image_name, camera_to_world 
                                  in self.camera_to_world.items() }
-        
-        # self.camera_to_world = { image_name: (camera_to_world)/camera_max_distance_matrix
-        #                          for image_name, camera_to_world 
-        #                          in self.camera_to_world.items() }
-
 
         # Create unit directions (H, W, 3) in camera space
         # NOTE: Initially normalized such that z=-1 via the focal length.
