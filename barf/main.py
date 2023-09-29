@@ -78,7 +78,8 @@ if __name__ == "__main__":
         learning_rate=5e-4,
         learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
         weight_decay=0,
-        size_camera=300
+        size_camera=300,
+        active_fourier_features=1
     )
 
 

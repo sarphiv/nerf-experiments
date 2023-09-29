@@ -147,7 +147,7 @@ class CameraExtrinsics(nn.Module):
         self.register_buffer("c_help_mat", th.tensor([[0, 0, 0], [0, 0, 1], [0, -1, 0]], requires_grad=False))
 
 
-    def forward(self, i: th.Tensor, o: th.Tensor, d: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+    def forward(self, i: th.Tensor, o: th.Tensor, d: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]:
         # Find the appropriate parameters for the index
         # Rotation
         a = self.params[i, 0].view(-1, 1, 1)*self.a_help_mat
@@ -164,7 +164,7 @@ class CameraExtrinsics(nn.Module):
         new_o = th.matmul(R, o.unsqueeze(-1)).squeeze(-1) + trans
         new_d = th.matmul(R, d.unsqueeze(-1)).squeeze(-1)
 
-        return new_o, new_d
+        return new_o, new_d, trans, R
     
 
 
@@ -490,7 +490,9 @@ class NerfOriginal(pl.LightningModule):
         """
         ray_origs, ray_dirs, ray_colors, idx = batch
         if stage == "train":
-            ray_origs, ray_dirs = self.camera_extrinsics(idx, ray_origs, ray_dirs)
+            ray_origs, ray_dirs, trans, R = self.camera_extrinsics(idx, ray_origs, ray_dirs)
+            self.log("trans", nn.functional.mse_loss(trans, th.zeros_like(trans)))
+            self.log("R", nn.functional.mse_loss(R, th.eye(3, device=self.device).expand(len(R), 3, 3)))
         
         ray_colors_pred_coarse, ray_colors_pred_fine = self(ray_origs, ray_dirs)
 
@@ -499,6 +501,8 @@ class NerfOriginal(pl.LightningModule):
         loss = loss_coarse + loss_fine
         
         self.log(f"{stage}_loss", loss)
+
+
 
         return loss
 
