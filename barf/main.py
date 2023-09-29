@@ -19,7 +19,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="og-vanilla"
+        name="barf_noise"
     )
 
 
@@ -79,7 +79,8 @@ if __name__ == "__main__":
         learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
         weight_decay=0,
         size_camera=300,
-        active_fourier_features=1
+        noise_camera=0.1,
+        active_fourier_features=None
     )
 
 

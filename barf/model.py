@@ -92,13 +92,18 @@ class NerfModel(nn.Module):
         dir = self.direction_encoder(dir)
         
         # Zero out high frequencies in fourier transform
-        if self.active_fourier_features*6 < len(pos):
-            mask = th.cat((th.ones(self.active_fourier_features), th.zeros(self.fourier_levels_pos - self.active_fourier_features))).repeat(6)
-            pos = pos*mask.unsqueeze(0)
-        
-        if self.active_fourier_features*6 < len(dir):
-            mask = th.cat((th.ones(self.active_fourier_features), th.zeros(self.fourier_levels_dir - self.active_fourier_features))).repeat(6)
-            dir = dir*mask.unsqueeze(0)
+        if self.active_fourier_features is not None:
+            if self.active_fourier_features*6 < len(pos)-6:
+                mask = th.cat((th.ones(self.active_fourier_features), th.zeros(self.fourier_levels_pos - self.active_fourier_features))).repeat(6)
+                mask = mask.to(pos.device)
+
+                pos = pos*mask.unsqueeze(0)
+            
+            if self.active_fourier_features*6 < len(dir)-6:
+                mask = th.cat((th.ones(self.active_fourier_features), th.zeros(self.fourier_levels_dir - self.active_fourier_features))).repeat(6)
+                mask = mask.to(pos.device)
+                
+                dir = dir*mask.unsqueeze(0)
 
         # Hn(Hn(Ep(x)), Ep(x))
         z = self.model_density_1(pos)
