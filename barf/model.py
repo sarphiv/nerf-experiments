@@ -26,14 +26,14 @@ class FourierFeatures(nn.Module):
         scale = (2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
         args = x.repeat_interleave(self.levels, dim=1) * scale
 
-        # return th.hstack((th.cos(args), th.sin(args)))
+        return th.hstack((th.cos(args), th.sin(args)))
         # return th.cat((th.cos(args), th.sin(args)), dim=0)
-        tensor1 = th.cos(args)
-        tensor2= th.sin(args)
+        # tensor1 = th.cos(args)
+        # tensor2= th.sin(args)
         
-        stacked = th.stack((tensor1, tensor2), dim=1)
+        # stacked = th.stack((tensor1, tensor2), dim=1)
 
-        return stacked.transpose(1, 2).reshape(-1, 2*3*self.levels)
+        # return stacked.transpose(1, 2).reshape(-1, 2*3*self.levels)
 
 
 class NerfModel(nn.Module):
@@ -60,6 +60,8 @@ class NerfModel(nn.Module):
         super().__init__()
         self.n_hidden = n_hidden
         self.hidden_dim = hidden_dim
+        self.fourier_levels_pos = fourier_levels_pos
+        self.fourier_levels_dir = fourier_levels_dir
         self.position_encoder = FourierFeatures(fourier_levels_pos, th.pi*2)
         self.direction_encoder = FourierFeatures(fourier_levels_dir, 1.0)
         self.active_fourier_features = active_fourier_features
@@ -89,9 +91,14 @@ class NerfModel(nn.Module):
         pos = self.position_encoder(pos)
         dir = self.direction_encoder(dir)
         
-        if self.active_fourier_features is not None and self.active_fourier_features*6 < len(pos):
-            pos[self.active_fourier_features*6:] = 0
-            dir[self.active_fourier_features*6:] = 0
+        # Zero out high frequencies in fourier transform
+        if self.active_fourier_features*6 < len(pos):
+            mask = th.cat((th.ones(self.active_fourier_features), th.zeros(self.fourier_levels_pos - self.active_fourier_features))).repeat(6)
+            pos = pos*mask.unsqueeze(0)
+        
+        if self.active_fourier_features*6 < len(dir):
+            mask = th.cat((th.ones(self.active_fourier_features), th.zeros(self.fourier_levels_dir - self.active_fourier_features))).repeat(6)
+            dir = dir*mask.unsqueeze(0)
 
         # Hn(Hn(Ep(x)), Ep(x))
         z = self.model_density_1(pos)
