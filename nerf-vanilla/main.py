@@ -27,8 +27,8 @@ if __name__ == "__main__":
     BATCH_SIZE = 1024*2
     
     dm = ImagePoseDataModule(
-        image_width=800,
-        image_height=800,
+        image_width=50,
+        image_height=50,
         scene_path="../data/lego",
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
