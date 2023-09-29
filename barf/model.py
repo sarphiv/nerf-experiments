@@ -140,8 +140,8 @@ class CameraExtrinsics(nn.Module):
         self.device = device
         self.noise = noise  # A noise parameter for initialization
         self.size = size    # The amount of images
-        # self.params = nn.Parameter(th.randn((size, 6))*noise)   # a, b, c, tx, ty, tz
-        self.register_buffer("params", th.zeros((size, 6), requires_grad=False))   # a, b, c, tx, ty, tz
+        self.params = nn.Parameter(th.randn((size, 6))*noise)   # a, b, c, tx, ty, tz
+        # self.register_buffer("params", th.zeros((size, 6), requires_grad=False))   # a, b, c, tx, ty, tz
         self.register_buffer("a_help_mat", th.tensor([[0, 1, 0], [-1, 0, 0], [0, 0, 0]], requires_grad=False))
         self.register_buffer("b_help_mat", th.tensor([[0, 0, 1], [0, 0, 0], [-1, 0, 0]], requires_grad=False))
         self.register_buffer("c_help_mat", th.tensor([[0, 0, 0], [0, 0, 1], [0, -1, 0]], requires_grad=False))
@@ -489,8 +489,8 @@ class NerfOriginal(pl.LightningModule):
         general function for training and validation step
         """
         ray_origs, ray_dirs, ray_colors, idx = batch
-
-        ray_origs, ray_dirs = self.camera_extrinsics(idx, ray_origs, ray_dirs)
+        if stage == "train":
+            ray_origs, ray_dirs = self.camera_extrinsics(idx, ray_origs, ray_dirs)
         
         ray_colors_pred_coarse, ray_colors_pred_fine = self(ray_origs, ray_dirs)
 
@@ -528,7 +528,10 @@ class NerfOriginal(pl.LightningModule):
 
 class FourierScheduler(pl.Callback):
     def on_validation_epoch_start(self, trainer: pl.Trainer, pl_module: NerfOriginal):
-        pl_module.model_coarse.active_fourier_features = 1 + pl_module.model_coarse.active_fourier_features
-        pl_module.model_fine.active_fourier_features = 1 + pl_module.model_fine.active_fourier_features
-        pl_module.log("fourier_features", pl_module.model_coarse.active_fourier_features)
+
+        if pl_module.model_coarse.active_fourier_features is not None:
+            pl_module.model_coarse.active_fourier_features = 1 + pl_module.model_coarse.active_fourier_features
+            pl_module.model_fine.active_fourier_features = 1 + pl_module.model_fine.active_fourier_features
+
+            pl_module.log("fourier_features", pl_module.model_coarse.active_fourier_features)
 
