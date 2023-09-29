@@ -93,13 +93,13 @@ class NerfModel(nn.Module):
         
         # Zero out high frequencies in fourier transform
         if self.active_fourier_features is not None:
-            if self.active_fourier_features*6 < len(pos)-6:
+            if self.active_fourier_features < self.fourier_levels_pos:
                 mask = th.cat((th.ones(self.active_fourier_features), th.zeros(self.fourier_levels_pos - self.active_fourier_features))).repeat(6)
                 mask = mask.to(pos.device)
 
                 pos = pos*mask.unsqueeze(0)
             
-            if self.active_fourier_features*6 < len(dir)-6:
+            if self.active_fourier_features < self.fourier_levels_dir:
                 mask = th.cat((th.ones(self.active_fourier_features), th.zeros(self.fourier_levels_dir - self.active_fourier_features))).repeat(6)
                 mask = mask.to(pos.device)
                 
