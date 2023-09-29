@@ -80,7 +80,7 @@ if __name__ == "__main__":
         weight_decay=0,
         size_camera=300,
         noise_camera=0.1,
-        active_fourier_features=None # type: ignore
+        active_fourier_features=1 # type: ignore
     )
 
 
