@@ -41,7 +41,8 @@ class NerfModel(nn.Module):
         n_hidden: int,
         hidden_dim: int,
         fourier_levels_pos: int,
-        fourier_levels_dir: int
+        fourier_levels_dir: int,
+        active_fourier_features: int = None # type: ignore
     ):
         """
         An instance of a NeRF model the architecture; 
@@ -61,7 +62,7 @@ class NerfModel(nn.Module):
         self.hidden_dim = hidden_dim
         self.position_encoder = FourierFeatures(fourier_levels_pos, th.pi*2)
         self.direction_encoder = FourierFeatures(fourier_levels_dir, 1.0)
-        self.active_fourier_features = 1
+        self.active_fourier_features = active_fourier_features
 
         # Creates the first module of the network 
         self.model_density_1 = self.contruct_model_density(fourier_levels_pos*2*3,
@@ -88,7 +89,7 @@ class NerfModel(nn.Module):
         pos = self.position_encoder(pos)
         dir = self.direction_encoder(dir)
         
-        if self.active_fourier_features*6 < len(pos):
+        if self.active_fourier_features is not None and self.active_fourier_features*6 < len(pos):
             pos[self.active_fourier_features*6:] = 0
             dir[self.active_fourier_features*6:] = 0
 
@@ -139,22 +140,25 @@ class CameraExtrinsics(nn.Module):
         self.device = device
         self.noise = noise  # A noise parameter for initialization
         self.size = size    # The amount of images
-        self.params = th.randn((size, 6), requires_grad=True, device="cuda")*noise    # a, b, c, tx, ty, tz
-        self.params.retain_grad()
+        # self.params = nn.Parameter(th.randn((size, 6))*noise)   # a, b, c, tx, ty, tz
+        self.register_buffer("params", th.zeros((size, 6), requires_grad=False))   # a, b, c, tx, ty, tz
+        self.register_buffer("a_help_mat", th.tensor([[0, 1, 0], [-1, 0, 0], [0, 0, 0]], requires_grad=False))
+        self.register_buffer("b_help_mat", th.tensor([[0, 0, 1], [0, 0, 0], [-1, 0, 0]], requires_grad=False))
+        self.register_buffer("c_help_mat", th.tensor([[0, 0, 0], [0, 0, 1], [0, -1, 0]], requires_grad=False))
 
 
     def forward(self, i: th.Tensor, o: th.Tensor, d: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         # Find the appropriate parameters for the index
         # Rotation
-        a = self.params[i, 0]
-        b = self.params[i, 1]
-        c = self.params[i, 2]
+        a = self.params[i, 0].view(-1, 1, 1)*self.a_help_mat
+        b = self.params[i, 1].view(-1, 1, 1)*self.b_help_mat
+        c = self.params[i, 2].view(-1, 1, 1)*self.c_help_mat
 
         # Translation
         trans = self.params[i, 3:] 
          
         # Create the rotation matrix
-        R = th.matrix_exp(th.tensor([[0, 1., 0], [-1, 0., 0], [0., 0, 0]], device="cuda", requires_grad=True)*a.view(-1, 1, 1) + th.tensor([[0, 0, 1.], [0, 0, 0.], [-1., 0, 0]], device="cuda", requires_grad=True)*b.view(-1, 1, 1) + th.tensor([[0, 0, 0.], [0, 0, 1.], [0, -1., 0]], device="cuda", requires_grad=True)*c.view(-1, 1, 1))
+        R = th.matrix_exp(a+b+c)
 
         # Get the new rotation and translation
         new_o = th.matmul(R, o.unsqueeze(-1)).squeeze(-1) + trans
@@ -177,7 +181,8 @@ class NerfOriginal(pl.LightningModule):
         learning_rate: float = 1e-4,
         learning_rate_decay: float = 0.5,
         weight_decay: float = 0.0,
-        noise_camera: float = 0.01
+        noise_camera: float = 0.01,
+        active_fourier_features: int = None # type: ignore
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -203,7 +208,8 @@ class NerfOriginal(pl.LightningModule):
             n_hidden=4,
             hidden_dim=256,
             fourier_levels_pos=fourier_levels_pos,
-            fourier_levels_dir=fourier_levels_dir
+            fourier_levels_dir=fourier_levels_dir,
+            active_fourier_features=active_fourier_features
         )
 
         # Fine model -> actual prediction, samples more densely
@@ -211,7 +217,8 @@ class NerfOriginal(pl.LightningModule):
             n_hidden=4,
             hidden_dim=256,
             fourier_levels_pos=fourier_levels_pos,
-            fourier_levels_dir=fourier_levels_dir
+            fourier_levels_dir=fourier_levels_dir,
+            active_fourier_features=active_fourier_features
         )
 
 
@@ -519,9 +526,9 @@ class NerfOriginal(pl.LightningModule):
         }
 
 
-
 class FourierScheduler(pl.Callback):
-    def on_validation_epoch_start(self, trainer, pl_module: NerfOriginal):
+    def on_validation_epoch_start(self, trainer: pl.Trainer, pl_module: NerfOriginal):
         pl_module.model_coarse.active_fourier_features = 1 + pl_module.model_coarse.active_fourier_features
         pl_module.model_fine.active_fourier_features = 1 + pl_module.model_fine.active_fourier_features
+        pl_module.log("fourier_features", pl_module.model_coarse.active_fourier_features)
 
