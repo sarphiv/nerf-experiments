@@ -173,6 +173,12 @@ class CameraExtrinsics(nn.Module):
         R = th.matrix_exp(a+b+c)
 
         # Get the new rotation and translation
+        # new_o = th.matmul(R, o.unsqueeze(-1)).squeeze(-1) + trans
+        # new_d = th.matmul(R, d.unsqueeze(-1)).squeeze(-1)
+        
+        # Testing barf 
+        o = th.ones_like(o)
+        d = th.ones_like(d)
         new_o = th.matmul(R, o.unsqueeze(-1)).squeeze(-1) + trans
         new_d = th.matmul(R, d.unsqueeze(-1)).squeeze(-1)
 
