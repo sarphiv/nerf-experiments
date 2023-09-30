@@ -96,6 +96,14 @@ body {
             </table>
         </div>
         <div>    
+            <h3>SO(3)</h3>
+            <table id="special-orthogonal">
+                <tr><td><i>u<sub>x</sub></i></td> <td><input type="range" min="-6.28" max="6.28" value="0" step="0.001" class="slider"></td> <td>value</td></tr>
+                <tr><td><i>u<sub>y</sub></i></td> <td><input type="range" min="-6.28" max="6.28" value="0" step="0.001" class="slider"></td> <td>value</td></tr>
+                <tr><td><i>u<sub>z</sub></i></td> <td><input type="range" min="-6.28" max="6.28" value="0" step="0.001" class="slider"></td> <td>value</td></tr>
+            </table>
+        </div>
+        <div>    
             <h3>Quaternion</h3>
                 <table id="quaternion">
                     <tr><td><i>q<sub>x</sub></i></td> <td><input type="range" min="-1" max="1" value="0" step="0.001" class="slider"></td> <td>value</td></tr>
@@ -142,6 +150,7 @@ body {
         var Q = new THREE.Quaternion().fromArray(quaternion).normalize();
         set_euler_angles(Q);
         set_axis_angle(Q);
+        set_special_orthogonal_angle(Q);
         while (num_nonzero==1 & this.value != 1) {//fix when a slider goes all the way to 1
             num_nonzero = 0;
             for (var i = 0; i < 4; i++) {
@@ -179,6 +188,7 @@ body {
         var Q = new THREE.Quaternion().setFromEuler(new THREE.Euler().fromArray(E));
         set_quaternion(Q);
         set_axis_angle(Q);
+        set_special_orthogonal_angle(Q);
         
     }
     var axisanglehtml = document.getElementById("axis-angle");
@@ -210,6 +220,50 @@ body {
         var Q = new THREE.Quaternion().setFromAxisAngle(axis, angle);
         set_quaternion(Q);
         set_euler_angles(Q);
+        set_special_orthogonal_angle(Q);
+    }
+    var specialorthogonalhtml = document.getElementById("special-orthogonal");
+    var set_special_orthogonal_angle = function(Q) {
+        // Set special orthogonal params from three.js quaternion
+        //  Based on: https://en.wikipedia.org/wiki/3D_rotation_group#Exponential_map
+        
+        R = new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(Q)).multiplyScalar(1/2);
+        A = subtract(mat3(R.toArray()), mat3(R.transpose().toArray()));
+        ANorm = mult(A, A);
+        ANorm = Math.sqrt(-1/2 * (ANorm[0][0]+ANorm[1][1]+ANorm[2][2]));
+        ANorm = Math.asin(ANorm) / ANorm;
+        logR = flatten(A).map(x => x*ANorm);
+
+        params = [logR[7], logR[2], logR[3]];
+
+        for (var i = 0; i < 3; i++) {
+            var slider = specialorthogonalhtml.rows[i].cells[1].firstChild;
+            var output = specialorthogonalhtml.rows[i].cells[2];
+            slider.value = params[i];
+            output.innerHTML = slider.value;
+        }
+    }
+    var special_orthogonal_angle_changed = function() {
+        // NOTE: Same as axis_angle_changed
+        //  Based on: https://en.wikipedia.org/wiki/3D_rotation_group#Exponential_map
+        var A = [];
+        for (var i = 0; i < 3; i++) {
+            var slider = specialorthogonalhtml.rows[i].cells[1].firstChild;
+            var output = specialorthogonalhtml.rows[i].cells[2];
+            A.push(slider.value);
+            output.innerHTML = slider.value;
+        }
+        var angle = Math.sqrt(A[0]*A[0]+A[1]*A[1]+A[2]*A[2]);
+        for (var i = 0; i < 3; i++) {
+            A[i] /= angle;
+        }
+        var axis = new THREE.Vector3().fromArray(A);
+
+
+        var Q = new THREE.Quaternion().setFromAxisAngle(axis, angle);
+        set_quaternion(Q);
+        set_euler_angles(Q);
+        set_axis_angle(Q);
     }
     var set_quaternion = function(Q) {
         var quaternion = Q.toArray();
@@ -232,6 +286,7 @@ body {
     for (var i = 0; i < 3; i++) {
         eulerhtml.rows[i].cells[1].firstChild.oninput = euler_angles_changed;
         axisanglehtml.rows[i].cells[1].firstChild.oninput = axis_angle_changed;
+        specialorthogonalhtml.rows[i].cells[1].firstChild.oninput = special_orthogonal_angle_changed;
     }
     rotationhtml = document.getElementById("rotation");
     //https://stackoverflow.com/a/62460561
