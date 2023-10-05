@@ -27,6 +27,13 @@ class FourierFeatures(nn.Module):
         args = x.repeat_interleave(self.levels, dim=1) * scale
 
         return th.hstack((th.cos(args), th.sin(args)))
+        # return th.cat((th.cos(args), th.sin(args)), dim=0)
+        # tensor1 = th.cos(args)
+        # tensor2= th.sin(args)
+        
+        # stacked = th.stack((tensor1, tensor2), dim=1)
+
+        # return stacked.transpose(1, 2).reshape(-1, 2*3*self.levels)
 
 
 class NerfModel(nn.Module):
@@ -34,7 +41,8 @@ class NerfModel(nn.Module):
         n_hidden: int,
         hidden_dim: int,
         fourier_levels_pos: int,
-        fourier_levels_dir: int
+        fourier_levels_dir: int,
+        active_fourier_features: int = None # type: ignore
     ):
         """
         An instance of a NeRF model the architecture; 
@@ -52,8 +60,11 @@ class NerfModel(nn.Module):
         super().__init__()
         self.n_hidden = n_hidden
         self.hidden_dim = hidden_dim
+        self.fourier_levels_pos = fourier_levels_pos
+        self.fourier_levels_dir = fourier_levels_dir
         self.position_encoder = FourierFeatures(fourier_levels_pos, th.pi*2)
         self.direction_encoder = FourierFeatures(fourier_levels_dir, 1.0)
+        self.active_fourier_features = active_fourier_features
 
         # Creates the first module of the network 
         self.model_density_1 = self.contruct_model_density(fourier_levels_pos*2*3,
@@ -80,6 +91,20 @@ class NerfModel(nn.Module):
         pos = self.position_encoder(pos)
         dir = self.direction_encoder(dir)
         
+        # Zero out high frequencies in fourier transform
+        if self.active_fourier_features is not None:
+            if self.active_fourier_features < self.fourier_levels_pos:
+                mask = th.cat((th.ones(self.active_fourier_features), th.zeros(self.fourier_levels_pos - self.active_fourier_features))).repeat(6)
+                mask = mask.to(pos.device)
+
+                pos = pos*mask.unsqueeze(0)
+            
+            if self.active_fourier_features < self.fourier_levels_dir:
+                mask = th.cat((th.ones(self.active_fourier_features), th.zeros(self.fourier_levels_dir - self.active_fourier_features))).repeat(6)
+                mask = mask.to(pos.device)
+                
+                dir = dir*mask.unsqueeze(0)
+
         # Hn(Hn(Ep(x)), Ep(x))
         z = self.model_density_1(pos)
         z = self.relu(z)
@@ -120,6 +145,47 @@ class NerfModel(nn.Module):
             return nn.Sequential(layer1, *intermediate_layers, nn.ReLU(True), layer2)
 
 
+class CameraExtrinsics(nn.Module):
+    def __init__(self, noise, size, device) -> None:
+        super().__init__()
+        
+        self.device = device
+        self.noise = noise  # A noise parameter for initialization
+        self.size = size    # The amount of images
+        self.params = nn.Parameter(th.randn((size, 6))*noise)   # a, b, c, tx, ty, tz
+        # self.register_buffer("params", th.zeros((size, 6), requires_grad=False))   # a, b, c, tx, ty, tz
+        self.register_buffer("a_help_mat", th.tensor([[0, 1, 0], [-1, 0, 0], [0, 0, 0]], requires_grad=False))
+        self.register_buffer("b_help_mat", th.tensor([[0, 0, 1], [0, 0, 0], [-1, 0, 0]], requires_grad=False))
+        self.register_buffer("c_help_mat", th.tensor([[0, 0, 0], [0, 0, 1], [0, -1, 0]], requires_grad=False))
+
+
+    def forward(self, i: th.Tensor, o: th.Tensor, d: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]:
+        # Find the appropriate parameters for the index
+        # Rotation
+        a = self.params[i, 0].view(-1, 1, 1)*self.a_help_mat
+        b = self.params[i, 1].view(-1, 1, 1)*self.b_help_mat
+        c = self.params[i, 2].view(-1, 1, 1)*self.c_help_mat
+
+        # Translation
+        trans = self.params[i, 3:] 
+         
+        # Create the rotation matrix
+        R = th.matrix_exp(a+b+c)
+
+        # Get the new rotation and translation
+        # new_o = th.matmul(R, o.unsqueeze(-1)).squeeze(-1) + trans
+        # new_d = th.matmul(R, d.unsqueeze(-1)).squeeze(-1)
+        
+        # Testing barf 
+        o = th.ones_like(o)
+        d = th.ones_like(d)
+        new_o = th.matmul(R, o.unsqueeze(-1)).squeeze(-1) + trans
+        new_d = th.matmul(R, d.unsqueeze(-1)).squeeze(-1)
+
+        return new_o, new_d, trans, R
+    
+
+
 class NerfOriginal(pl.LightningModule):
     def __init__(
         self, 
@@ -129,9 +195,12 @@ class NerfOriginal(pl.LightningModule):
         samples_per_ray_coarse: int,
         fourier_levels_pos: int,
         fourier_levels_dir: int,
+        size_camera: int,
         learning_rate: float = 1e-4,
         learning_rate_decay: float = 0.5,
-        weight_decay: float = 0.0
+        weight_decay: float = 0.0,
+        noise_camera: float = 0.01,
+        active_fourier_features: int = None # type: ignore
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -148,13 +217,17 @@ class NerfOriginal(pl.LightningModule):
         self.learning_rate = learning_rate
         self.learning_rate_decay = learning_rate_decay
         self.weight_decay = weight_decay
+
+        # The transformation from the original camera extrinsics to the learned ones 
+        self.camera_extrinsics = CameraExtrinsics(noise_camera, size_camera, self.device)
         
         # Coarse model -> only job is to find out where to sample more by predicting the density
         self.model_coarse = NerfModel(
             n_hidden=4,
             hidden_dim=256,
             fourier_levels_pos=fourier_levels_pos,
-            fourier_levels_dir=fourier_levels_dir
+            fourier_levels_dir=fourier_levels_dir,
+            active_fourier_features=active_fourier_features
         )
 
         # Fine model -> actual prediction, samples more densely
@@ -162,7 +235,8 @@ class NerfOriginal(pl.LightningModule):
             n_hidden=4,
             hidden_dim=256,
             fourier_levels_pos=fourier_levels_pos,
-            fourier_levels_dir=fourier_levels_dir
+            fourier_levels_dir=fourier_levels_dir,
+            active_fourier_features=active_fourier_features
         )
 
 
@@ -290,7 +364,6 @@ class NerfOriginal(pl.LightningModule):
         return positions, directions, distances
 
 
-
     def _render_rays(self, densities: th.Tensor, colors: th.Tensor, distances: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
         Render the rays using the given densities and colors.
@@ -379,7 +452,6 @@ class NerfOriginal(pl.LightningModule):
         return rgb, weights, sample_dist
 
 
-
     def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
         Forward pass of the model.
@@ -434,7 +506,11 @@ class NerfOriginal(pl.LightningModule):
         """
         general function for training and validation step
         """
-        ray_origs, ray_dirs, ray_colors = batch
+        ray_origs, ray_dirs, ray_colors, idx = batch
+        if stage == "train":
+            ray_origs, ray_dirs, trans, R = self.camera_extrinsics(idx, ray_origs, ray_dirs)
+            self.log("trans", nn.functional.mse_loss(trans, th.zeros_like(trans)))
+            self.log("R", nn.functional.mse_loss(R, th.eye(3, device=self.device).expand(len(R), 3, 3)))
         
         ray_colors_pred_coarse, ray_colors_pred_fine = self(ray_origs, ray_dirs)
 
@@ -443,6 +519,8 @@ class NerfOriginal(pl.LightningModule):
         loss = loss_coarse + loss_fine
         
         self.log(f"{stage}_loss", loss)
+
+
 
         return loss
 
@@ -469,4 +547,13 @@ class NerfOriginal(pl.LightningModule):
             "lr_scheduler": scheduler,
         }
 
+
+class FourierScheduler(pl.Callback):
+    def on_validation_epoch_start(self, trainer: pl.Trainer, pl_module: NerfOriginal):
+
+        if pl_module.model_coarse.active_fourier_features is not None:
+            pl_module.model_coarse.active_fourier_features = 1 + pl_module.model_coarse.active_fourier_features
+            pl_module.model_fine.active_fourier_features = 1 + pl_module.model_fine.active_fourier_features
+
+            pl_module.log("fourier_features", pl_module.model_coarse.active_fourier_features)
 

@@ -7,7 +7,7 @@ from pytorch_lightning.loggers import WandbLogger  # type: ignore
 
 from data_module import ImagePoseDataModule
 from image_logger import Log2dImageReconstruction
-from model import NerfOriginal
+from model import NerfOriginal, FourierScheduler
 
 
 if __name__ == "__main__":
@@ -19,7 +19,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="og-vanilla"
+        name="barf_noise"
     )
 
 
@@ -61,7 +61,8 @@ if __name__ == "__main__":
                 filename='ckpt_epoch={epoch:02d}-val_loss={val_loss:.2f}',
                 every_n_epochs=2,
                 save_top_k=-1,
-            )
+            ),
+            FourierScheduler(),
         ]
     )
 
@@ -76,7 +77,10 @@ if __name__ == "__main__":
         fourier_levels_dir=4,
         learning_rate=5e-4,
         learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
-        weight_decay=0
+        weight_decay=0,
+        size_camera=300,
+        noise_camera=1,
+        active_fourier_features=1
     )
 
 

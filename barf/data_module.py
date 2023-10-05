@@ -12,7 +12,7 @@ from PIL import Image
 from torch.utils.data import DataLoader, Dataset, Subset
 
 
-DatasetOutput = tuple[th.Tensor, th.Tensor, th.Tensor]
+DatasetOutput = tuple[th.Tensor, th.Tensor, th.Tensor, int]
 
 
 class ImagePoseDataset(Dataset[DatasetOutput]):
@@ -67,7 +67,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             for path, rotation, camera_to_world in [frame.values()] 
         }
 
-
+ 
         # If space transform is given, initialize transform parameters from data
         if self.space_transform is None:
             # Get average position of all cameras (get last columns and average over each entry)
@@ -135,9 +135,10 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
                 camera_to_world, 
                 self.origins[image_name],
                 self.directions[image_name], 
-                self.images[image_name]
+                self.images[image_name],
+                i
             ) 
-            for image_name, camera_to_world in self.camera_to_world.items()
+            for i, (image_name, camera_to_world) in enumerate(self.camera_to_world.items())
         ]
 
 
@@ -152,11 +153,11 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
 
     def __getitem__(self, index: int) -> DatasetOutput:
         # Get dataset via image index
-        P, o, d, c = self.dataset[index // self.image_batch_size]
+        P, o, d, c, img_idx = self.dataset[index // self.image_batch_size]
         # Get pixel index
         i = index % self.image_batch_size
 
-        return o.view(-1, 3)[i], d.view(-1, 3)[i], c.view(-1, 3)[i]
+        return o.view(-1, 3)[i], d.view(-1, 3)[i], c.view(-1, 3)[i], img_idx
 
     def __len__(self) -> int:
         return len(self.dataset) * self.image_batch_size
