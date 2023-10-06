@@ -10,7 +10,7 @@ class GaussAct(GaussActGarf):
         return self.func(x, self.variance*scale)
 
 class GaussActMLP(nn.Module):
-    def __init__(self, variance_initial: float, n_hidden, input_dim, output_dim, hidden_dim):
+    def __init__(self, n_hidden, input_dim, output_dim, hidden_dim):
         super().__init__()
         self.activations = []
         self.layers = []
@@ -18,14 +18,13 @@ class GaussActMLP(nn.Module):
         self.output_dim = output_dim
         self.hidden_dim = hidden_dim
         self.n_hidden = n_hidden
-        self.variance = nn.Parameter(th.tensor(variance_initial))
 
         for i in range(n_hidden):
             if i == 0:
                 self.layers.append(nn.Linear(input_dim, hidden_dim))
             else:
                 self.layers.append(nn.Linear(hidden_dim, hidden_dim))
-            self.activations.append(GaussAct(variance_initial))
+            self.activations.append(GaussAct(hidden_dim))
         self.layers.append(nn.Linear(hidden_dim, output_dim))
 
         self.layers = nn.ModuleList(self.layers)
@@ -48,7 +47,7 @@ hidden_dim = 100
 n_hidden = 3
 epochs = 1000
 
-model = GaussActMLP(1., n_hidden, input_dim, output_dim, hidden_dim)
+model = GaussActMLP(n_hidden, input_dim, output_dim, hidden_dim)
 
 optimizer = th.optim.Adam(model.parameters(), lr=0.004)
 loss_func = nn.MSELoss()
