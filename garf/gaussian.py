@@ -31,19 +31,23 @@ class GaussActivation(th.autograd.Function):
 class GaussAct(nn.Module):
     def __init__(self, variance_initial: float):
         # Initialize parameters
+        super().__init__()
+        self.act_var = nn.Sigmoid()
+
+
         if isinstance(variance_initial, int):
             variance_initial = float(variance_initial)
 
         if not isinstance(variance_initial, float):
             raise TypeError("Variance must be either a float or a tensor.")
         
-        if variance_initial <= 0:
+        if self.act_var(th.tensor(variance_initial)) <= 0:
             raise ValueError("Variance must be positive.")
 
-        super().__init__()
         self.variance = nn.Parameter(th.tensor(variance_initial))
         # NOTE: Need the softplus to ensure variance is positive
-        self.act_var = lambda x: x
+        # self.act_var = lambda x: th.exp(x)
+        # self.act_var = lambda x: x
         self.func = GaussActivation.apply
         
 
