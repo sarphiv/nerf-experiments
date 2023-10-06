@@ -43,9 +43,9 @@ class GaussAct(nn.Module):
         super().__init__()
         self.variance = nn.Parameter(th.tensor(variance_initial))
         # NOTE: Need the softplus to ensure variance is positive
-        self.softplus = nn.Softplus(10)
+        self.act_var = lambda x: x
         self.func = GaussActivation.apply
         
 
     def forward(self, x: th.Tensor):
-        return self.func(x, self.softplus(self.variance))
+        return self.func(x, self.act_var(self.variance))
