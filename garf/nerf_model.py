@@ -8,7 +8,8 @@ class NerfModel(nn.Module):
     def __init__(self, 
         n_hidden: int,
         hidden_dim: int,
-        gaussian_variance: float
+        gauss_mean: float,
+        gauss_std: float,
     ):
         """
         An instance of a NeRF model the architecture; 
@@ -24,7 +25,8 @@ class NerfModel(nn.Module):
         super().__init__()
         self.n_hidden = n_hidden
         self.hidden_dim = hidden_dim
-        self.gaussian_variance = gaussian_variance
+        self.gauss_mean = gauss_mean
+        self.gauss_std = gauss_std
 
         # Creates the first module of the network 
         self.model_density_1 = self.contruct_model_density(
@@ -32,7 +34,9 @@ class NerfModel(nn.Module):
             self.hidden_dim,
             self.hidden_dim
         )
-        self.gauss_act = GaussAct(self.gaussian_variance)
+
+        # Creates the activation function for the first module
+        self.gauss_act = GaussAct(self.hidden_dim, gauss_mean, gauss_std)
 
         # Creates the second module of the network (skip connection of input to the network again)
         self.model_density_2 = self.contruct_model_density(
@@ -45,7 +49,7 @@ class NerfModel(nn.Module):
         # Creates the final layer of the model that outputs the color
         self.model_color = nn.Sequential(
             nn.Linear(self.hidden_dim + 3, self.hidden_dim//2),
-            GaussAct(self.gaussian_variance),
+            GaussAct(self.hidden_dim//2, gauss_mean, gauss_std),
             nn.Linear(self.hidden_dim//2, 3)
         )
         self.sigmoid = nn.Sigmoid()
@@ -85,12 +89,12 @@ class NerfModel(nn.Module):
             
             # Create n_hidden identical layers of gaussian activation and linear mapping
             for _ in range(self.n_hidden-1):
-                intermediate_layers += [GaussAct(self.gaussian_variance), nn.Linear(hidden_dim, hidden_dim)]
+                intermediate_layers += [GaussAct(hidden_dim, self.gauss_mean, self.gauss_std), nn.Linear(hidden_dim, hidden_dim)]
 
             # Concatenate the layers into one sequential
             return nn.Sequential(
                 layer_first, 
                 *intermediate_layers, 
-                GaussAct(self.gaussian_variance), 
+                GaussAct(hidden_dim, self.gauss_mean, self.gauss_std), 
                 layer_last
             )

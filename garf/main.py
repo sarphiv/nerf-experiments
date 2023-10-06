@@ -19,7 +19,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="garf_sigmoid_act_var_200",
+        name="garf_squared_sd_200",
     )
 
 
@@ -42,7 +42,7 @@ if __name__ == "__main__":
 
     trainer = pl.Trainer(
         accelerator="auto",
-        max_epochs=256,
+        max_epochs=100,
         precision="16-mixed",
         logger=wandb_logger,
         callbacks=[
@@ -67,15 +67,18 @@ if __name__ == "__main__":
 
 
     # Set up model
+    LEARNING_RATE_START = 5e-3
+    LEARNING_RATE_STOP = 5e-3
+
     model = Garf(
         near_sphere_normalized=2,
         far_sphere_normalized=7,
         samples_per_ray_coarse=64,
         samples_per_ray_fine=192,
-        gaussian_variance=0.02,
-        # gaussian_variance=-1.,
-        learning_rate=5e-4,
-        learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
+        gaussian_init_mean=0.2,
+        gaussian_init_std=1.,
+        learning_rate=LEARNING_RATE_START,
+        learning_rate_decay=2**(log2(LEARNING_RATE_STOP/LEARNING_RATE_START) / trainer.max_epochs), # type: ignore
         weight_decay=0
     )
 
