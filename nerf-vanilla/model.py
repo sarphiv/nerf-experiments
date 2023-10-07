@@ -22,8 +22,8 @@ class FourierFeatures(nn.Module):
         Gets the positional encoding of x for each channel.
         x_i in [-0.5, 0.5] -> function(x_i * pi * 2^j) for function in (cos, sin) for j in [0, levels-1]
         """
-        # scale = self.scale*(2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
-        scale = (2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
+        scale = self.scale*(2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
+        # scale = (2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
         args = x.repeat_interleave(self.levels, dim=1) * scale
 
         return th.hstack((th.cos(args), th.sin(args)))
@@ -52,7 +52,7 @@ class NerfModel(nn.Module):
         super().__init__()
         self.n_hidden = n_hidden
         self.hidden_dim = hidden_dim
-        self.position_encoder = FourierFeatures(fourier_levels_pos, th.pi*2)
+        self.position_encoder = FourierFeatures(fourier_levels_pos, 1.0)
         self.direction_encoder = FourierFeatures(fourier_levels_dir, 1.0)
 
         # Creates the first module of the network 
