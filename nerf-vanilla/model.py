@@ -4,6 +4,7 @@ import pytorch_lightning as pl
 
 from data_module import DatasetOutput
 
+MAGIC_NUMBER = 7
 
 class FourierFeatures(nn.Module):
     def __init__(self, levels: int, scale: float = 2*th.pi): 
@@ -52,7 +53,7 @@ class NerfModel(nn.Module):
         super().__init__()
         self.n_hidden = n_hidden
         self.hidden_dim = hidden_dim
-        self.position_encoder = FourierFeatures(fourier_levels_pos, 1.0)
+        self.position_encoder = FourierFeatures(fourier_levels_pos, 2*th.pi)
         self.direction_encoder = FourierFeatures(fourier_levels_dir, 1.0)
 
         # Creates the first module of the network 
@@ -196,7 +197,7 @@ class NerfOriginal(pl.LightningModule):
         return t_coarse
     
 
-    def _sample_t_fine(self, t_coarse: th.Tensor, weights: th.Tensor, distances_coarse: th.Tensor, linspace=True) -> th.Tensor:
+    def _sample_t_fine(self, t_coarse: th.Tensor, weights: th.Tensor, distances_coarse: th.Tensor, linspace=False) -> th.Tensor:
         """
         Using the coarsely sampled t values to decide where to sample more densely. 
         The weights express how large a percentage of the light is blocked by that specific segment, hence that percentage of the new samples should be in that segment.
@@ -316,7 +317,7 @@ class NerfOriginal(pl.LightningModule):
 
         # Get the negative Optical Density 
         # blocking_neg = 3*(-densities * distances)/(th.sum(densities * distances, dim=1).unsqueeze(-1) + 1e-10)
-        blocking_neg = (-densities * distances)
+        blocking_neg = (-densities * distances)*3*MAGIC_NUMBER
         # Get the absorped light over each ray segment 
         alpha = 1 - th.exp(blocking_neg)
         # Get the light that has made it through previous segments 

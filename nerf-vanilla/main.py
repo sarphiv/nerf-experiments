@@ -19,7 +19,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="og-vanilla"
+        name="normalized-vanilla-sanity-check"
     )
 
 
@@ -27,8 +27,8 @@ if __name__ == "__main__":
     BATCH_SIZE = 1024*2
     
     dm = ImagePoseDataModule(
-        image_width=50,
-        image_height=50,
+        image_width=800,
+        image_height=800,
         scene_path="../data/lego",
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
@@ -68,8 +68,8 @@ if __name__ == "__main__":
 
     # Set up model
     model = NerfOriginal(
-        near_sphere_normalized=2,
-        far_sphere_normalized=7,
+        near_sphere_normalized=1/10,
+        far_sphere_normalized=1/3,
         samples_per_ray_coarse=64,
         samples_per_ray_fine=192,
         fourier_levels_pos=10,
