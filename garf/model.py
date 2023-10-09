@@ -31,8 +31,8 @@ class Garf(pl.LightningModule):
         self.samples_per_ray_coarse = samples_per_ray_coarse
         
         # Gaussian variance for the activation function
-        self.gaussian_init_mean = gaussian_init_min
-        self.gaussian_init_std = gaussian_init_max
+        self.gaussian_init_min = gaussian_init_min
+        self.gaussian_init_max = gaussian_init_max
 
         # Hyper parameters for the optimizer 
         self.learning_rate = learning_rate
@@ -205,8 +205,7 @@ class Garf(pl.LightningModule):
         """
 
         # Get the negative Optical Density 
-        # blocking_neg = 3*(-densities * distances)/(th.sum(densities * distances, dim=1).unsqueeze(-1) + 1e-10)
-        blocking_neg = (-densities * distances)
+        blocking_neg = -densities * distances
         # Get the absorped light over each ray segment 
         alpha = 1 - th.exp(blocking_neg)
         # Get the light that has made it through previous segments 

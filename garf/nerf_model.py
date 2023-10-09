@@ -25,8 +25,8 @@ class NerfModel(nn.Module):
         super().__init__()
         self.n_hidden = n_hidden
         self.hidden_dim = hidden_dim
-        self.gauss_mean = gaussian_init_min
-        self.gauss_std = gaussian_init_max
+        self.gaussian_init_min = gaussian_init_min
+        self.gaussian_init_max = gaussian_init_max
 
         # Creates the first module of the network 
         self.model_density_1 = self.contruct_model_density(
@@ -89,12 +89,12 @@ class NerfModel(nn.Module):
             
             # Create n_hidden identical layers of gaussian activation and linear mapping
             for _ in range(self.n_hidden-1):
-                intermediate_layers += [GaussAct(hidden_dim, self.gauss_mean, self.gauss_std), nn.Linear(hidden_dim, hidden_dim)]
+                intermediate_layers += [GaussAct(hidden_dim, self.gaussian_init_min, self.gaussian_init_max), nn.Linear(hidden_dim, hidden_dim)]
 
             # Concatenate the layers into one sequential
             return nn.Sequential(
                 layer_first, 
                 *intermediate_layers, 
-                GaussAct(hidden_dim, self.gauss_mean, self.gauss_std), 
+                GaussAct(hidden_dim, self.gaussian_init_min, self.gaussian_init_max), 
                 layer_last
             )

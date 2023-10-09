@@ -76,7 +76,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             camera_average_position[-1] = 0
 
             # Get the maximum distance of any two cameras 
-            camera_max_distance: float = 3*th.cdist(camera_positions, camera_positions, compute_mode="donot_use_mm_for_euclid_dist").max().item()
+            camera_max_distance: float = th.cdist(camera_positions, camera_positions, compute_mode="donot_use_mm_for_euclid_dist").max().item()
             
             # Define space transform 
             self.space_transform = (camera_max_distance, camera_average_position)
@@ -93,9 +93,10 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         camera_max_distance_matrix[:-1, -1] = camera_max_distance
 
         # Move origin to average position of all cameras and scale world coordinates by the 3*the maximum distance of any two cameras
-        self.camera_to_world = { image_name: (camera_to_world - camera_average_position)/camera_max_distance_matrix
-                                 for image_name, camera_to_world 
-                                 in self.camera_to_world.items() }
+        # NOTE: Disabled because the network seems to dislike small numbers
+        # self.camera_to_world = { image_name: (camera_to_world - camera_average_position)/camera_max_distance_matrix
+        #                          for image_name, camera_to_world 
+        #                          in self.camera_to_world.items() }
 
         # Create unit directions (H, W, 3) in camera space
         # NOTE: Initially normalized such that z=-1 via the focal length.

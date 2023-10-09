@@ -79,12 +79,12 @@ if __name__ == "__main__":
     LEARNING_RATE_STOP = 5e-3
 
     model = Garf(
-        near_sphere_normalized=1/10,
-        far_sphere_normalized=1/3,
+        near_sphere_normalized=2,
+        far_sphere_normalized=7,
         samples_per_ray_coarse=64,
         samples_per_ray_fine=192,
         gaussian_init_min=0.,
-        gaussian_init_max=1.,
+        gaussian_init_max=3.,
         learning_rate=LEARNING_RATE_START,
         learning_rate_decay=2**(log2(LEARNING_RATE_STOP/LEARNING_RATE_START) / trainer.max_epochs), # type: ignore
         weight_decay=0
