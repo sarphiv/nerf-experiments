@@ -13,8 +13,8 @@ class Garf(pl.LightningModule):
         far_sphere_normalized: float,
         samples_per_ray_fine: int,
         samples_per_ray_coarse: int,
-        gaussian_init_mean: float = 0.0,
-        gaussian_init_std: float = 1.0,
+        gaussian_init_min: float = 0.0,
+        gaussian_init_max: float = 1.0,
         learning_rate: float = 1e-4,
         learning_rate_decay: float = 0.5,
         weight_decay: float = 0.0
@@ -31,8 +31,8 @@ class Garf(pl.LightningModule):
         self.samples_per_ray_coarse = samples_per_ray_coarse
         
         # Gaussian variance for the activation function
-        self.gaussian_init_mean = gaussian_init_mean
-        self.gaussian_init_std = gaussian_init_std
+        self.gaussian_init_mean = gaussian_init_min
+        self.gaussian_init_std = gaussian_init_max
 
         # Hyper parameters for the optimizer 
         self.learning_rate = learning_rate
@@ -43,16 +43,16 @@ class Garf(pl.LightningModule):
         self.model_coarse = NerfModel(
             n_hidden=4,
             hidden_dim=256,
-            gauss_mean=gaussian_init_mean,
-            gauss_std=gaussian_init_std,
+            gaussian_init_min=gaussian_init_min,
+            gaussian_init_max=gaussian_init_max,
         )
 
         # Fine model -> actual prediction, samples more densely
         self.model_fine = NerfModel(
             n_hidden=4,
             hidden_dim=256,
-            gauss_mean=gaussian_init_mean,
-            gauss_std=gaussian_init_std,
+            gaussian_init_min=gaussian_init_min,
+            gaussian_init_max=gaussian_init_max,
         )
 
 

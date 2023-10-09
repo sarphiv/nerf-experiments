@@ -8,8 +8,8 @@ class NerfModel(nn.Module):
     def __init__(self, 
         n_hidden: int,
         hidden_dim: int,
-        gauss_mean: float,
-        gauss_std: float,
+        gaussian_init_min: float,
+        gaussian_init_max: float,
     ):
         """
         An instance of a NeRF model the architecture; 
@@ -25,8 +25,8 @@ class NerfModel(nn.Module):
         super().__init__()
         self.n_hidden = n_hidden
         self.hidden_dim = hidden_dim
-        self.gauss_mean = gauss_mean
-        self.gauss_std = gauss_std
+        self.gauss_mean = gaussian_init_min
+        self.gauss_std = gaussian_init_max
 
         # Creates the first module of the network 
         self.model_density_1 = self.contruct_model_density(
@@ -36,7 +36,7 @@ class NerfModel(nn.Module):
         )
 
         # Creates the activation function for the first module
-        self.gauss_act = GaussAct(self.hidden_dim, gauss_mean, gauss_std)
+        self.gauss_act = GaussAct(self.hidden_dim, gaussian_init_min, gaussian_init_max)
 
         # Creates the second module of the network (skip connection of input to the network again)
         self.model_density_2 = self.contruct_model_density(
@@ -49,7 +49,7 @@ class NerfModel(nn.Module):
         # Creates the final layer of the model that outputs the color
         self.model_color = nn.Sequential(
             nn.Linear(self.hidden_dim + 3, self.hidden_dim//2),
-            GaussAct(self.hidden_dim//2, gauss_mean, gauss_std),
+            GaussAct(self.hidden_dim//2, gaussian_init_min, gaussian_init_max),
             nn.Linear(self.hidden_dim//2, 3)
         )
         self.sigmoid = nn.Sigmoid()
