@@ -79,8 +79,8 @@ if __name__ == "__main__":
     LEARNING_RATE_STOP = 5e-3
 
     model = Garf(
-        near_sphere_normalized=2,
-        far_sphere_normalized=7,
+        near_sphere_normalized=1/10,
+        far_sphere_normalized=1/3,
         samples_per_ray_coarse=64,
         samples_per_ray_fine=192,
         gaussian_init_min=0.,
