@@ -30,6 +30,7 @@ class LogEpochFraction(Callback):
     @th.no_grad()
     def on_train_batch_start(self, trainer: pl.Trainer, model: pl.LightningModule, batch: th.Tensor, batch_idx: int) -> None:
         # Log epoch fraction
-        self.logger.log_metrics({
-            self.metric_name: trainer.current_epoch + batch_idx/trainer.num_training_batches
-        })
+        model.log(
+            self.metric_name,
+            trainer.current_epoch + batch_idx/trainer.num_training_batches
+        )
