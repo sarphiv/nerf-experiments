@@ -123,6 +123,9 @@ class Log2dImageReconstruction(Callback):
 
         # Retrieve validation dataset from trainer
         dataset = cast(ImagePoseDataset, trainer.datamodule.dataset_val) # type: ignore
+        
+        # Store reconstructed images on CPU
+        images = []
 
 
         # Reconstruct each image
@@ -157,11 +160,13 @@ class Log2dImageReconstruction(Callback):
                 i += batch_size
 
 
-            # Log image
+            # Store image on CPU
             # NOTE: Cannot pass tensor as channel dimension is in numpy format
-            image = rgb.view(dataset.image_height, dataset.image_width, 3).numpy()
+            images.append(rgb.view(dataset.image_height, dataset.image_width, 3).numpy())
 
-            self.logger.log_image(
-                key=f"val_img[{name}]", 
-                images=[image]
-            )
+
+        # Log images
+        self.logger.log_image(
+            key=self.metric_name, 
+            images=images
+        )
