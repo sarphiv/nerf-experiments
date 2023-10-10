@@ -9,17 +9,6 @@ class RadianceNetwork(nn.Module):
         gaussian_init_min: float,
         gaussian_init_max: float,
     ):
-        """
-        An instance of a NeRF model the architecture; 
-        
-           Hn( Hn(x), x )       -> density 
-        H( Hn( Hn(x), x ), d )  -> color 
-
-        H: a hidden fully connected layer with hidden_dim neurons,
-        Hn: H applied n_hidden times, 
-        x: is the position
-        d: is the direction of the camera ray
-        """
         super().__init__()
         self.gaussian_init_min = gaussian_init_min
         self.gaussian_init_max = gaussian_init_max
