@@ -227,7 +227,7 @@ class Garf(pl.LightningModule):
             far_plane=self.far_sphere_normalized,
             sampling_type="lindisp",
             stratified=self.training,
-            requires_grad=self.training
+            requires_grad=th.is_grad_enabled()
         )
 
         # Sample colors and densities

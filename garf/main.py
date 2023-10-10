@@ -28,8 +28,8 @@ if __name__ == "__main__":
     BATCH_SIZE = 1024*2
     
     dm = ImagePoseDataModule(
-        image_width=50,
-        image_height=50,
+        image_width=800,
+        image_height=800,
         scene_path="../data/lego",
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
@@ -51,14 +51,6 @@ if __name__ == "__main__":
                 wandb_logger=wandb_logger,
                 metric_name="epoch_fraction",
             ),
-            
-            
-            
-            
-            # TODO: Fix memory leak on GPU
-            
-            
-            
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
                 logging_start=0.002,
