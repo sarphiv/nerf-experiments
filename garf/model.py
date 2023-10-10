@@ -1,367 +1,333 @@
+from typing import Callable, Optional, Dict
+
 import torch as th
 import torch.nn as nn
 import pytorch_lightning as pl
+import nerfacc
 
 from data_module import DatasetOutput
-from nerf_model import NerfModel
+from model_radiance import RadianceNetwork
+from model_proposal import ProposalNetwork
 
 
 class Garf(pl.LightningModule):
     def __init__(
         self, 
-        near_sphere_normalized: float,
-        far_sphere_normalized: float,
-        samples_per_ray_fine: int,
-        samples_per_ray_coarse: int,
+        near_plane: float,
+        far_plane: float,
+        proposal_samples_per_ray: int,
+        radiance_samples_per_ray: int,
         gaussian_init_min: float = 0.0,
         gaussian_init_max: float = 1.0,
-        learning_rate: float = 1e-4,
-        learning_rate_decay: float = 0.5,
-        weight_decay: float = 0.0
+        proposal_learning_rate: float = 1e-4,
+        proposal_learning_rate_decay: float = 0.5,
+        proposal_weight_decay: float = 0.0,
+        radiance_learning_rate: float = 1e-4,
+        radiance_learning_rate_decay: float = 0.5,
+        radiance_weight_decay: float = 0.0
     ):
         super().__init__()
         self.save_hyperparameters()
 
         # The near and far sphere distances 
-        self.near_sphere_normalized = near_sphere_normalized
-        self.far_sphere_normalized = far_sphere_normalized
+        self.near_sphere_normalized = near_plane
+        self.far_sphere_normalized = far_plane
 
-        # Samples per ray for coarse and fine sampling
-        self.samples_per_ray_fine = samples_per_ray_fine
-        self.samples_per_ray_coarse = samples_per_ray_coarse
+        # Samples per ray for proposal network for the density estimation
+        self.proposal_samples_per_ray = proposal_samples_per_ray
+        # Samples per ray for radiance network for the volumetric rendering
+        self.radiance_samples_per_ray = radiance_samples_per_ray
         
         # Gaussian variance for the activation function
         self.gaussian_init_min = gaussian_init_min
         self.gaussian_init_max = gaussian_init_max
 
-        # Hyper parameters for the optimizer 
-        self.learning_rate = learning_rate
-        self.learning_rate_decay = learning_rate_decay
-        self.weight_decay = weight_decay
-        
-        # Coarse model -> only job is to find out where to sample more by predicting the density
-        self.model_coarse = NerfModel(
-            n_hidden=4,
-            hidden_dim=256,
+        # Hyper parameters for the network training
+        self.proposal_learning_rate = proposal_learning_rate
+        self.proposal_learning_rate_decay = proposal_learning_rate_decay
+        self.proposal_weight_decay = proposal_weight_decay
+        self.radiance_learning_rate = radiance_learning_rate
+        self.radiance_learning_rate_decay = radiance_learning_rate_decay
+        self.radiance_weight_decay = radiance_weight_decay
+
+        # Proposal network estimates sampling density
+        self.proposal_network = ProposalNetwork(
             gaussian_init_min=gaussian_init_min,
             gaussian_init_max=gaussian_init_max,
         )
 
-        # Fine model -> actual prediction, samples more densely
-        self.model_fine = NerfModel(
-            n_hidden=4,
-            hidden_dim=256,
+        # Nerf network estimates colors and densities for volume rendering
+        self.radiance_network = RadianceNetwork(
             gaussian_init_min=gaussian_init_min,
             gaussian_init_max=gaussian_init_max,
         )
-
-
-    def _sample_t_coarse(self, batch_size: int) -> th.Tensor:
-        """
-        Sample t for coarse sampling. Divides interval into equally sized bins, and samples a random point in each bin.
-
-        Parameters:
-        -----------
-            batch_size: int - the amount of rays in a batch
-
-        Returns:
-        -----------
-            t_coarse: Tensor of shape (batch_size, samples_per_ray)
-        """
-        # n = samples_per_ray_coarse 
-        # Calculate the interval size (divide far - near into n bins)
-        interval_size = (self.far_sphere_normalized - self.near_sphere_normalized) / self.samples_per_ray_coarse
-        
-        # Sample n points with equal distance, starting at the near sphere and ending at one interval size before the far sphere
-        t_coarse = th.linspace(
-            self.near_sphere_normalized, 
-            self.far_sphere_normalized - interval_size, 
-            self.samples_per_ray_coarse, 
-            device=self.device
-        ).unsqueeze(0).repeat(batch_size, 1)
-        
-        # Perturb sample positions to be anywhere in each interval
-        t_coarse += th.rand_like(t_coarse, device=self.device) * interval_size
-
-        return t_coarse
-    
-
-    def _sample_t_fine(self, t_coarse: th.Tensor, weights: th.Tensor, distances_coarse: th.Tensor, linspace=True) -> th.Tensor:
-        """
-        Using the coarsely sampled t values to decide where to sample more densely. 
-        The weights express how large a percentage of the light is blocked by that specific segment, hence that percentage of the new samples should be in that segment.
-
-        Sampling with linspace means that there will be sampled weight*samples_per_ray_fine points with equal distance in each segment.
-        The alternative (multinomial sampling) samples samples_per_ray_fine points, where the probability of sampling a point from a segment the weight of that segment
-        and the location to sample is random within that segment
-
-        Parameters:
-        -----------
-            t_coarse:           Tensor of shape (batch_size, samples_per_ray_coarse)
-            weights:            Tensor of shape (batch_size, samples_per_ray_coarse) (these are assumed to almost sum to 1)
-            distances_coarse:   Tensor of shape (batch_size, samples_per_ray_coarse)
-            linspace:           bool - whether to use linspace instead of multinomial sampling
-        
-        Returns:
-        --------
-            t_fine:             Tensor of shape (batch_size, samples_per_ray_coarse + samples_per_ray_fine) (so it contains the t_coarse sample points as well)
-        
-        """
-        # Initialization 
-        batch_size = t_coarse.shape[0]
-        device = t_coarse.device
-
-        if linspace:
-            # Each segment needs weight*samples_per_ray_fine new samples plus 1 because of the coarse sample 
-            fine_samples = th.round(weights*self.samples_per_ray_fine)
-            # Rounding might cause the sum to be less than or larger than samples_per_ray_fine, so we add the difference to the largest segment (especially since weights don't sum all the way to 1)
-            fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += self.samples_per_ray_fine - fine_samples.sum(dim=1)
-            fine_samples += 1
-            fine_samples_cum_sum = th.hstack((th.zeros(batch_size, 1, device=device), fine_samples.cumsum(dim=1)))
-            
-            # Instanciate the t_fine tensor and arange is used to mask the correct t values for each batch
-            arange = th.arange(self.samples_per_ray_fine + self.samples_per_ray_coarse, device=device).unsqueeze(0)
-            t_fine = th.zeros(batch_size, self.samples_per_ray_fine + self.samples_per_ray_coarse, device=device)
-
-            for i in range(self.samples_per_ray_coarse):
-                # Pick out the samples for each segment, everything within cumsum[i] and cumsum[i+1] is in segment i because the difference is the new samples
-                # This mask is for each ray in the batch 
-                mask = (arange >= fine_samples_cum_sum[:, i].unsqueeze(-1)) & (arange < fine_samples_cum_sum[:, i+1].unsqueeze(-1))
-                # Set samples to be the coarsely sampled point 
-                t_fine += t_coarse[:, i].unsqueeze(-1)*mask
-                # And spread them out evenly in the segment by deviding the length of the segment with the amount of samples in that segment
-                t_fine += (arange - fine_samples_cum_sum[:, i].unsqueeze(-1))*mask*distances_coarse[:, i].unsqueeze(-1)/fine_samples[:, i].unsqueeze(-1)
-
-        else:
-            # Each weight express the importance of the corresponding ray segment to the color (multinomial converts to probabilites by itself)
-            # Sample_idx is then how many more times we need to sample form that segment
-            sample_idx = th.multinomial(weights, self.samples_per_ray_fine, replacement=True)
-            
-            # Get the corresponding t-values and shift them so they can be anywhere in the segment 
-            t_fine = t_coarse.gather(1, sample_idx)
-            t_fine += th.rand_like(t_fine, device=self.device) * distances_coarse.gather(1, sample_idx)
-            t_fine = th.cat((t_coarse, t_fine), dim=1)
-            t_fine = th.sort(t_fine, dim=1).values
-
-        return t_fine
-
-
-    def _compute_positions(self, origins: th.Tensor, directions: th.Tensor, t: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
-        """
-        Compute the positions, distances and directions for given rays and t values.
-
-        Parameters:
-        -----------
-            origins: Tensor of shape (batch_size, 3) - camera position, i.e. origin in camera coordinates
-            directions: Tensor of shape (batch_size, 3) - direction vectors (unit vectors) of the viewing directions
-            t: Tensor of shape (batch_size, samples_per_ray) - the t values to compute the positions for.
-
-
-        Returns:
-        --------
-            positions: Tensor of shape (batch_size, samples_per_ray, 3) - the positions for the given t values
-            distances: Tensor of shape (batch_size, samples_per_ray) - the distances between the t values - used for the weights
-                        Appended is the distance between the last position and the far sphere.
-            directions: Tensor of shape (batch_size, samples_per_ray, 3) - the directions for the given t values
-        """
-        # Calculates the position with the equation p = o + t*d 
-        # The unsqueeze is because origins and directions are spacial vectors while t is the sample times
-        positions = origins.unsqueeze(1) + t.unsqueeze(2) * directions.unsqueeze(1)
-        
-        # Get distances in t values
-        distances = th.hstack((
-            t[:,1:] - t[:,:-1],
-            self.far_sphere_normalized - t[:,-1:]
-        ))
-
-        # Format the directions to match the found positions
-        directions = directions.unsqueeze(1).repeat(1, positions.shape[1], 1)
-        
-        return positions, directions, distances
-
-
-
-    def _render_rays(self, densities: th.Tensor, colors: th.Tensor, distances: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
-        """
-        Render the rays using the given densities and colors.
-        I.e. this is just an implementation of equation 3.
-        blocking_neg    = -sigma_j * delta_j
-        alpha_j         = 1 - exp(blocking_neg)
-        alpha_int_i     = T_i = exp(sum_{j=1}^{i-1} blocking_neg_j)
-        output          = sum_{j=1}^N alpha_int_j * alpha_j * c_j (c_j = color_j)
-
-        Parameters:
-        -----------
-            densities: Tensor of shape (batch_size, samples_per_ray) - the densities for the given samples (sigma_j in the paper)
-            colors: Tensor of shape (batch_size, samples_per_ray, 3) - the colors for the given samples (c_j in the paper)
-            distances: Tensor of shape (batch_size, samples_per_ray) - the distances between the samples (delta_j in the paper)
         
         
-        Returns:
-        --------
-            rgb: Tensor of shape (batch_size, 3)                    - the rgb values for the given rays
-            weights: Tensor of shape (batch_size, samples_per_ray)  - the weights used for the fine sampling
-
-        """
-
-        # Get the negative Optical Density 
-        blocking_neg = -densities * distances
-        # Get the absorped light over each ray segment 
-        alpha = 1 - th.exp(blocking_neg)
-        # Get the light that has made it through previous segments 
-        alpha_int = th.hstack((
-            th.ones((blocking_neg.shape[0], 1), device=self.device),
-            th.exp(th.cumsum(blocking_neg[:, :-1], dim=1))
-        ))
-
-        # Weight that express how much each segment influences the final color 
-        weights = alpha_int * alpha
+        # Transmittance estimator
+        self.transmittance_estimator = nerfacc.PropNetEstimator()
         
-        # Compute the final color by summing over the weighted colors (the unsqueeze(-1) is to mach dimensions)
-        return th.sum(weights.unsqueeze(-1)*colors, dim=1), weights
+        
+        # Enable manual optimization
+        self.automatic_optimization = False
 
-    
-    def _compute_color(
+
+    def _get_positions(
         self, 
-        model: NerfModel,
-        t: th.Tensor,
-        ray_origs: th.Tensor,
+        ray_origs: th.Tensor, 
         ray_dirs: th.Tensor,
-        batch_size: int,
-        samples_per_ray: int
-    ) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
-        """
-        A helper function to compute the color for given model, t values, ray origins and ray directions.
-        Is just a wrapper around _compute_positions, model_base.forward and _render_rays.
-
-        Parameters:
-        -----------
-            model: The model to use for computing the color (either the coarse or fine model)
-            t: Tensor of shape (batch_size, samples_per_ray) - the t values to compute the positions for. (output of _sample_t_coarse or _sample_t_fine)
-            ray_origs: Tensor of shape (batch_size, 3) - camera position, i.e. origin in camera coordinates
-            ray_dirs: Tensor of shape (batch_size, 3) - direction vectors (unit vectors) of the viewing directions
-            batch_size: int - the batch size
-            samples_per_ray: int - the number of samples per ray
+        t_starts: th.Tensor,
+        t_ends: th.Tensor
+    ) -> th.Tensor:
+        """Calculate the positions of the rays at the given t values.
         
+        Args:
+            ray_origs (th.Tensor): Tensor of shape (n_rays, 3) - the ray origins.
+            ray_dirs (th.Tensor): Tensor of shape (n_rays, 3) - the ray directions.
+            t_starts (th.Tensor): Tensor of shape (n_rays, n_samples) - the start values for each ray.
+            t_ends (th.Tensor): Tensor of shape (n_rays, n_samples) - the end values for each ray.
+            
         Returns:
-        --------
-            rgb: Tensor of shape (batch_size, 3) - the rgb values for the given rays
-            weights: Tensor of shape (batch_size, samples_per_ray) - the weights used for the fine sampling
-            sample_dist: Tensor of shape (batch_size, samples_per_ray) - the distances between the samples (delta_j in the paper)
-        
+            th.Tensor: Tensor of shape (n_rays, n_samples, 3) - the positions of the rays at the given t values.
         """
-        # Compute the positions for the given t values
-        sample_pos, sample_dir, sample_dist  = self._compute_positions(ray_origs, ray_dirs, t)
-
-        # Ungroup samples by ray (for the model)
-        sample_pos = sample_pos.view(batch_size * samples_per_ray, 3)
-        sample_dir = sample_dir.view(batch_size * samples_per_ray, 3)
+        # Calculate ray positions (n_rays, n_samples, 3)
+        #   Origins and directions are reshaped to (n_rays, 1, 3) for broadcasting.
+        #   t_starts and t_ends are reshaped to (n_rays, n_samples, 1) for broadcasting.
+        #   The singleton dimensions in the tensors will then broadcast to (n_rays, n_samples, 3).
+        return ray_origs[:, None] + ray_dirs[:, None] * ((t_starts + t_ends))[..., None] / 2
         
-        # Evaluate density and color at sample positions
-        sample_density, sample_color = model(sample_pos, sample_dir)
+
+    def _create_proposal_forward(
+        self, 
+        ray_origs: th.Tensor, 
+        ray_dirs: th.Tensor
+    ) -> Callable[[th.Tensor, th.Tensor], th.Tensor]:
+        """Create a closure that captures the current rays and returns a function that samples the density at the given t values.
         
-        # Group samples by ray
-        sample_density = sample_density.view(batch_size, samples_per_ray)
-        sample_color = sample_color.view(batch_size, samples_per_ray, 3)
+        Args:
+            ray_origs (th.Tensor): Tensor of shape (n_rays, 3) - the ray origins.
+            ray_dirs (th.Tensor): Tensor of shape (n_rays, 3) - the ray directions.
+            
+        Returns:
+            Callable[[th.Tensor, th.Tensor], th.Tensor]: Function that samples the density at the given t values.
+        """
+        # Define forward function that captures the current rays        
+        def forward(t_starts: th.Tensor, t_ends: th.Tensor) -> th.Tensor:
+            """Sample each ray at the given t values and return the sampled density.
+            
+            Args:
+                t_starts (th.Tensor): Tensor of shape (n_rays, n_samples) - the start values for each ray.
+                t_ends (th.Tensor): Tensor of shape (n_rays, n_samples) - the end values for each ray.
+                
+            Returns:
+                th.Tensor: Tensor of shape (n_rays, n_samples) - the sampled density.
+            """
+            # Calculate positions to sample (n_rays, n_samples, 3)
+            positions = self._get_positions(ray_origs, ray_dirs, t_starts, t_ends)
+            
+            # Calculate and return densities (n_rays, n_samples)
+            return self.proposal_network(positions.view(-1, 3)).view(t_starts.shape)
 
-        # Compute the rgb of the rays, and the weights for fine sampling
-        rgb, weights = self._render_rays(sample_density, sample_color, sample_dist)
+        # Return closure
+        return forward
+
+
+    def _create_radiance_forward(
+        self, 
+        ray_origs: th.Tensor, 
+        ray_dirs: th.Tensor
+    ) -> Callable[[th.Tensor, th.Tensor, Optional[th.Tensor]], tuple[th.Tensor, th.Tensor]]:
+        """Create a closure that captures the current rays and returns a function that samples the radiance at the given t values.
         
-        return rgb, weights, sample_dist
+        Args:
+            ray_origs (th.Tensor): Tensor of shape (n_rays, 3) - the ray origins.
+            ray_dirs (th.Tensor): Tensor of shape (n_rays, 3) - the ray directions.
+            
+        Returns:
+            Callable[[th.Tensor, th.Tensor, Optional[th.Tensor]], tuple[th.Tensor, th.Tensor]]: Function that samples the radiance at the given t values.
+        """
+        
+        # Define forward function that captures the current rays
+        def forward(
+            t_starts: th.Tensor, 
+            t_ends: th.Tensor, 
+            ray_indices: Optional[th.Tensor] = None
+        ) -> tuple[th.Tensor, th.Tensor]:
+            """Sample each ray at the given t values and return the sampled density.
+            
+            Args:
+                t_starts (th.Tensor): Tensor of shape (n_rays, n_samples) - the start values for each ray.
+                t_ends (th.Tensor): Tensor of shape (n_rays, n_samples) - the end values for each ray.
+                ray_indices (th.Tensor): Not used. Tensor of shape (n_rays, n_samples) - the ray indices for each sample.
+                
+            Returns:
+                th.Tensor, th.Tensor: Tensors of shape (n_rays, n_samples, x), where x=3 for rgb, and x=1 for density.
+            """
+            # Calculate positions to sample (n_rays, n_samples, 3)
+            positions = self._get_positions(ray_origs, ray_dirs, t_starts, t_ends)
+
+            # Calculate rgb and densities (n_rays, n_samples, x)
+            rgb, density = self.radiance_network(
+                positions.view(-1, 3), 
+                ray_dirs.repeat_interleave(positions.shape[1], dim=0)
+            )
+            
+            # Return for volume rendering (n_rays, 3), (n_rays, n_samples)
+            return rgb.view(*t_starts.shape, 3), density.view(t_starts.shape)
+
+        # Return closure
+        return forward
 
 
-
-    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor, Dict]:
         """
         Forward pass of the model.
         Given the ray origins and directions, compute the rgb values for the given rays.
 
         Parameters:
         -----------
-            ray_origs: Tensor of shape (batch_size, 3) - camera position, i.e. origin in camera coordinates
-            ray_dirs: Tensor of shape (batch_size, 3) - direction vectors (unit vectors) of the viewing directions
+            ray_origs: Tensor of shape (n_rays, 3) - focal point position in world, i.e. origin in camera coordinates
+            ray_dirs: Tensor of shape (n_rays, 3) - direction vectors (unit vectors) of the viewing directions
 
         Returns:
         --------
-            rgb_fine: Tensor of shape (batch_size, 3) - the rgb values for the given rays using fine model (the actual prediction)
-            rgb_coarse: Tensor of shape (batch_size, 3) - the rgb values for the given rays using coarse model (only used for the loss - not the rendering)
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
         """
-
-        # Amount of pixels to render
-        batch_size = ray_origs.shape[0]
         
         
-        ### Coarse sampling
-        # sample t
-        t_coarse = self._sample_t_coarse(batch_size)
-
-        #compute rgb
-        rgb_coarse, weights, sample_dist_coarse = self._compute_color(
-            self.model_coarse,
-            t_coarse,
-            ray_origs,
-            ray_dirs,
-            batch_size,
-            self.samples_per_ray_coarse
+        
+        
+        
+        # TODO: Finish documentation
+        
+        
+        
+        
+        
+        # Estimate positions to sample
+        t_starts, t_ends = self.transmittance_estimator.sampling(
+            prop_sigma_fns=[self._create_proposal_forward(ray_origs, ray_dirs)], 
+            prop_samples=[self.proposal_samples_per_ray],
+            num_samples=self.radiance_samples_per_ray,
+            n_rays=ray_origs.shape[0],
+            near_plane=self.near_sphere_normalized,
+            far_plane=self.far_sphere_normalized,
+            sampling_type="lindisp",
+            stratified=self.training,
+            requires_grad=self.training
         )
-        
 
-        ### Fine sampling
-        # Sample t
-        t_fine = self._sample_t_fine(t_coarse, weights, sample_dist_coarse)
-        # compute rgb
-        rgb_fine, _, _ = self._compute_color(
-            self.model_fine,
-            t_fine,
-            ray_origs,
-            ray_dirs,
-            batch_size,
-            self.samples_per_ray_coarse + self.samples_per_ray_fine
+        # Sample colors and densities
+        rgb, opacity, depth, extras = nerfacc.rendering(
+            t_starts=t_starts,
+            t_ends=t_ends,
+            ray_indices=None,
+            n_rays=None,
+            rgb_sigma_fn=self._create_radiance_forward(ray_origs, ray_dirs),
+            render_bkgd=None
         )
 
-        # Return colors for the given pixel coordinates (batch_size, 3)
-        return rgb_fine, rgb_coarse
+
+        # Return colors for the given pixel coordinates (n_rays, 3)
+        return rgb, opacity, depth, extras
 
 
-    ############ pytorch lightning functions ############
 
-    def _step_helpher(self, batch: DatasetOutput, batch_idx: int, stage: str):
-        """
-        general function for training and validation step
-        """
+
+    def _forward_loss(self, batch: DatasetOutput, batch_idx: int, stage: str):
         ray_origs, ray_dirs, ray_colors = batch
         
-        ray_colors_pred_coarse, ray_colors_pred_fine = self(ray_origs, ray_dirs)
+        ray_colors_pred, ray_opacity, ray_depth, extras = self(ray_origs, ray_dirs)
 
-        loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors)
-        loss_fine = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors)
-        loss = loss_coarse + loss_fine
+
+
+        # TODO: FIX ME
+        proposal_loss = self.transmittance_estimator.compute_loss(extras["trans"])
+        radiance_loss = nn.functional.mse_loss(ray_colors_pred, ray_colors)
+
+
+
+
+
+
+        loss = proposal_loss + radiance_loss
+        # TODO: Log all the losses, including new psnr and stuff
+        
+        
+        
+        
+        
+        
+        
         
         self.log(f"{stage}_loss", loss)
 
-        return loss
+        # NOTE: Assuming losses are ordered according to associated optimizer
+        return proposal_loss, radiance_loss
 
     def training_step(self, batch: DatasetOutput, batch_idx: int):
-        return self._step_helpher(batch, batch_idx, "train")
+        # Get optimizers for manual optimization
+        # NOTE: Technically getting a list of LightningOptimizer wrappers,
+        #  but they have not set up typing correctly. Expect more type ignores.
+        optimizers: list[th.optim.Optimizer] = self.optimizers() # type: ignore
+
+        # Forward pass
+        # NOTE: Assuming losses are ordered according to associated optimizers
+        losses = self._forward_loss(batch, batch_idx, "train")
+
+        # Backward pass and step through each optimizer
+        for loss, optimizer in zip(losses, optimizers):
+            optimizer.zero_grad()
+            self.manual_backward(loss, retain_graph=True)
+            optimizer.step()
+
+        # Return summed loss
+        return sum(losses)
+        
 
     def validation_step(self, batch: DatasetOutput, batch_idx: int):
-        return self._step_helpher(batch, batch_idx, "val")
+        return self._forward_loss(batch, batch_idx, "val")
 
 
     def configure_optimizers(self):
-        optimizer = th.optim.Adam(
-            self.parameters(), 
-            lr=self.learning_rate, 
-            weight_decay=self.weight_decay,
+        # Set up proposal optimizers
+        proposal_optimizer = th.optim.Adam(
+            self.proposal_network.parameters(), 
+            lr=self.proposal_learning_rate, 
+            weight_decay=self.proposal_weight_decay,
         )
-        scheduler = th.optim.lr_scheduler.ExponentialLR(
-            optimizer, 
-            gamma=self.learning_rate_decay
+        proposal_scheduler = th.optim.lr_scheduler.ExponentialLR(
+            proposal_optimizer, 
+            gamma=self.proposal_learning_rate_decay
+        )
+        
+        # Set up radiance optimizers
+        radiance_optimizer = th.optim.Adam(
+            self.radiance_network.parameters(), 
+            lr=self.radiance_learning_rate, 
+            weight_decay=self.radiance_weight_decay,
+        )
+        radiance_scheduler = th.optim.lr_scheduler.ExponentialLR(
+            radiance_optimizer, 
+            gamma=self.radiance_learning_rate_decay
         )
 
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": scheduler,
-        }
+
+        # Set optimizers and schedulers
+        # NOTE: Assuming losses are ordered according to associated optimizer
+        return [proposal_optimizer, radiance_optimizer], [proposal_scheduler, radiance_scheduler]
 
 

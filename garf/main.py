@@ -28,8 +28,8 @@ if __name__ == "__main__":
     BATCH_SIZE = 1024*2
     
     dm = ImagePoseDataModule(
-        image_width=800,
-        image_height=800,
+        image_width=50,
+        image_height=50,
         scene_path="../data/lego",
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
@@ -51,6 +51,14 @@ if __name__ == "__main__":
                 wandb_logger=wandb_logger,
                 metric_name="epoch_fraction",
             ),
+            
+            
+            
+            
+            # TODO: Fix memory leak on GPU
+            
+            
+            
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
                 logging_start=0.002,
@@ -75,19 +83,23 @@ if __name__ == "__main__":
 
 
     # Set up model
-    LEARNING_RATE_START = 5e-3
-    LEARNING_RATE_STOP = 5e-3
+    LEARNING_RATE_START = 5e-4
+    LEARNING_RATE_STOP = 5e-5
+    LEARNING_RATE_DECAY: float = 2**(log2(LEARNING_RATE_STOP/LEARNING_RATE_START) / trainer.max_epochs), # type: ignore
 
     model = Garf(
-        near_sphere_normalized=2,
-        far_sphere_normalized=7,
-        samples_per_ray_coarse=64,
-        samples_per_ray_fine=192,
+        near_plane=2,
+        far_plane=7,
+        proposal_samples_per_ray=64,
+        radiance_samples_per_ray=192,
         gaussian_init_min=0.,
-        gaussian_init_max=3.,
-        learning_rate=LEARNING_RATE_START,
-        learning_rate_decay=2**(log2(LEARNING_RATE_STOP/LEARNING_RATE_START) / trainer.max_epochs), # type: ignore
-        weight_decay=0
+        gaussian_init_max=2.,
+        proposal_learning_rate=LEARNING_RATE_START,
+        proposal_learning_rate_decay=LEARNING_RATE_DECAY,
+        proposal_weight_decay=0,
+        radiance_learning_rate=LEARNING_RATE_START,
+        radiance_learning_rate_decay=LEARNING_RATE_DECAY,
+        radiance_weight_decay=0,
     )
 
 
