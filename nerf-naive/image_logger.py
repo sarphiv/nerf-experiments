@@ -82,7 +82,7 @@ class Log2dImageReconstruction(Callback):
             batch_size = ray_origs.shape[0]
             
             # Predict RGB values
-            rgb[i:i+batch_size, :] = model(ray_origs, ray_dirs)[0].clip(0, 1).cpu()
+            rgb[i:i+batch_size, :] = model(ray_origs, ray_dirs).clip(0, 1).cpu()
         
             # Update write head
             i += batch_size
