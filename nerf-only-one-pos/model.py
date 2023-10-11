@@ -59,7 +59,7 @@ class NerfModel(nn.Module):
         # Creates the first module of the network 
         self.model_density_1 = self.contruct_model_density(fourier_levels_pos*2*3,
                                                            self.hidden_dim,
-                                                           self.hidden_dim)
+                                                           self.hidden_dim + 1)
         self.relu = nn.ReLU(inplace=True)
         
         # Creates the second module of the network (feeds the positional incodings into the network again)
