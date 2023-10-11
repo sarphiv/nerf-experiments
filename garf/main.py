@@ -7,6 +7,7 @@ from pytorch_lightning.loggers import WandbLogger  # type: ignore
 
 from data_module import ImagePoseDataModule
 from image_logger import Log2dImageReconstruction
+from epoch_fraction_logger import LogEpochFraction
 from model import Garf
 
 
@@ -19,7 +20,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="garf_sigmoid_act_var_200",
+        name="garf",
     )
 
 
@@ -27,8 +28,8 @@ if __name__ == "__main__":
     BATCH_SIZE = 1024*2
     
     dm = ImagePoseDataModule(
-        image_width=200,
-        image_height=200,
+        image_width=800,
+        image_height=800,
         scene_path="../data/lego",
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
@@ -42,17 +43,24 @@ if __name__ == "__main__":
 
     trainer = pl.Trainer(
         accelerator="auto",
-        max_epochs=256,
+        max_epochs=100,
         precision="16-mixed",
         logger=wandb_logger,
         callbacks=[
+            LogEpochFraction(
+                wandb_logger=wandb_logger,
+                metric_name="epoch_fraction",
+            ),
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
-                batch_period=100,
-                epoch_period=1,
-                validation_image_name="r_2",
-                batch_size=BATCH_SIZE,
-                num_workers=4
+                logging_start=0.002,
+                delay_start=1/200,
+                delay_end=1/16,
+                delay_taper=4.0,
+                validation_image_names=["r_2", "r_84"],
+                reconstruction_batch_size=BATCH_SIZE,
+                reconstruction_num_workers=4,
+                metric_name="val_img",
             ),
             LearningRateMonitor(
                 logging_interval="epoch"
@@ -67,16 +75,23 @@ if __name__ == "__main__":
 
 
     # Set up model
+    LEARNING_RATE_START = 5e-4
+    LEARNING_RATE_STOP = 5e-5
+    LEARNING_RATE_DECAY: float = 2**(log2(LEARNING_RATE_STOP/LEARNING_RATE_START) / trainer.max_epochs), # type: ignore
+
     model = Garf(
-        near_sphere_normalized=2,
-        far_sphere_normalized=7,
-        samples_per_ray_coarse=64,
-        samples_per_ray_fine=192,
-        gaussian_variance=0.02,
-        # gaussian_variance=-1.,
-        learning_rate=5e-4,
-        learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
-        weight_decay=0
+        near_plane=2,
+        far_plane=7,
+        proposal_samples_per_ray=64,
+        radiance_samples_per_ray=192,
+        gaussian_init_min=0.,
+        gaussian_init_max=2.,
+        proposal_learning_rate=LEARNING_RATE_START,
+        proposal_learning_rate_decay=LEARNING_RATE_DECAY,
+        proposal_weight_decay=0,
+        radiance_learning_rate=LEARNING_RATE_START,
+        radiance_learning_rate_decay=LEARNING_RATE_DECAY,
+        radiance_weight_decay=0,
     )
 
 

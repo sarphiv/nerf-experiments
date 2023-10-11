@@ -1,11 +1,14 @@
+from typing import cast
+
 import torch as th
 import torch.nn as nn
+from torch.autograd.function import FunctionCtx
 
 
 class GaussActivation(th.autograd.Function):
 
     @staticmethod
-    def forward(ctx, x, variance):
+    def forward(ctx: FunctionCtx, x: th.Tensor, variance: th.Tensor):
         # Save parameters
         ctx.save_for_backward(x, variance)
 
@@ -13,9 +16,9 @@ class GaussActivation(th.autograd.Function):
         return th.exp(-x**2 / (2*variance))
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx: FunctionCtx, grad_output: th.Tensor):
         # Retrieve parameters
-        x, variance = ctx.saved_tensors
+        x, variance = cast(tuple[th.Tensor, th.Tensor], ctx.saved_tensors) # type: ignore
 
         # Compute gradients
         x2 = x**2
@@ -29,18 +32,32 @@ class GaussActivation(th.autograd.Function):
 
 
 class GaussAct(nn.Module):
-    def __init__(self, size: int):
+    def __init__(
+        self,
+        features_in: int,
+        standard_deviation_init_min: float = 0.,
+        standard_deviation_init_max: float = 1.
+    ):
+        """
+        Gaussian activation function with learnable variance.
+
+        Parameters:
+        ----------
+        features_in: int
+            Number of input features
+        standard_deviation_init_min: float
+            Minimum initial value for the standard deviation initiated via uniform distribution
+        standard_deviation_init_max: float
+            Maximum initial value for the standard deviation initiated via uniform distribution
+        """
         # Initialize parameters
         super().__init__()
-        self.act_var = nn.Sigmoid()
 
-        self.variance = nn.Parameter(th.rand(size) + 2)
-        # NOTE: Need the softplus to ensure variance is positive
-        # self.act_var = lambda x: th.exp(x)
-        # self.act_var = lambda x: x
-        self.act_var = lambda x: x**2 + 1.e-5
-        self.func = GaussActivation.apply
-        
+        #NOTE: Negative standard_deviation is allowed to be negative as we only ever use var = std**2
+        self.standard_deviation = nn.Parameter(
+            th.rand(features_in) * (standard_deviation_init_max - standard_deviation_init_min) + standard_deviation_init_min
+        )
+
 
     def forward(self, x: th.Tensor):
-        return self.func(x, self.act_var(self.variance))
+        return GaussActivation.apply(x, self.standard_deviation**2 + 1e-6)
