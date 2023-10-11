@@ -19,7 +19,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="normalized-vanilla-sanity-check"
+        name="no-coarse-model"
     )
 
 
