@@ -131,7 +131,9 @@ class NerfOriginal(pl.LightningModule):
         fourier_levels_dir: int,
         learning_rate: float = 1e-4,
         learning_rate_decay: float = 0.5,
-        weight_decay: float = 0.0
+        weight_decay: float = 0.0,
+        query_coarse_middle: bool = False,
+        query_fine_middle: bool = False,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -148,6 +150,10 @@ class NerfOriginal(pl.LightningModule):
         self.learning_rate = learning_rate
         self.learning_rate_decay = learning_rate_decay
         self.weight_decay = weight_decay
+
+        # Whether to query network in the middle of the samples
+        self.query_coarse_middle = query_coarse_middle
+        self.query_fine_middle = query_fine_middle
         
         # Coarse model -> only job is to find out where to sample more by predicting the density
         self.model_coarse = NerfModel(
@@ -256,7 +262,7 @@ class NerfOriginal(pl.LightningModule):
         return t_fine
 
 
-    def _compute_positions(self, origins: th.Tensor, directions: th.Tensor, t: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
+    def _compute_positions(self, origins: th.Tensor, directions: th.Tensor, t: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
         Compute the positions, distances and directions for given rays and t values.
 
@@ -277,17 +283,12 @@ class NerfOriginal(pl.LightningModule):
         # Calculates the position with the equation p = o + t*d 
         # The unsqueeze is because origins and directions are spacial vectors while t is the sample times
         positions = origins.unsqueeze(1) + t.unsqueeze(2) * directions.unsqueeze(1)
-        
-        # Get distances in t values
-        distances = th.hstack((
-            t[:,1:] - t[:,:-1],
-            self.far_sphere_normalized - t[:,-1:]
-        ))
+    
 
         # Format the directions to match the found positions
         directions = directions.unsqueeze(1).repeat(1, positions.shape[1], 1)
         
-        return positions, directions, distances
+        return positions, directions
 
 
 
@@ -331,9 +332,17 @@ class NerfOriginal(pl.LightningModule):
         # Compute the final color by summing over the weighted colors (the unsqueeze(-1) is to mach dimensions)
         return th.sum(weights.unsqueeze(-1)*colors, dim=1), weights
 
-    
+    def _compute_distances(self, t: th.Tensor) -> th.Tensor:
+        # Get distances in t values
+        distances = th.hstack((
+            t[:,1:] - t[:,:-1],
+            self.far_sphere_normalized - t[:,-1:]
+        ))
+        return distances
+
     def _compute_color(self, model: NerfModel,
                             t: th.Tensor,
+                            t_query: th.Tensor,
                             ray_origs: th.Tensor,
                             ray_dirs: th.Tensor,
                             batch_size: int,
@@ -360,7 +369,9 @@ class NerfOriginal(pl.LightningModule):
         
         """
         # Compute the positions for the given t values
-        sample_pos, sample_dir, sample_dist  = self._compute_positions(ray_origs, ray_dirs, t)
+        sample_pos, sample_dir  = self._compute_positions(ray_origs, ray_dirs, t_query)
+        sample_dist = self._compute_distances(t)
+
 
         # Ungroup samples by ray (for the model)
         sample_pos = sample_pos.view(batch_size * samples_per_ray, 3)
@@ -396,6 +407,16 @@ class NerfOriginal(pl.LightningModule):
             rgb_coarse: Tensor of shape (batch_size, 3) - the rgb values for the given rays using coarse model (only used for the loss - not the rendering)
         """
 
+        #little helper function to get the middle t values for the given t values
+        def get_middle_t(t, compute_middle):
+            if compute_middle:
+                t_middle = th.zeros_like(t)
+                t_middle[:, :-1] = (t[:, 1:] + t[:, :-1])/2
+                t_middle[:, -1] = (self.far_sphere_normalized + t[:, -1])/2
+                return t_middle
+            else:
+                return t
+
         # Amount of pixels to render
         batch_size = ray_origs.shape[0]
         
@@ -403,10 +424,12 @@ class NerfOriginal(pl.LightningModule):
         ### Coarse sampling
         # sample t
         t_coarse = self._sample_t_coarse(batch_size)
+        t_coarse_query = get_middle_t(t_coarse, self.query_coarse_middle)
 
         #compute rgb
         rgb_coarse, weights, sample_dist_coarse = self._compute_color(self.model_coarse,
                                                 t_coarse,
+                                                t_coarse_query,
                                                 ray_origs,
                                                 ray_dirs,
                                                 batch_size,
@@ -416,9 +439,12 @@ class NerfOriginal(pl.LightningModule):
         ### Fine sampling
         # Sample t
         t_fine = self._sample_t_fine(t_coarse, weights, sample_dist_coarse)
+        t_fine_query = get_middle_t(t_fine, self.query_fine_middle)
+
         # compute rgb
         rgb_fine, _, _ = self._compute_color(self.model_fine,
                                                 t_fine,
+                                                t_fine_query,
                                                 ray_origs,
                                                 ray_dirs,
                                                 batch_size,
