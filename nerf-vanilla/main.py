@@ -48,7 +48,7 @@ if __name__ == "__main__":
         callbacks=[
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
-                batch_period=100,
+                batch_period=1000,
                 epoch_period=1,
                 validation_image_name="r_2",
                 batch_size=BATCH_SIZE,
@@ -76,7 +76,9 @@ if __name__ == "__main__":
         fourier_levels_dir=4,
         learning_rate=5e-4,
         learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
-        weight_decay=0
+        weight_decay=0,
+        query_coarse_middle=False,
+        query_fine_middle=False,
     )
 
 
