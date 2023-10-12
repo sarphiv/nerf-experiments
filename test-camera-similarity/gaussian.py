@@ -38,15 +38,31 @@ class GaussAct(nn.Module):
         self.func = GaussActivation.apply
         self.standard_deviation = None
         self.initial_values = initial_values
-    
+        self.loss: th.Tensor = th.tensor(0)
+        self.register_full_backward_pre_hook(hook=GaussAct.hook)
+
     def setup(self, x: th.Tensor):
-        self.standard_deviation = nn.Parameter(self.initial_values(x.shape))
+        self.standard_deviation = nn.Parameter(self.initial_values(x.shape[1:]))
     
     @property
     def variance(self) -> th.Tensor:
         return self.act_var(self.standard_deviation)
+    
+    @staticmethod
+    def hook(module, grad_output):
+        module.loss = th.tensor(0)
+
+    # def forward(self, x: th.Tensor, scale=0.) -> th.Tensor:
+    #     if self.standard_deviation is None:
+    #         self.setup(x)
+    #     var = self.variance
+    #     self.loss = self.loss + th.mean((x - th.sqrt(var))**2)
+
+    #     return cast(th.Tensor, self.func(x, var))
 
     def forward(self, x: th.Tensor, scale=0.) -> th.Tensor:
+        if self.standard_deviation is None:
+            self.setup(x)
         var = self.variance
         freq_represent = 1/(6*th.sqrt(var))
         if scale == 0:
