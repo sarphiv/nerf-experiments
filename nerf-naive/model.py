@@ -56,10 +56,10 @@ class NerfModel(nn.Module):
             
             # Create n_hidden identical layers 
             for _ in range(self.n_hidden-1):
-                intermediate_layers += [self.relu, nn.Linear(hidden_dim, hidden_dim)]
+                intermediate_layers += [nn.ReLU(True), nn.Linear(hidden_dim, hidden_dim)]
 
             # Concatenate the layers into one sequential
-            return nn.Sequential(layer1, *intermediate_layers, self.relu, layer2)
+            return nn.Sequential(layer1, *intermediate_layers, nn.ReLU(True), layer2)
 
 
 class NerfNaive(pl.LightningModule):
@@ -94,8 +94,28 @@ class NerfNaive(pl.LightningModule):
         )
 
 
+    def _get_intervals(self, t: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+        """
+        From t-values get the t corresponding to the start and end of the bins.
+        
+        Parameters:
+        -----------
+            t: Tensor of shape (batch_size, samples_per_ray) - the t values to compute the positions for.
+            
+        Returns:
+        --------
+            t_start: Tensor of shape (batch_size, samples_per_ray) - the t value for the begining of the bin
+            t_end: Tensor of shape (batch_size, samples_per_ray) - the t value for the end of the bin
+        """
+        t_start = t 
+        t_end = th.zeros_like(t, device=self.device)
+        t_end[:,:-1] = t[:, 1:].clone()
+        t_end[:,-1] = self.far_sphere_normalized
 
-    def _sample_t(self, batch_size: int) -> th.Tensor:
+        return t_start, t_end
+    
+
+    def _sample_t(self, batch_size: int) -> tuple[th.Tensor, th.Tensor]:
         """
         Sample t for sampling along the rays. Divides interval into equally sized bins, and samples a random point in each bin.
 
@@ -105,7 +125,8 @@ class NerfNaive(pl.LightningModule):
 
         Returns:
         -----------
-            t: Tensor of shape (batch_size, samples_per_ray)
+            t_start: Tensor of shape (batch_size, samples_per_ray) - start of the t-bins
+            t_end: Tensor of shape (batch_size, samples_per_ray) - end of the t-bins
         """
         # n = samples_per_ray
         # Calculate the interval size (divide far - near into n bins)
@@ -122,12 +143,12 @@ class NerfNaive(pl.LightningModule):
         # Perturb sample positions to be anywhere in each interval
         t += th.rand_like(t, device=self.device) * interval_size
 
-        return t
+        return self._get_intervals(t)
     
 
-    def _compute_positions(self, origins: th.Tensor, directions: th.Tensor, t: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
+    def _compute_positions(self, origins: th.Tensor, directions: th.Tensor, t: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
-        Compute the positions, distances and directions for given rays and t values.
+        Compute the positions and directions for given rays and t values.
 
         Parameters:
         -----------
@@ -139,24 +160,16 @@ class NerfNaive(pl.LightningModule):
         Returns:
         --------
             positions: Tensor of shape (batch_size, samples_per_ray, 3) - the positions for the given t values
-            distances: Tensor of shape (batch_size, samples_per_ray) - the distances between the t values - used for the weights
-                        Appended is the distance between the last position and the far sphere.
             directions: Tensor of shape (batch_size, samples_per_ray, 3) - the directions for the given t values
         """
         # Calculates the position with the equation p = o + t*d 
         # The unsqueeze is because origins and directions are spacial vectors while t is the sample times
         positions = origins.unsqueeze(1) + t.unsqueeze(2) * directions.unsqueeze(1)
-        
-        # Get distances in t values
-        distances = th.hstack((
-            t[:,1:] - t[:,:-1],
-            self.far_sphere_normalized - t[:,-1:]
-        ))
 
         # Format the directions to match the found positions
         directions = directions.unsqueeze(1).repeat(1, positions.shape[1], 1)
         
-        return positions, directions, distances
+        return positions, directions
 
 
 
@@ -199,9 +212,9 @@ class NerfNaive(pl.LightningModule):
         # Compute the final color by summing over the weighted colors (the unsqueeze(-1) is to mach dimensions)
         return th.sum(weights.unsqueeze(-1)*colors, dim=1), weights
 
-    
     def _compute_color(self, model: NerfModel,
-                            t: th.Tensor,
+                            t_start: th.Tensor,
+                            t_end: th.Tensor,
                             ray_origs: th.Tensor,
                             ray_dirs: th.Tensor,
                             batch_size: int,
@@ -214,7 +227,8 @@ class NerfNaive(pl.LightningModule):
         Parameters:
         -----------
             model: The model to use for computing the color 
-            t: Tensor of shape (batch_size, samples_per_ray) - the t values to compute the positions for.
+            t_start: Tensor of shape (batch_size, samples_per_ray) - the t value for the begining of the bin
+            t_end: Tensor of shape (batch_size, samples_per_ray) - the t value for the end of the bin
             ray_origs: Tensor of shape (batch_size, 3) - camera position, i.e. origin in camera coordinates
             ray_dirs: Tensor of shape (batch_size, 3) - direction vectors (unit vectors) of the viewing directions
             batch_size: int - the batch size
@@ -228,7 +242,8 @@ class NerfNaive(pl.LightningModule):
         
         """
         # Compute the positions for the given t values
-        sample_pos, sample_dir, sample_dist  = self._compute_positions(ray_origs, ray_dirs, t)
+        sample_pos, sample_dir  = self._compute_positions(ray_origs, ray_dirs, (t_start + t_end)/2)
+        sample_dist = t_end - t_start
 
         # Ungroup samples by ray (for the model)
         sample_pos = sample_pos.view(batch_size * samples_per_ray, 3)
@@ -267,11 +282,12 @@ class NerfNaive(pl.LightningModule):
         batch_size = ray_origs.shape[0]
         
         # sample t
-        t_coarse = self._sample_t(batch_size)
+        t_start, t_end = self._sample_t(batch_size)
 
         #compute rgb
         rgb, _, _ = self._compute_color(self.model,
-                                        t_coarse,
+                                        t_start,
+                                        t_end,
                                         ray_origs,
                                         ray_dirs,
                                         batch_size,
