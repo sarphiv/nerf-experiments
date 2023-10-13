@@ -12,26 +12,19 @@ class NerfModel(nn.Module):
         hidden_dim: int
     ):
         """
-        An instance of a NeRF model the architecture; 
-        
-            Hn( Hn( Ep(x)), Ep(x))          -> density 
-        H(  Hn( Hn( Ep(x)), Ep(x)), Ed(d))  -> color 
-
-        H: a hidden fully connected layer with hidden_dim neurons,
-        Hn: H applied n_hidden times, 
-        Ep: is the positional encoding with fourier_levels_pos levels,
-        Ed: is the direction encoding with fourier_levels_dir levels,
-        x: is the position
-        d: is the direction of the camera ray
+        An instance of a naive NeRF model architecture; 
+        6 inputs (position and direction) 
+        n_hidden layers with hidden_dim neurons each
+        4 outputs (rgb and density)
         """
         super().__init__()
         self.n_hidden = n_hidden
         self.hidden_dim = hidden_dim
 
-        # Creates the first module of the network 
-        self.model = self.contruct_model_density(6,
-                                                self.hidden_dim,
-                                                4)
+        # Define the naive model 
+        self.model = self.contruct_model(6,
+                                        self.hidden_dim,
+                                        4)
         self.relu = nn.ReLU(inplace=True)
         self.softplus = nn.Softplus(threshold=8)
         self.sigmoid = nn.Sigmoid()
@@ -48,7 +41,7 @@ class NerfModel(nn.Module):
 
         return density, rgb
 
-    def contruct_model_density(self, input_dim: int, hidden_dim: int, output_dim: int) -> nn.Module:
+    def contruct_model(self, input_dim: int, hidden_dim: int, output_dim: int) -> nn.Module:
         """
         Creates a FFNN with n_hidden layers and fits the input and output dimensionality.
         The activation function is ReLU 
@@ -63,10 +56,10 @@ class NerfModel(nn.Module):
             
             # Create n_hidden identical layers 
             for _ in range(self.n_hidden-1):
-                intermediate_layers += [nn.ReLU(True), nn.Linear(hidden_dim, hidden_dim)]
+                intermediate_layers += [self.relu, nn.Linear(hidden_dim, hidden_dim)]
 
             # Concatenate the layers into one sequential
-            return nn.Sequential(layer1, *intermediate_layers, nn.ReLU(True), layer2)
+            return nn.Sequential(layer1, *intermediate_layers, self.relu, layer2)
 
 
 class NerfNaive(pl.LightningModule):
@@ -94,7 +87,7 @@ class NerfNaive(pl.LightningModule):
         self.learning_rate_decay = learning_rate_decay
         self.weight_decay = weight_decay
         
-        # The intere model 
+        # The model 
         self.model = NerfModel(
             n_hidden=10,
             hidden_dim=256
@@ -104,7 +97,7 @@ class NerfNaive(pl.LightningModule):
 
     def _sample_t(self, batch_size: int) -> th.Tensor:
         """
-        Sample t for sampling. Divides interval into equally sized bins, and samples a random point in each bin.
+        Sample t for sampling along the rays. Divides interval into equally sized bins, and samples a random point in each bin.
 
         Parameters:
         -----------
@@ -114,7 +107,7 @@ class NerfNaive(pl.LightningModule):
         -----------
             t: Tensor of shape (batch_size, samples_per_ray)
         """
-        # n = samples_per_ray_coarse 
+        # n = samples_per_ray
         # Calculate the interval size (divide far - near into n bins)
         interval_size = (self.far_sphere_normalized - self.near_sphere_normalized) / self.samples_per_ray
         
@@ -190,8 +183,7 @@ class NerfNaive(pl.LightningModule):
 
         """
 
-        # Get the negative Optical Density 
-        # blocking_neg = 3*(-densities * distances)/(th.sum(densities * distances, dim=1).unsqueeze(-1) + 1e-10)
+        # Get the negative Optical Density (needs to be weighted up, because the scene is small)
         blocking_neg = (-densities * distances)*3*MAGIC_NUMBER
         # Get the absorped light over each ray segment 
         alpha = 1 - th.exp(blocking_neg)
@@ -221,8 +213,8 @@ class NerfNaive(pl.LightningModule):
 
         Parameters:
         -----------
-            model: The model to use for computing the color (either the coarse or fine model)
-            t: Tensor of shape (batch_size, samples_per_ray) - the t values to compute the positions for. (output of _sample_t_coarse or _sample_t_fine)
+            model: The model to use for computing the color 
+            t: Tensor of shape (batch_size, samples_per_ray) - the t values to compute the positions for.
             ray_origs: Tensor of shape (batch_size, 3) - camera position, i.e. origin in camera coordinates
             ray_dirs: Tensor of shape (batch_size, 3) - direction vectors (unit vectors) of the viewing directions
             batch_size: int - the batch size
