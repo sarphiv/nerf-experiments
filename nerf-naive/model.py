@@ -248,7 +248,7 @@ class NerfNaive(pl.LightningModule):
 
 
 
-    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> th.Tensor:
+    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, None]:
         """
         Forward pass of the model.
         Given the ray origins and directions, compute the rgb values for the given rays.
@@ -271,14 +271,14 @@ class NerfNaive(pl.LightningModule):
 
         #compute rgb
         rgb, _, _ = self._compute_color(self.model,
-                                                    t_coarse,
-                                                    ray_origs,
-                                                    ray_dirs,
-                                                    batch_size,
-                                                    self.samples_per_ray)
+                                        t_coarse,
+                                        ray_origs,
+                                        ray_dirs,
+                                        batch_size,
+                                        self.samples_per_ray)
         
         # Return colors for the given pixel coordinates (batch_size, 3)
-        return rgb
+        return rgb, None
 
 
     ############ pytorch lightning functions ############
@@ -287,14 +287,26 @@ class NerfNaive(pl.LightningModule):
         """
         general function for training and validation step
         """
+        # Get the image/rays to render
         ray_origs, ray_dirs, ray_colors = batch
         
-        ray_colors_pred = self(ray_origs, ray_dirs)
+        # Compute the rgb values for each ray with the model (there is only one model hence the [0]) 
+        ray_colors_pred = self(ray_origs, ray_dirs)[0]
 
-        loss = nn.functional.mse_loss(ray_colors_pred, ray_colors)
-        self.log(f"{stage}_loss", loss*2)
+        # Calculate loss
+        radiance_loss = nn.functional.mse_loss(ray_colors_pred, ray_colors)
+        
+        # Calculate PSNR
+        # NOTE: Cannot calculate SSIM because it relies on image patches
+        # NOTE: Cannot calculate LPIPS because it relies on image patches
+        psnr = -10 * th.log10(radiance_loss)
 
-        return loss
+        # Log metrics
+        self.log_dict({
+            f"{stage}_radiance_loss": radiance_loss,
+            f"{stage}_psnr": psnr,
+        })
+        return radiance_loss
 
     def training_step(self, batch: DatasetOutput, batch_idx: int):
         return self._step_helpher(batch, batch_idx, "train")
