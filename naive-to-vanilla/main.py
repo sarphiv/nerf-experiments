@@ -1,4 +1,5 @@
 from math import log2
+import argparse
 
 import pytorch_lightning as pl
 import torch as th
@@ -14,6 +15,16 @@ from model_interpolation import NerfInterpolation
 
 
 if __name__ == "__main__":
+    # Parse arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--use_fourier', type=bool, default=True, help='Whether to use Fourier features or not')
+    parser.add_argument('--use_proposal', type=bool, default=True, help='Whether to have a proposal network or not')
+    parser.add_argument('--delayed_direction', type=bool, default=True, help='When the directional input is feed to the network')
+    parser.add_argument('--delayed_density', type=bool, default=True, help='When the network outputs the density')
+    parser.add_argument('--n_segments', type=int, default=2, help='Number of times the positional data is feed to the network')
+    parser.add_argument('--n_hidden', type=int, default=4, help='Number of hidden layers')
+    args = parser.parse_args()
+
     # Set seeds
     pl.seed_everything(1337)
 
@@ -30,8 +41,8 @@ if __name__ == "__main__":
     BATCH_SIZE = 1024*2
     
     dm = ImagePoseDataModule(
-        image_width=80,
-        image_height=80,
+        image_width=800,
+        image_height=800,
         scene_path="../data/lego",
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
@@ -103,13 +114,13 @@ if __name__ == "__main__":
     model = NerfInterpolation(
         near_sphere_normalized=1/10,
         far_sphere_normalized=1/3,
-        samples_per_ray = 64 + 192,
-        n_hidden = 8,
-        fourier = (True, 10, 4), 
-        proposal = (True, 64),
-        delayed_direction = True, 
-        delayed_density = False, 
-        n_segments = 2,
+        samples_per_ray=64 + 192,
+        n_hidden=args.n_hidden,
+        fourier=(args.use_fourier, 10, 4),
+        proposal=(args.use_proposal, 64),
+        delayed_direction=args.delayed_direction,
+        delayed_density=args.delayed_density,
+        n_segments=args.n_segments,
         learning_rate=5e-4,
         learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
         weight_decay=0
