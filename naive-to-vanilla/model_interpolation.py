@@ -69,7 +69,7 @@ class NerfModel(nn.Module):
             directional_dim = 3 
         
         # Create list of model segments
-        self.model_segments = []
+        self.model_segments = nn.ModuleList()
         for i in range(self.n_segments):
             # Create the model segment
             input_size = positional_dim + (not self.delayed_direction)*directional_dim + (i>0)*self.hidden_dim
@@ -104,7 +104,7 @@ class NerfModel(nn.Module):
                 z = th.cat((z, dir), dim=1)
             z = model_segment(th.cat((z, pos), dim=1))
             if i < self.n_segments-1:
-                z = self.relu(pos)
+                z = self.relu(z)
 
         # If the density is delayed then the last value is the density and should not be used
         length = z.shape[1] 
@@ -151,6 +151,12 @@ class NerfModel(nn.Module):
             # Concatenate the layers into one sequential
             return nn.Sequential(layer1, *intermediate_layers, nn.ReLU(True), layer2)
 
+    def list_segments(self):
+        # Iterate through the ModuleList and list its segments
+        for i, segment in enumerate(self.model_segments):
+            print(f"Segment {i}: {segment}")
+        
+        print(f"Final layer: {self.model_color}")
 
 class NerfInterpolation(pl.LightningModule):
     def __init__(
@@ -188,6 +194,10 @@ class NerfInterpolation(pl.LightningModule):
             delayed_direction=delayed_direction,
             delayed_density=delayed_density,
             n_segments=n_segments)
+        
+        # TODO REMOVE FOR DEBUGGING 
+        print(f"Model: Coarse")
+        self.model_coarse.list_segments()
 
         # If there is a proposal network separate the samples into coarse and fine sampling
         self.proposal = proposal[0]
@@ -203,6 +213,11 @@ class NerfInterpolation(pl.LightningModule):
                 delayed_direction=delayed_direction,
                 delayed_density=delayed_density,
                 n_segments=n_segments)
+            
+            # TODO REMOVE FOR DEBUGGING 
+            print(f"Model: Fine")
+            self.model_coarse.list_segments()
+
         else: 
             self.samples_per_ray_coarse = samples_per_ray
             self.samples_per_ray_fine = 0
@@ -484,7 +499,7 @@ class NerfInterpolation(pl.LightningModule):
         ray_origs, ray_dirs, ray_colors = batch
         
         # Compute the rgb values for the given rays for both models
-        ray_colors_pred_coarse, ray_colors_pred_fine = self(ray_origs, ray_dirs)
+        ray_colors_pred_fine, ray_colors_pred_coarse = self(ray_origs, ray_dirs)
 
         # Compute the individual losses
         proposal_loss = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors)
