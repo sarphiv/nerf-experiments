@@ -34,3 +34,12 @@ class LogEpochFraction(Callback):
             self.metric_name,
             trainer.current_epoch + batch_idx/trainer.num_training_batches
         )
+
+    @th.no_grad()
+    def on_validation_batch_start(self, trainer: pl.Trainer, model: pl.LightningModule, batch: th.Tensor, batch_idx: int) -> None:
+        # Log epoch fraction
+        model.log(
+            self.metric_name,
+            trainer.current_epoch + 1 + (batch_idx/max(trainer.num_val_batches) - 1)/trainer.num_training_batches
+        )
+
