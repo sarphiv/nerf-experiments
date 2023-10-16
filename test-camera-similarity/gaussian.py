@@ -1,11 +1,12 @@
 import torch as th
 import torch.nn as nn
+from typing import cast, Callable
 
 
 class GaussActivation(th.autograd.Function):
 
     @staticmethod
-    def forward(ctx, x, variance):
+    def forward(ctx, x, variance) -> th.Tensor:
         # Save parameters
         ctx.save_for_backward(x, variance)
 
@@ -29,23 +30,59 @@ class GaussActivation(th.autograd.Function):
 
 
 class GaussAct(nn.Module):
-    def __init__(self, variance_initial: float):
+    def __init__(self, initial_values: Callable):
         # Initialize parameters
-        if isinstance(variance_initial, int):
-            variance_initial = float(variance_initial)
-
-        if not isinstance(variance_initial, float):
-            raise TypeError("Variance must be either a float or a tensor.")
-        
-        if variance_initial <= 0:
-            raise ValueError("Variance must be positive.")
-
         super().__init__()
-        self.variance = nn.Parameter(th.tensor(variance_initial))
-        # NOTE: Need the softplus to ensure variance is positive
-        self.softplus = nn.Softplus(10)
+        #NOTE: negative standard_deviation is allowed to be negative as we only ever use var = std**2
+        self.act_var = lambda x: x**2 + 1e-6
         self.func = GaussActivation.apply
-        
+        self.standard_deviation = None
+        self.initial_values = initial_values
+        self.loss: th.Tensor = th.tensor(0)
+        self.register_full_backward_pre_hook(hook=GaussAct.hook)
 
-    def forward(self, x: th.Tensor):
-        return self.func(x, self.variance)
+    def setup(self, x: th.Tensor):
+        self.standard_deviation = nn.Parameter(self.initial_values(x.shape[1:]))
+    
+    @property
+    def variance(self) -> th.Tensor:
+        return self.act_var(self.standard_deviation)
+    
+    @staticmethod
+    def hook(module, grad_output):
+        module.loss = th.tensor(0)
+
+    # def forward(self, x: th.Tensor, scale=0.) -> th.Tensor:
+    #     if self.standard_deviation is None:
+    #         self.setup(x)
+    #     var = self.variance
+    #     self.loss = self.loss + th.mean((x - th.sqrt(var))**2)
+
+    #     return cast(th.Tensor, self.func(x, var))
+
+    def forward(self, x: th.Tensor, scale=0.) -> th.Tensor:
+        if self.standard_deviation is None:
+            self.setup(x)
+        var = self.variance
+        freq_represent = 1/(6*th.sqrt(var))
+        if scale == 0:
+            weight = 1.
+        else:
+            freq_scale = 1/scale
+            weight = (1 - th.cos(th.pi*(freq_represent-freq_scale*2)/(freq_scale)))/2
+            weight[freq_represent < freq_scale] = 1.
+            weight[freq_represent > freq_scale*2] = 0.
+
+        return cast(th.Tensor, self.func(x, var))*weight
+    
+if __name__ == "__main__":
+        freq_represent = th.linspace(0, 1, 1000)
+        freq_scale = 0.5
+        m1 = (freq_represent > freq_scale) & (freq_represent < freq_scale*2)
+        m2 = (freq_represent > freq_scale/2) & (freq_represent < freq_scale)
+        weight = th.zeros_like(freq_represent)
+        weight[m1] = (1 - th.cos(th.pi*(freq_represent[m1]-freq_scale*2)/(freq_scale)))/2
+        weight[m2] = (1 - th.cos(th.pi*(freq_represent[m2]-freq_scale/2)/(freq_scale/2)))/2
+        import matplotlib.pyplot as plt
+        plt.plot(freq_represent, weight)
+        plt.show()
