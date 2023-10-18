@@ -43,7 +43,7 @@ if __name__ == "__main__":
 
     trainer = pl.Trainer(
         accelerator="auto",
-        max_epochs=100,
+        max_epochs=20,
         precision="16-mixed",
         logger=wandb_logger,
         callbacks=[
@@ -75,22 +75,25 @@ if __name__ == "__main__":
 
 
     # Set up model
-    LEARNING_RATE_START = 5e-4
-    LEARNING_RATE_STOP = 5e-5
-    LEARNING_RATE_DECAY: float = 2**(log2(LEARNING_RATE_STOP/LEARNING_RATE_START) / trainer.max_epochs), # type: ignore
+    PROPOSAL_LEARNING_RATE_START = 5e-3
+    PROPOSAL_LEARNING_RATE_STOP = 5e-6
+    PROPOSAL_LEARNING_RATE_DECAY: float = 2**(log2(PROPOSAL_LEARNING_RATE_STOP/PROPOSAL_LEARNING_RATE_START) / trainer.max_epochs), # type: ignore
+    RADIANCE_LEARNING_RATE_START = 5e-5
+    RADIANCE_LEARNING_RATE_STOP = 5e-6
+    RADIANCE_LEARNING_RATE_DECAY: float = 2**(log2(RADIANCE_LEARNING_RATE_STOP/RADIANCE_LEARNING_RATE_START) / trainer.max_epochs), # type: ignore
 
     model = Garf(
         near_plane=2,
         far_plane=7,
         proposal_samples_per_ray=64,
         radiance_samples_per_ray=192,
-        gaussian_init_min=0.,
-        gaussian_init_max=2.,
-        proposal_learning_rate=LEARNING_RATE_START,
-        proposal_learning_rate_decay=LEARNING_RATE_DECAY,
+        gaussian_init_min=1/2.,
+        gaussian_init_max=12.,
+        proposal_learning_rate=PROPOSAL_LEARNING_RATE_START,
+        proposal_learning_rate_decay=PROPOSAL_LEARNING_RATE_DECAY,
         proposal_weight_decay=0,
-        radiance_learning_rate=LEARNING_RATE_START,
-        radiance_learning_rate_decay=LEARNING_RATE_DECAY,
+        radiance_learning_rate=RADIANCE_LEARNING_RATE_START,
+        radiance_learning_rate_decay=RADIANCE_LEARNING_RATE_DECAY,
         radiance_weight_decay=0,
     )
 
