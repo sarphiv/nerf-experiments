@@ -10,10 +10,48 @@ import torch as th
 import torchvision as tv
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset, Subset
+import math
 
 
 DatasetOutput = tuple[th.Tensor, th.Tensor, th.Tensor]
 
+def exponential_quality_function(start_quality: float, end_epoch: int):
+    a = start_quality
+    b = -math.log(start_quality)/end_epoch
+    # a = -1 + start_quality
+    # b = math.log(2-start_quality)/end_epoch
+    f = lambda epoch: a*math.exp(b*epoch)
+    return f
+
+def linear_quality_function(start_quality: float, end_epoch: int):
+    f = lambda epoch: start_quality + (1 - start_quality) * epoch / end_epoch
+    return f
+
+class QualityScheduler:
+    def __init__(self, quality_function: Callable[[int],float] = lambda epoch: 1.):
+        """
+        Image quality scheduler
+        
+        Parameters:
+        ----------
+        quality_fuction: Callable that maps epoch to a quality, where
+                         quality is a float grater than zero. It can be greater than
+                         1, but it will be clipped, so it is ignored if
+                         it is not in the interval [0,1]
+        
+        """
+        self.quality_function = quality_function
+        self.epoch = 0
+        self.quality = 0.
+    
+    def step(self):
+        """
+        Step the scheduler
+        This evaluates and clips the quality function at the current epoch, and then 
+        it increments the epoch by one.
+        """
+        self.quality = max(0, min(1., self.quality_function(self.epoch)))
+        self.epoch += 1
 
 class ImagePoseDataset(Dataset[DatasetOutput]):
 
@@ -175,6 +213,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         image_height: int,
         validation_fraction: float = 1.0,
         validation_fraction_shuffle: Literal["disabled", "random"] | int = "disabled",
+        quality_scheduler: QualityScheduler = QualityScheduler(),
         *dataloader_args, **dataloader_kwargs
     ):
         """Initialize the data module.
@@ -187,6 +226,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
             validation_fraction_shuffle (Literal["disabled", "random"] | int, optional): Whether to shuffle the validation data. 
                 If "disabled", validation data is not shuffled. If "random", validation data is shuffled randomly. 
                 If an integer, validation data is shuffled using the given random seed. Defaults to "disabled".
+            quality_scheduler: QualitySchedyler. Scheduler that updates the warmup quality.
             *args (Any): Additional arguments to pass to data loaders.
             **kwargs (Any): Additional keyword arguments to pass to data loaders.
         """
@@ -200,6 +240,8 @@ class ImagePoseDataModule(pl.LightningDataModule):
 
         self.validation_fraction = validation_fraction
         self.validation_fraction_shuffle = validation_fraction_shuffle
+
+        self.quality_scheduler = quality_scheduler
 
         self.dataloader_args = dataloader_args
         self.dataloader_kwargs = dataloader_kwargs
@@ -216,9 +258,17 @@ class ImagePoseDataModule(pl.LightningDataModule):
         Returns:
             ImagePoseDataset: Dataset for given purpose.
         """
+
+        # step the quality_scheduler if a new traning training loop is started 
+        # (i.e. _get_dataset is called with purpose "train")
+        if purpose == "train":
+            self.quality_scheduler.step()
+            self._dataset_val_cache = None
+            self._dataset_val_cache_settings = None
+
         dataset = ImagePoseDataset(
-            image_width=self.image_width,
-            image_height=self.image_height,
+            image_width=int(self.quality_scheduler.quality*self.image_width), # use quality from shceduler
+            image_height=int(self.quality_scheduler.quality*self.image_height), # use quality from shceduler
             images_path=os.path.join(self.scene_path, purpose).replace("\\", "/"),
             pose_path=os.path.join(self.scene_path, f"transforms_{purpose}.json").replace("\\", "/"),
             space_transform=self.space_transform
@@ -264,6 +314,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
 
 
     def train_dataloader(self):
+        self.dataset_train = self._get_dataset('train') #get new traning set
         return DataLoader(
             self.dataset_train,
             *self.dataloader_args,
@@ -280,6 +331,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
             dataset = self._dataset_val_cache
         # Else, create new validation dataset
         else:
+            self.dataset_val = self._get_dataset('val') # new validation set, if not val cache
             # Get length of validation dataset fraction
             # NOTE: Doing it on a image basis, not a ray basis
             validation_size = int(len(self.dataset_val.dataset) * self.validation_fraction)
@@ -327,6 +379,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
 
     def test_dataloader(self):
         args, kwargs = self._disable_shuffle_arg(self.dataloader_args, self.dataloader_kwargs)
+        self.dataset_test = self._get_dataset('test') # you know it
         return DataLoader(
             self.dataset_test,
             *args,

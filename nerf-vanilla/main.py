@@ -5,7 +5,10 @@ import torch as th
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger  # type: ignore
 
-from data_module import ImagePoseDataModule
+from data_module import (ImagePoseDataModule,
+                         QualityScheduler,
+                         linear_quality_function,
+                         exponential_quality_function,)
 from image_logger import Log2dImageReconstruction
 from model import NerfOriginal
 
@@ -19,12 +22,15 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="og-vanilla_(False, False) = (mid-fine, mid-coarse)"
+        name="og-vanilla_testing_warmup"
     )
 
 
     # Set up data module
     BATCH_SIZE = 1024*2
+
+    # instantiate warmup quality scheduler.
+    quality_scheduler = QualityScheduler(exponential_quality_function(0.05, 15))
     
     dm = ImagePoseDataModule(
         image_width=800,
@@ -32,6 +38,7 @@ if __name__ == "__main__":
         scene_path="../data/lego",
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
+        quality_scheduler=quality_scheduler,
         batch_size=BATCH_SIZE,
         num_workers=4,
         shuffle=True,
@@ -44,6 +51,7 @@ if __name__ == "__main__":
         accelerator="auto",
         max_epochs=256,
         precision="16-mixed",
+        reload_dataloaders_every_n_epochs=1, # used to update the dataloaders every epoch.
         logger=wandb_logger,
         callbacks=[
             Log2dImageReconstruction(
