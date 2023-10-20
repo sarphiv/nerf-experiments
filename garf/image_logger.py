@@ -78,7 +78,7 @@ class Log2dImageReconstruction(Callback):
         self.metric_name = metric_name
 
         # Calculate next reconstruction step
-        self.reconstruction_point = self._get_next_delay(0)
+        self._reconstruction_milestone = self._get_next_delay(0)
 
 
     def _get_next_delay(self, step: float | int) -> float:
@@ -114,11 +114,11 @@ class Log2dImageReconstruction(Callback):
             return
 
         # If not at the right step, return
-        if step < self.reconstruction_point:
+        if step < self._reconstruction_milestone:
             return
 
         # Update reconstruction step and reconstruct
-        self.reconstruction_point = step + self._get_next_delay(step)
+        self._reconstruction_milestone = step + self._get_next_delay(step)
 
 
         # Retrieve validation dataset from trainer

@@ -28,8 +28,8 @@ if __name__ == "__main__":
     BATCH_SIZE = 1024*2
     
     dm = ImagePoseDataModule(
-        image_width=800,
-        image_height=800,
+        image_width=50,
+        image_height=50,
         scene_path="../data/lego",
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
@@ -75,12 +75,15 @@ if __name__ == "__main__":
 
 
     # Set up model
-    PROPOSAL_LEARNING_RATE_START = 5e-3
+    # NOTE: Period is in epoch fractions
+    PROPOSAL_LEARNING_RATE_START = 5e-4
     PROPOSAL_LEARNING_RATE_STOP = 5e-6
-    PROPOSAL_LEARNING_RATE_DECAY: float = 2**(log2(PROPOSAL_LEARNING_RATE_STOP/PROPOSAL_LEARNING_RATE_START) / trainer.max_epochs), # type: ignore
-    RADIANCE_LEARNING_RATE_START = 5e-5
-    RADIANCE_LEARNING_RATE_STOP = 5e-6
-    RADIANCE_LEARNING_RATE_DECAY: float = 2**(log2(RADIANCE_LEARNING_RATE_STOP/RADIANCE_LEARNING_RATE_START) / trainer.max_epochs), # type: ignore
+    PROPOSAL_LEARNING_RATE_PERIOD = 1.2
+    PROPOSAL_LEARNING_RATE_DECAY: float = 2**(log2(PROPOSAL_LEARNING_RATE_STOP/PROPOSAL_LEARNING_RATE_START) * PROPOSAL_LEARNING_RATE_PERIOD/trainer.max_epochs) # type: ignore
+    RADIANCE_LEARNING_RATE_START = 5e-2
+    RADIANCE_LEARNING_RATE_STOP = 5e-5
+    RADIANCE_LEARNING_RATE_PERIOD = 1.0
+    RADIANCE_LEARNING_RATE_DECAY: float = 2**(log2(RADIANCE_LEARNING_RATE_STOP/RADIANCE_LEARNING_RATE_START) * RADIANCE_LEARNING_RATE_PERIOD/trainer.max_epochs) # type: ignore
 
     model = Garf(
         near_plane=2,
@@ -91,9 +94,11 @@ if __name__ == "__main__":
         gaussian_init_max=12.,
         proposal_learning_rate=PROPOSAL_LEARNING_RATE_START,
         proposal_learning_rate_decay=PROPOSAL_LEARNING_RATE_DECAY,
+        proposal_learning_rate_period=PROPOSAL_LEARNING_RATE_PERIOD,
         proposal_weight_decay=0,
         radiance_learning_rate=RADIANCE_LEARNING_RATE_START,
         radiance_learning_rate_decay=RADIANCE_LEARNING_RATE_DECAY,
+        radiance_learning_rate_period=RADIANCE_LEARNING_RATE_PERIOD,
         radiance_weight_decay=0,
     )
 

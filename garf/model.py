@@ -21,10 +21,12 @@ class Garf(pl.LightningModule):
         gaussian_init_max: float = 1.0,
         proposal_learning_rate: float = 1e-4,
         proposal_learning_rate_decay: float = 0.5,
+        proposal_learning_rate_period: float = 0.4,
         proposal_weight_decay: float = 0.0,
         radiance_learning_rate: float = 1e-4,
         radiance_learning_rate_decay: float = 0.5,
-        radiance_weight_decay: float = 0.0
+        radiance_learning_rate_period: float = 0.4,
+        radiance_weight_decay: float = 0.0,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -45,9 +47,12 @@ class Garf(pl.LightningModule):
         # Hyper parameters for the network training
         self.proposal_learning_rate = proposal_learning_rate
         self.proposal_learning_rate_decay = proposal_learning_rate_decay
+        self.proposal_learning_rate_period = proposal_learning_rate_period
         self.proposal_weight_decay = proposal_weight_decay
+        
         self.radiance_learning_rate = radiance_learning_rate
         self.radiance_learning_rate_decay = radiance_learning_rate_decay
+        self.radiance_learning_rate_period = radiance_learning_rate_period
         self.radiance_weight_decay = radiance_weight_decay
 
         # Proposal network estimates sampling density
@@ -68,6 +73,8 @@ class Garf(pl.LightningModule):
 
         # Enable manual optimization because using multiple optimizers
         self.automatic_optimization = False
+        self._proposal_learning_rate_milestone = proposal_learning_rate_period
+        self._radiance_learning_rate_milestone = radiance_learning_rate_period
 
 
 
@@ -291,6 +298,19 @@ class Garf(pl.LightningModule):
             self.manual_backward(loss, retain_graph=True)
             optimizer.step()
 
+
+        # Step learning rate schedulers
+        epoch_fraction = self.trainer.current_epoch + batch_idx/self.trainer.num_training_batches
+
+        if epoch_fraction >= self._proposal_learning_rate_milestone:
+            self._proposal_learning_rate_milestone += self.proposal_learning_rate_period
+            self._proposal_learning_rate_scheduler.step()
+
+        if epoch_fraction >= self._radiance_learning_rate_milestone:
+            self._radiance_learning_rate_milestone += self.radiance_learning_rate_period
+            self._radiance_learning_rate_scheduler.step()
+
+
         # Return summed loss
         return sum(losses)
 
@@ -310,30 +330,33 @@ class Garf(pl.LightningModule):
 
     def configure_optimizers(self):
         # Set up proposal optimizers
-        proposal_optimizer = th.optim.Adam(
+        self._proposal_optimizer = th.optim.Adam(
             self.proposal_network.parameters(), 
             lr=self.proposal_learning_rate, 
             weight_decay=self.proposal_weight_decay,
         )
-        proposal_scheduler = th.optim.lr_scheduler.ExponentialLR(
-            proposal_optimizer, 
+        self._proposal_learning_rate_scheduler = th.optim.lr_scheduler.ExponentialLR(
+            self._proposal_optimizer, 
             gamma=self.proposal_learning_rate_decay
         )
         
         # Set up radiance optimizers
-        radiance_optimizer = th.optim.Adam(
+        self._radiance_optimizer = th.optim.Adam(
             self.radiance_network.parameters(), 
             lr=self.radiance_learning_rate, 
             weight_decay=self.radiance_weight_decay,
         )
-        radiance_scheduler = th.optim.lr_scheduler.ExponentialLR(
-            radiance_optimizer, 
+        self._radiance_learning_rate_scheduler = th.optim.lr_scheduler.ExponentialLR(
+            self._radiance_optimizer, 
             gamma=self.radiance_learning_rate_decay
         )
 
 
         # Set optimizers and schedulers
         # NOTE: Assuming losses are ordered according to associated optimizer
-        return [proposal_optimizer, radiance_optimizer], [proposal_scheduler, radiance_scheduler]
+        return (
+            [self._proposal_optimizer, self._radiance_optimizer], 
+            [self._proposal_learning_rate_scheduler, self._radiance_learning_rate_scheduler]
+        )
 
 
