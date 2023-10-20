@@ -21,7 +21,7 @@ scales_test = th.tensor([[5., 2.5, ],[0.5, th.nan]])
 size_train = lambda: int(th.randint(10, 100, (1,)).int().item())
 x_train_func = lambda size: th.rand(size, 1)*40 - 20 + th.rand(size, 1)*8 - 4
 
-initial_values_func = lambda shape: th.rand(shape)*3 + 0.5
+initial_values_func = lambda shape: th.rand(shape)*10 + 0.5
 model = GaussActMLP(n_hidden, 1, 1, hidden_dim, initial_values_func)
 
 optimizer_gauss = th.optim.Adam(model.parameters(), lr=0.001)

@@ -55,7 +55,7 @@ class GaussAct(nn.Module):
 
     def forward(self, x: th.Tensor, scale=0.) -> th.Tensor:
         var_inv = self.act_param(self.param)
-        freq_represent = th.sqrt(var_inv)/10
+        freq_represent = th.sqrt(var_inv)/6
         if scale == 0:
             weight = 1.
         else:
