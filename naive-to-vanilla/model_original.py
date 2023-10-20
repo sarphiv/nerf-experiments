@@ -24,7 +24,6 @@ class FourierFeatures(nn.Module):
         x_i in [-0.5, 0.5] -> function(x_i * pi * 2^j) for function in (cos, sin) for j in [0, levels-1]
         """
         scale = self.scale*(2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
-        # scale = (2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
         args = x.repeat_interleave(self.levels, dim=1) * scale
 
         return th.hstack((th.cos(args), th.sin(args)))
@@ -132,9 +131,7 @@ class NerfOriginal(pl.LightningModule):
         fourier_levels_dir: int,
         learning_rate: float = 1e-4,
         learning_rate_decay: float = 0.5,
-        weight_decay: float = 0.0,
-        query_coarse_middle: bool = False,
-        query_fine_middle: bool = False,
+        weight_decay: float = 0.0
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -151,10 +148,6 @@ class NerfOriginal(pl.LightningModule):
         self.learning_rate = learning_rate
         self.learning_rate_decay = learning_rate_decay
         self.weight_decay = weight_decay
-
-        # Whether to query network in the middle of the samples
-        self.query_coarse_middle = query_coarse_middle
-        self.query_fine_middle = query_fine_middle
         
         # Coarse model -> only job is to find out where to sample more by predicting the density
         self.model_coarse = NerfModel(
@@ -172,8 +165,28 @@ class NerfOriginal(pl.LightningModule):
             fourier_levels_dir=fourier_levels_dir
         )
 
+    def _get_intervals(self, t: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+        """
+        From t-values get the t corresponding to the start and end of the bins.
+        
+        Parameters:
+        -----------
+            t: Tensor of shape (batch_size, samples_per_ray) - the t values to compute the positions for.
+            
+        Returns:
+        --------
+            t_start: Tensor of shape (batch_size, samples_per_ray) - the t value for the begining of the bin
+            t_end: Tensor of shape (batch_size, samples_per_ray) - the t value for the end of the bin
+        """
+        t_start = t 
+        t_end = th.zeros_like(t, device=self.device)
+        t_end[:,:-1] = t[:, 1:].clone()
+        t_end[:,-1] = self.far_sphere_normalized
 
-    def _sample_t_coarse(self, batch_size: int) -> th.Tensor:
+        return t_start, t_end
+
+
+    def _sample_t_coarse(self, batch_size: int) -> tuple[th.Tensor, th.Tensor]:
         """
         Sample t for coarse sampling. Divides interval into equally sized bins, and samples a random point in each bin.
 
@@ -183,7 +196,8 @@ class NerfOriginal(pl.LightningModule):
 
         Returns:
         -----------
-            t_coarse: Tensor of shape (batch_size, samples_per_ray)
+            t_start: Tensor of shape (batch_size, samples_per_ray) - start of the t-bins
+            t_end: Tensor of shape (batch_size, samples_per_ray) - end of the t-bins
         """
         # n = samples_per_ray_coarse 
         # Calculate the interval size (divide far - near into n bins)
@@ -200,72 +214,56 @@ class NerfOriginal(pl.LightningModule):
         # Perturb sample positions to be anywhere in each interval
         t_coarse += th.rand_like(t_coarse, device=self.device) * interval_size
 
-        return t_coarse
+        return self._get_intervals(t_coarse)
     
 
-    def _sample_t_fine(self, t_coarse: th.Tensor, weights: th.Tensor, distances_coarse: th.Tensor, linspace=False) -> th.Tensor:
+    def _sample_t_fine(self, t_coarse: th.Tensor, weights: th.Tensor, distances_coarse: th.Tensor) ->  tuple[th.Tensor, th.Tensor]:
         """
         Using the coarsely sampled t values to decide where to sample more densely. 
         The weights express how large a percentage of the light is blocked by that specific segment, hence that percentage of the new samples should be in that segment.
 
-        Sampling with linspace means that there will be sampled weight*samples_per_ray_fine points with equal distance in each segment.
-        The alternative (multinomial sampling) samples samples_per_ray_fine points, where the probability of sampling a point from a segment the weight of that segment
-        and the location to sample is random within that segment
-
         Parameters:
         -----------
-            t_coarse:           Tensor of shape (batch_size, samples_per_ray_coarse)
+            t_coarse:           Tensor of shape (batch_size, samples_per_ray_coarse) - the t-values for the beginning of each bin
             weights:            Tensor of shape (batch_size, samples_per_ray_coarse) (these are assumed to almost sum to 1)
             distances_coarse:   Tensor of shape (batch_size, samples_per_ray_coarse)
-            linspace:           bool - whether to use linspace instead of multinomial sampling
         
         Returns:
         --------
-            t_fine:             Tensor of shape (batch_size, samples_per_ray_coarse + samples_per_ray_fine) (so it contains the t_coarse sample points as well)
+            t_start:            Tensor of shape (batch_size, samples_per_ray) - start of the t-bins
+            t_end:              Tensor of shape (batch_size, samples_per_ray) - end of the t-bins
         
         """
         # Initialization 
         batch_size = t_coarse.shape[0]
         device = t_coarse.device
 
-        if linspace:
-            # Each segment needs weight*samples_per_ray_fine new samples plus 1 because of the coarse sample 
-            fine_samples = th.round(weights*self.samples_per_ray_fine)
-            # Rounding might cause the sum to be less than or larger than samples_per_ray_fine, so we add the difference to the largest segment (especially since weights don't sum all the way to 1)
-            fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += self.samples_per_ray_fine - fine_samples.sum(dim=1)
-            fine_samples += 1
-            fine_samples_cum_sum = th.hstack((th.zeros(batch_size, 1, device=device), fine_samples.cumsum(dim=1)))
-            
-            # Instanciate the t_fine tensor and arange is used to mask the correct t values for each batch
-            arange = th.arange(self.samples_per_ray_fine + self.samples_per_ray_coarse, device=device).unsqueeze(0)
-            t_fine = th.zeros(batch_size, self.samples_per_ray_fine + self.samples_per_ray_coarse, device=device)
+        # Each segment needs weight*samples_per_ray_fine new samples plus 1 because of the coarse sample 
+        fine_samples = th.round(weights*self.samples_per_ray_fine)
+        # Rounding might cause the sum to be less than or larger than samples_per_ray_fine, so we add the difference to the largest segment (especially since weights don't sum all the way to 1)
+        fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += self.samples_per_ray_fine - fine_samples.sum(dim=1)
+        fine_samples += 1
+        fine_samples_cum_sum = th.hstack((th.zeros(batch_size, 1, device=device), fine_samples.cumsum(dim=1)))
+        
+        # Instanciate the t_fine tensor and arange is used to mask the correct t values for each batch
+        arange = th.arange(self.samples_per_ray_fine + self.samples_per_ray_coarse, device=device).unsqueeze(0)
+        t_fine = th.zeros(batch_size, self.samples_per_ray_fine + self.samples_per_ray_coarse, device=device)
 
-            for i in range(self.samples_per_ray_coarse):
-                # Pick out the samples for each segment, everything within cumsum[i] and cumsum[i+1] is in segment i because the difference is the new samples
-                # This mask is for each ray in the batch 
-                mask = (arange >= fine_samples_cum_sum[:, i].unsqueeze(-1)) & (arange < fine_samples_cum_sum[:, i+1].unsqueeze(-1))
-                # Set samples to be the coarsely sampled point 
-                t_fine += t_coarse[:, i].unsqueeze(-1)*mask
-                # And spread them out evenly in the segment by deviding the length of the segment with the amount of samples in that segment
-                t_fine += (arange - fine_samples_cum_sum[:, i].unsqueeze(-1))*mask*distances_coarse[:, i].unsqueeze(-1)/fine_samples[:, i].unsqueeze(-1)
+        for i in range(self.samples_per_ray_coarse):
+            # Pick out the samples for each segment, everything within cumsum[i] and cumsum[i+1] is in segment i because the difference is the new samples
+            # This mask is for each ray in the batch 
+            mask = (arange >= fine_samples_cum_sum[:, i].unsqueeze(-1)) & (arange < fine_samples_cum_sum[:, i+1].unsqueeze(-1))
+            # Set samples to be the coarsely sampled point 
+            t_fine += t_coarse[:, i].unsqueeze(-1)*mask
+            # And spread them out evenly in the segment by deviding the length of the segment with the amount of samples in that segment
+            t_fine += (arange - fine_samples_cum_sum[:, i].unsqueeze(-1))*mask*distances_coarse[:, i].unsqueeze(-1)/fine_samples[:, i].unsqueeze(-1)
 
-        else:
-            # Each weight express the importance of the corresponding ray segment to the color (multinomial converts to probabilites by itself)
-            # Sample_idx is then how many more times we need to sample form that segment
-            sample_idx = th.multinomial(weights, self.samples_per_ray_fine, replacement=True)
-            
-            # Get the corresponding t-values and shift them so they can be anywhere in the segment 
-            t_fine = t_coarse.gather(1, sample_idx)
-            t_fine += th.rand_like(t_fine, device=self.device) * distances_coarse.gather(1, sample_idx)
-            t_fine = th.cat((t_coarse, t_fine), dim=1)
-            t_fine = th.sort(t_fine, dim=1).values
-
-        return t_fine
+        return self._get_intervals(t_fine)
 
 
     def _compute_positions(self, origins: th.Tensor, directions: th.Tensor, t: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
-        Compute the positions, distances and directions for given rays and t values.
+        Compute the positions and directions for given rays and t values.
 
         Parameters:
         -----------
@@ -277,14 +275,11 @@ class NerfOriginal(pl.LightningModule):
         Returns:
         --------
             positions: Tensor of shape (batch_size, samples_per_ray, 3) - the positions for the given t values
-            distances: Tensor of shape (batch_size, samples_per_ray) - the distances between the t values - used for the weights
-                        Appended is the distance between the last position and the far sphere.
             directions: Tensor of shape (batch_size, samples_per_ray, 3) - the directions for the given t values
         """
         # Calculates the position with the equation p = o + t*d 
         # The unsqueeze is because origins and directions are spacial vectors while t is the sample times
         positions = origins.unsqueeze(1) + t.unsqueeze(2) * directions.unsqueeze(1)
-    
 
         # Format the directions to match the found positions
         directions = directions.unsqueeze(1).repeat(1, positions.shape[1], 1)
@@ -316,8 +311,7 @@ class NerfOriginal(pl.LightningModule):
 
         """
 
-        # Get the negative Optical Density 
-        # blocking_neg = 3*(-densities * distances)/(th.sum(densities * distances, dim=1).unsqueeze(-1) + 1e-10)
+        # Get the negative Optical Density (needs to be weighted up, because the scene is small)
         blocking_neg = (-densities * distances)*3*MAGIC_NUMBER
         # Get the absorped light over each ray segment 
         alpha = 1 - th.exp(blocking_neg)
@@ -333,17 +327,10 @@ class NerfOriginal(pl.LightningModule):
         # Compute the final color by summing over the weighted colors (the unsqueeze(-1) is to mach dimensions)
         return th.sum(weights.unsqueeze(-1)*colors, dim=1), weights
 
-    def _compute_distances(self, t: th.Tensor) -> th.Tensor:
-        # Get distances in t values
-        distances = th.hstack((
-            t[:,1:] - t[:,:-1],
-            self.far_sphere_normalized - t[:,-1:]
-        ))
-        return distances
-
+    
     def _compute_color(self, model: NerfModel,
-                            t: th.Tensor,
-                            t_query: th.Tensor,
+                            t_start: th.Tensor,
+                            t_end: th.Tensor,
                             ray_origs: th.Tensor,
                             ray_dirs: th.Tensor,
                             batch_size: int,
@@ -356,7 +343,8 @@ class NerfOriginal(pl.LightningModule):
         Parameters:
         -----------
             model: The model to use for computing the color (either the coarse or fine model)
-            t: Tensor of shape (batch_size, samples_per_ray) - the t values to compute the positions for. (output of _sample_t_coarse or _sample_t_fine)
+            t_start: Tensor of shape (batch_size, samples_per_ray) - the t value for the begining of the bin
+            t_end: Tensor of shape (batch_size, samples_per_ray) - the t value for the end of the bin
             ray_origs: Tensor of shape (batch_size, 3) - camera position, i.e. origin in camera coordinates
             ray_dirs: Tensor of shape (batch_size, 3) - direction vectors (unit vectors) of the viewing directions
             batch_size: int - the batch size
@@ -370,9 +358,8 @@ class NerfOriginal(pl.LightningModule):
         
         """
         # Compute the positions for the given t values
-        sample_pos, sample_dir  = self._compute_positions(ray_origs, ray_dirs, t_query)
-        sample_dist = self._compute_distances(t)
-
+        sample_pos, sample_dir  = self._compute_positions(ray_origs, ray_dirs, (t_start + t_end)/2)
+        sample_dist = t_end - t_start
 
         # Ungroup samples by ray (for the model)
         sample_pos = sample_pos.view(batch_size * samples_per_ray, 3)
@@ -408,29 +395,18 @@ class NerfOriginal(pl.LightningModule):
             rgb_coarse: Tensor of shape (batch_size, 3) - the rgb values for the given rays using coarse model (only used for the loss - not the rendering)
         """
 
-        #little helper function to get the middle t values for the given t values
-        def get_middle_t(t, compute_middle):
-            if compute_middle:
-                t_middle = th.zeros_like(t)
-                t_middle[:, :-1] = (t[:, 1:] + t[:, :-1])/2
-                t_middle[:, -1] = (self.far_sphere_normalized + t[:, -1])/2
-                return t_middle
-            else:
-                return t
-
         # Amount of pixels to render
         batch_size = ray_origs.shape[0]
         
         
         ### Coarse sampling
         # sample t
-        t_coarse = self._sample_t_coarse(batch_size)
-        t_coarse_query = get_middle_t(t_coarse, self.query_coarse_middle)
+        t_coarse_start, t_coarse_end = self._sample_t_coarse(batch_size)
 
         #compute rgb
         rgb_coarse, weights, sample_dist_coarse = self._compute_color(self.model_coarse,
-                                                t_coarse,
-                                                t_coarse_query,
+                                                t_coarse_start, 
+                                                t_coarse_end,
                                                 ray_origs,
                                                 ray_dirs,
                                                 batch_size,
@@ -439,13 +415,11 @@ class NerfOriginal(pl.LightningModule):
 
         ### Fine sampling
         # Sample t
-        t_fine = self._sample_t_fine(t_coarse, weights, sample_dist_coarse)
-        t_fine_query = get_middle_t(t_fine, self.query_fine_middle)
-
+        t_fine_start, t_fine_end = self._sample_t_fine(t_coarse_start, weights, sample_dist_coarse)
         # compute rgb
         rgb_fine, _, _ = self._compute_color(self.model_fine,
-                                                t_fine,
-                                                t_fine_query,
+                                                t_fine_start, 
+                                                t_fine_end,
                                                 ray_origs,
                                                 ray_dirs,
                                                 batch_size,
@@ -463,15 +437,30 @@ class NerfOriginal(pl.LightningModule):
         """
         ray_origs, ray_dirs, ray_colors = batch
         
+        # Compute the rgb values for the given rays for both models
         ray_colors_pred_coarse, ray_colors_pred_fine = self(ray_origs, ray_dirs)
 
-        loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors)
-        loss_fine = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors)
-        loss = loss_coarse + loss_fine
-        
-        self.log(f"{stage}_loss", loss)
+        # Compute the individual losses
+        proposal_loss = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors)
+        radiance_loss = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors)
 
-        return loss
+        # Calculate total loss
+        network_loss = proposal_loss + radiance_loss
+        
+        # Calculate PSNR
+        # NOTE: Cannot calculate SSIM because it relies on image patches
+        # NOTE: Cannot calculate LPIPS because it relies on image patches
+        psnr = -10 * th.log10(radiance_loss)
+
+        # Log metrics
+        self.log_dict({
+            f"{stage}_network_loss": network_loss,
+            f"{stage}_proposal_loss": proposal_loss,
+            f"{stage}_radiance_loss": radiance_loss,
+            f"{stage}_psnr": psnr,
+        }) 
+
+        return network_loss
 
     def training_step(self, batch: DatasetOutput, batch_idx: int):
         return self._step_helpher(batch, batch_idx, "train")

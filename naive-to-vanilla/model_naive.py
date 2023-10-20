@@ -12,26 +12,19 @@ class NerfModel(nn.Module):
         hidden_dim: int
     ):
         """
-        An instance of a NeRF model the architecture; 
-        
-            Hn( Hn( Ep(x)), Ep(x))          -> density 
-        H(  Hn( Hn( Ep(x)), Ep(x)), Ed(d))  -> color 
-
-        H: a hidden fully connected layer with hidden_dim neurons,
-        Hn: H applied n_hidden times, 
-        Ep: is the positional encoding with fourier_levels_pos levels,
-        Ed: is the direction encoding with fourier_levels_dir levels,
-        x: is the position
-        d: is the direction of the camera ray
+        An instance of a naive NeRF model architecture; 
+        6 inputs (position and direction) 
+        n_hidden layers with hidden_dim neurons each
+        4 outputs (rgb and density)
         """
         super().__init__()
         self.n_hidden = n_hidden
         self.hidden_dim = hidden_dim
 
-        # Creates the first module of the network 
-        self.model = self.contruct_model_density(6,
-                                                self.hidden_dim,
-                                                4)
+        # Define the naive model 
+        self.model = self.contruct_model(6,
+                                        self.hidden_dim,
+                                        4)
         self.relu = nn.ReLU(inplace=True)
         self.softplus = nn.Softplus(threshold=8)
         self.sigmoid = nn.Sigmoid()
@@ -48,7 +41,7 @@ class NerfModel(nn.Module):
 
         return density, rgb
 
-    def contruct_model_density(self, input_dim: int, hidden_dim: int, output_dim: int) -> nn.Module:
+    def contruct_model(self, input_dim: int, hidden_dim: int, output_dim: int) -> nn.Module:
         """
         Creates a FFNN with n_hidden layers and fits the input and output dimensionality.
         The activation function is ReLU 
@@ -94,17 +87,37 @@ class NerfNaive(pl.LightningModule):
         self.learning_rate_decay = learning_rate_decay
         self.weight_decay = weight_decay
         
-        # The intere model 
+        # The model 
         self.model = NerfModel(
             n_hidden=10,
             hidden_dim=256
         )
 
 
-
-    def _sample_t(self, batch_size: int) -> th.Tensor:
+    def _get_intervals(self, t: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
-        Sample t for sampling. Divides interval into equally sized bins, and samples a random point in each bin.
+        From t-values get the t corresponding to the start and end of the bins.
+        
+        Parameters:
+        -----------
+            t: Tensor of shape (batch_size, samples_per_ray) - the t values to compute the positions for.
+            
+        Returns:
+        --------
+            t_start: Tensor of shape (batch_size, samples_per_ray) - the t value for the begining of the bin
+            t_end: Tensor of shape (batch_size, samples_per_ray) - the t value for the end of the bin
+        """
+        t_start = t 
+        t_end = th.zeros_like(t, device=self.device)
+        t_end[:,:-1] = t[:, 1:].clone()
+        t_end[:,-1] = self.far_sphere_normalized
+
+        return t_start, t_end
+    
+
+    def _sample_t(self, batch_size: int) -> tuple[th.Tensor, th.Tensor]:
+        """
+        Sample t for sampling along the rays. Divides interval into equally sized bins, and samples a random point in each bin.
 
         Parameters:
         -----------
@@ -112,9 +125,10 @@ class NerfNaive(pl.LightningModule):
 
         Returns:
         -----------
-            t: Tensor of shape (batch_size, samples_per_ray)
+            t_start: Tensor of shape (batch_size, samples_per_ray) - start of the t-bins
+            t_end: Tensor of shape (batch_size, samples_per_ray) - end of the t-bins
         """
-        # n = samples_per_ray_coarse 
+        # n = samples_per_ray
         # Calculate the interval size (divide far - near into n bins)
         interval_size = (self.far_sphere_normalized - self.near_sphere_normalized) / self.samples_per_ray
         
@@ -129,12 +143,12 @@ class NerfNaive(pl.LightningModule):
         # Perturb sample positions to be anywhere in each interval
         t += th.rand_like(t, device=self.device) * interval_size
 
-        return t
+        return self._get_intervals(t)
     
 
-    def _compute_positions(self, origins: th.Tensor, directions: th.Tensor, t: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
+    def _compute_positions(self, origins: th.Tensor, directions: th.Tensor, t: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
-        Compute the positions, distances and directions for given rays and t values.
+        Compute the positions and directions for given rays and t values.
 
         Parameters:
         -----------
@@ -146,24 +160,16 @@ class NerfNaive(pl.LightningModule):
         Returns:
         --------
             positions: Tensor of shape (batch_size, samples_per_ray, 3) - the positions for the given t values
-            distances: Tensor of shape (batch_size, samples_per_ray) - the distances between the t values - used for the weights
-                        Appended is the distance between the last position and the far sphere.
             directions: Tensor of shape (batch_size, samples_per_ray, 3) - the directions for the given t values
         """
         # Calculates the position with the equation p = o + t*d 
         # The unsqueeze is because origins and directions are spacial vectors while t is the sample times
         positions = origins.unsqueeze(1) + t.unsqueeze(2) * directions.unsqueeze(1)
-        
-        # Get distances in t values
-        distances = th.hstack((
-            t[:,1:] - t[:,:-1],
-            self.far_sphere_normalized - t[:,-1:]
-        ))
 
         # Format the directions to match the found positions
         directions = directions.unsqueeze(1).repeat(1, positions.shape[1], 1)
         
-        return positions, directions, distances
+        return positions, directions
 
 
 
@@ -190,8 +196,7 @@ class NerfNaive(pl.LightningModule):
 
         """
 
-        # Get the negative Optical Density 
-        # blocking_neg = 3*(-densities * distances)/(th.sum(densities * distances, dim=1).unsqueeze(-1) + 1e-10)
+        # Get the negative Optical Density (needs to be weighted up, because the scene is small)
         blocking_neg = (-densities * distances)*3*MAGIC_NUMBER
         # Get the absorped light over each ray segment 
         alpha = 1 - th.exp(blocking_neg)
@@ -207,9 +212,9 @@ class NerfNaive(pl.LightningModule):
         # Compute the final color by summing over the weighted colors (the unsqueeze(-1) is to mach dimensions)
         return th.sum(weights.unsqueeze(-1)*colors, dim=1), weights
 
-    
     def _compute_color(self, model: NerfModel,
-                            t: th.Tensor,
+                            t_start: th.Tensor,
+                            t_end: th.Tensor,
                             ray_origs: th.Tensor,
                             ray_dirs: th.Tensor,
                             batch_size: int,
@@ -221,8 +226,9 @@ class NerfNaive(pl.LightningModule):
 
         Parameters:
         -----------
-            model: The model to use for computing the color (either the coarse or fine model)
-            t: Tensor of shape (batch_size, samples_per_ray) - the t values to compute the positions for. (output of _sample_t_coarse or _sample_t_fine)
+            model: The model to use for computing the color 
+            t_start: Tensor of shape (batch_size, samples_per_ray) - the t value for the begining of the bin
+            t_end: Tensor of shape (batch_size, samples_per_ray) - the t value for the end of the bin
             ray_origs: Tensor of shape (batch_size, 3) - camera position, i.e. origin in camera coordinates
             ray_dirs: Tensor of shape (batch_size, 3) - direction vectors (unit vectors) of the viewing directions
             batch_size: int - the batch size
@@ -236,7 +242,8 @@ class NerfNaive(pl.LightningModule):
         
         """
         # Compute the positions for the given t values
-        sample_pos, sample_dir, sample_dist  = self._compute_positions(ray_origs, ray_dirs, t)
+        sample_pos, sample_dir  = self._compute_positions(ray_origs, ray_dirs, (t_start + t_end)/2)
+        sample_dist = t_end - t_start
 
         # Ungroup samples by ray (for the model)
         sample_pos = sample_pos.view(batch_size * samples_per_ray, 3)
@@ -256,7 +263,7 @@ class NerfNaive(pl.LightningModule):
 
 
 
-    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> th.Tensor:
+    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, None]:
         """
         Forward pass of the model.
         Given the ray origins and directions, compute the rgb values for the given rays.
@@ -275,18 +282,19 @@ class NerfNaive(pl.LightningModule):
         batch_size = ray_origs.shape[0]
         
         # sample t
-        t_coarse = self._sample_t(batch_size)
+        t_start, t_end = self._sample_t(batch_size)
 
         #compute rgb
         rgb, _, _ = self._compute_color(self.model,
-                                                    t_coarse,
-                                                    ray_origs,
-                                                    ray_dirs,
-                                                    batch_size,
-                                                    self.samples_per_ray)
+                                        t_start,
+                                        t_end,
+                                        ray_origs,
+                                        ray_dirs,
+                                        batch_size,
+                                        self.samples_per_ray)
         
         # Return colors for the given pixel coordinates (batch_size, 3)
-        return rgb
+        return rgb, None
 
 
     ############ pytorch lightning functions ############
@@ -295,14 +303,26 @@ class NerfNaive(pl.LightningModule):
         """
         general function for training and validation step
         """
+        # Get the image/rays to render
         ray_origs, ray_dirs, ray_colors = batch
         
-        ray_colors_pred = self(ray_origs, ray_dirs)
+        # Compute the rgb values for each ray with the model (there is only one model hence the [0]) 
+        ray_colors_pred = self(ray_origs, ray_dirs)[0]
 
-        loss = nn.functional.mse_loss(ray_colors_pred, ray_colors)
-        self.log(f"{stage}_loss", loss*2)
+        # Calculate loss
+        radiance_loss = nn.functional.mse_loss(ray_colors_pred, ray_colors)
+        
+        # Calculate PSNR
+        # NOTE: Cannot calculate SSIM because it relies on image patches
+        # NOTE: Cannot calculate LPIPS because it relies on image patches
+        psnr = -10 * th.log10(radiance_loss)
 
-        return loss
+        # Log metrics
+        self.log_dict({
+            f"{stage}_radiance_loss": radiance_loss,
+            f"{stage}_psnr": psnr,
+        })
+        return radiance_loss
 
     def training_step(self, batch: DatasetOutput, batch_idx: int):
         return self._step_helpher(batch, batch_idx, "train")
