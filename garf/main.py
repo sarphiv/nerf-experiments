@@ -78,13 +78,13 @@ if __name__ == "__main__":
     # NOTE: Period is in epoch fractions
     PROPOSAL_LEARNING_RATE_START = 5e-4
     PROPOSAL_LEARNING_RATE_STOP = 5e-7
-    PROPOSAL_LEARNING_RATE_STOP_EPOCH = 10
+    PROPOSAL_LEARNING_RATE_STOP_EPOCH = 8
     PROPOSAL_LEARNING_RATE_PERIOD = 0.01
     PROPOSAL_LEARNING_RATE_DECAY: float = 2**(log2(PROPOSAL_LEARNING_RATE_STOP/PROPOSAL_LEARNING_RATE_START) * PROPOSAL_LEARNING_RATE_PERIOD/PROPOSAL_LEARNING_RATE_STOP_EPOCH) # type: ignore
 
     RADIANCE_LEARNING_RATE_START = 1e-3
     RADIANCE_LEARNING_RATE_STOP = 5e-7
-    RADIANCE_LEARNING_RATE_STOP_EPOCH = 10
+    RADIANCE_LEARNING_RATE_STOP_EPOCH = 8
     RADIANCE_LEARNING_RATE_PERIOD = 0.02
     RADIANCE_LEARNING_RATE_DECAY: float = 2**(log2(RADIANCE_LEARNING_RATE_STOP/RADIANCE_LEARNING_RATE_START) * RADIANCE_LEARNING_RATE_PERIOD/RADIANCE_LEARNING_RATE_STOP_EPOCH) # type: ignore
 
@@ -95,7 +95,7 @@ if __name__ == "__main__":
         radiance_samples_per_ray=192,
         gaussian_init_min=1/2.,
         gaussian_init_max=16,
-        gaussian_learning_rate_factor=400.,
+        gaussian_learning_rate_factor=200.,
         proposal_learning_rate=PROPOSAL_LEARNING_RATE_START,
         proposal_learning_rate_stop_epoch=PROPOSAL_LEARNING_RATE_STOP_EPOCH,
         proposal_learning_rate_decay=PROPOSAL_LEARNING_RATE_DECAY,
