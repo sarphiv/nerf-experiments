@@ -30,7 +30,7 @@ if __name__ == "__main__":
     BATCH_SIZE = 1024*2
 
     # instantiate warmup quality scheduler.
-    quality_scheduler = QualityScheduler(exponential_quality_function(0.05, 15))
+    quality_scheduler = QualityScheduler(linear_quality_function(0.05, 8))
     
     dm = ImagePoseDataModule(
         image_width=800,
@@ -85,8 +85,8 @@ if __name__ == "__main__":
         learning_rate=5e-4,
         learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
         weight_decay=0,
-        query_coarse_middle=False,
-        query_fine_middle=False,
+        query_coarse_middle=True,
+        query_fine_middle=True,
     )
 
 
