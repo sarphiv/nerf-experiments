@@ -63,7 +63,7 @@ if __name__ == "__main__":
                 metric_name="val_img",
             ),
             LearningRateMonitor(
-                logging_interval="epoch"
+                logging_interval="step"
             ),
             ModelCheckpoint(
                 filename='ckpt_epoch={epoch:02d}-val_loss={val_loss:.2f}',
@@ -76,13 +76,13 @@ if __name__ == "__main__":
 
     # Set up model
     # NOTE: Period is in epoch fractions
-    PROPOSAL_LEARNING_RATE_START = 5e-3
+    PROPOSAL_LEARNING_RATE_START = 2e-3
     PROPOSAL_LEARNING_RATE_STOP = 5e-6
     PROPOSAL_LEARNING_RATE_PERIOD = 0.01
     PROPOSAL_LEARNING_RATE_DECAY: float = 2**(log2(PROPOSAL_LEARNING_RATE_STOP/PROPOSAL_LEARNING_RATE_START) * PROPOSAL_LEARNING_RATE_PERIOD/trainer.max_epochs) # type: ignore
     RADIANCE_LEARNING_RATE_START = 1e-3
     RADIANCE_LEARNING_RATE_STOP = 5e-5
-    RADIANCE_LEARNING_RATE_PERIOD = 0.05
+    RADIANCE_LEARNING_RATE_PERIOD = 0.02
     RADIANCE_LEARNING_RATE_DECAY: float = 2**(log2(RADIANCE_LEARNING_RATE_STOP/RADIANCE_LEARNING_RATE_START) * RADIANCE_LEARNING_RATE_PERIOD/trainer.max_epochs) # type: ignore
 
     model = Garf(
@@ -91,7 +91,7 @@ if __name__ == "__main__":
         proposal_samples_per_ray=64,
         radiance_samples_per_ray=192,
         gaussian_init_min=1/2.,
-        gaussian_init_max=12.,
+        gaussian_init_max=20.,
         proposal_learning_rate=PROPOSAL_LEARNING_RATE_START,
         proposal_learning_rate_decay=PROPOSAL_LEARNING_RATE_DECAY,
         proposal_learning_rate_period=PROPOSAL_LEARNING_RATE_PERIOD,
