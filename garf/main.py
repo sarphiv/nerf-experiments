@@ -76,7 +76,7 @@ if __name__ == "__main__":
 
     # Set up model
     # NOTE: Period is in epoch fractions
-    PROPOSAL_LEARNING_RATE_START = 2e-3
+    PROPOSAL_LEARNING_RATE_START = 5e-4
     PROPOSAL_LEARNING_RATE_STOP = 5e-7
     PROPOSAL_LEARNING_RATE_STOP_EPOCH = 10
     PROPOSAL_LEARNING_RATE_PERIOD = 0.01
@@ -94,7 +94,7 @@ if __name__ == "__main__":
         radiance_samples_per_ray=192,
         gaussian_init_min=1/2.,
         gaussian_init_max=16.,
-        gaussian_learning_rate_factor=50.,
+        gaussian_learning_rate_factor=100.,
         proposal_learning_rate=PROPOSAL_LEARNING_RATE_START,
         proposal_learning_rate_stop_epoch=PROPOSAL_LEARNING_RATE_STOP_EPOCH,
         proposal_learning_rate_decay=PROPOSAL_LEARNING_RATE_DECAY,
@@ -107,6 +107,8 @@ if __name__ == "__main__":
         radiance_weight_decay=0,
     )
 
+    # Log model gradients, parameters, 
+    wandb_logger.watch(model, log="all")
 
     # Start training, resume from checkpoint
     trainer.fit(model, dm)
