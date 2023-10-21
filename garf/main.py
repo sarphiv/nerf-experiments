@@ -95,7 +95,7 @@ if __name__ == "__main__":
         radiance_samples_per_ray=192,
         gaussian_init_min=-2.,
         gaussian_init_max=4,
-        gaussian_learning_rate_factor=50.,
+        gaussian_learning_rate_factor=400.,
         proposal_learning_rate=PROPOSAL_LEARNING_RATE_START,
         proposal_learning_rate_stop_epoch=PROPOSAL_LEARNING_RATE_STOP_EPOCH,
         proposal_learning_rate_decay=PROPOSAL_LEARNING_RATE_DECAY,
