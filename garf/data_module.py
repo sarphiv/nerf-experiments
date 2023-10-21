@@ -42,7 +42,11 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
                 # Transform form PIL image to Tensor
                 tv.transforms.ToTensor(),
                 # Resize image
-                tv.transforms.Resize((self.image_height, self.image_width), antialias=True), # type: ignore
+                tv.transforms.Resize(
+                    (self.image_height, self.image_width), 
+                    interpolation=tv.transforms.InterpolationMode.BICUBIC, 
+                    antialias=True # type: ignore
+                ),
                 # Transform alpha to white background (removes alpha too)
                 tv.transforms.Lambda(ImagePoseDataset.transform_alpha_to_white),
                 # Permute channels to (H, W, C)
@@ -308,7 +312,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
             # Get subset of validation dataset
             # NOTE: Shallow copy of dataset
             #  so that the rest of the data is still available
-            dataset = copy(self.dataset_val)
+            dataset = copy(x=self.dataset_val)
 
             # Retrieve subset of dataset
             dataset.dataset = [dataset.dataset[i] for i in indices]

@@ -19,11 +19,14 @@ class Garf(pl.LightningModule):
         radiance_samples_per_ray: int,
         gaussian_init_min: float = 0.0,
         gaussian_init_max: float = 1.0,
+        gaussian_learning_rate_factor: float = 1.0,
         proposal_learning_rate: float = 1e-4,
+        proposal_learning_rate_stop_epoch: int = 10,
         proposal_learning_rate_decay: float = 0.5,
         proposal_learning_rate_period: float = 0.4,
         proposal_weight_decay: float = 0.0,
         radiance_learning_rate: float = 1e-4,
+        radiance_learning_rate_stop_epoch: int = 10,
         radiance_learning_rate_decay: float = 0.5,
         radiance_learning_rate_period: float = 0.4,
         radiance_weight_decay: float = 0.0,
@@ -40,17 +43,20 @@ class Garf(pl.LightningModule):
         # Samples per ray for radiance network for the volumetric rendering
         self.radiance_samples_per_ray = radiance_samples_per_ray
         
-        # Gaussian variance for the activation function
+        # Gaussian hyperparameters for the activation function
         self.gaussian_init_min = gaussian_init_min
         self.gaussian_init_max = gaussian_init_max
+        self.gaussian_learning_rate_factor = gaussian_learning_rate_factor
 
         # Hyper parameters for the network training
         self.proposal_learning_rate = proposal_learning_rate
+        self.proposal_learning_rate_stop_epoch = proposal_learning_rate_stop_epoch
         self.proposal_learning_rate_decay = proposal_learning_rate_decay
         self.proposal_learning_rate_period = proposal_learning_rate_period
         self.proposal_weight_decay = proposal_weight_decay
         
         self.radiance_learning_rate = radiance_learning_rate
+        self.radiance_learning_rate_stop_epoch = radiance_learning_rate_stop_epoch
         self.radiance_learning_rate_decay = radiance_learning_rate_decay
         self.radiance_learning_rate_period = radiance_learning_rate_period
         self.radiance_weight_decay = radiance_weight_decay
@@ -302,11 +308,17 @@ class Garf(pl.LightningModule):
         # Step learning rate schedulers
         epoch_fraction = self.trainer.current_epoch + batch_idx/self.trainer.num_training_batches
 
-        if epoch_fraction >= self._proposal_learning_rate_milestone:
+        if (
+            epoch_fraction >= self._proposal_learning_rate_milestone and
+            epoch_fraction <= self.proposal_learning_rate_stop_epoch
+        ):
             self._proposal_learning_rate_milestone += self.proposal_learning_rate_period
             self._proposal_learning_rate_scheduler.step()
 
-        if epoch_fraction >= self._radiance_learning_rate_milestone:
+        if (
+            epoch_fraction >= self._radiance_learning_rate_milestone and
+            epoch_fraction <= self.radiance_learning_rate_stop_epoch
+        ):
             self._radiance_learning_rate_milestone += self.radiance_learning_rate_period
             self._radiance_learning_rate_scheduler.step()
 
@@ -331,7 +343,13 @@ class Garf(pl.LightningModule):
     def configure_optimizers(self):
         # Set up proposal optimizers
         self._proposal_optimizer = th.optim.Adam(
-            self.proposal_network.parameters(), 
+            [
+                { "params": self.proposal_network.parameters_linear() },
+                {
+                    "params": self.proposal_network.parameters_gaussian(), 
+                    "lr": self.gaussian_learning_rate_factor * self.proposal_learning_rate
+                },
+            ], 
             lr=self.proposal_learning_rate, 
             weight_decay=self.proposal_weight_decay,
         )
@@ -342,7 +360,13 @@ class Garf(pl.LightningModule):
         
         # Set up radiance optimizers
         self._radiance_optimizer = th.optim.Adam(
-            self.radiance_network.parameters(), 
+            [
+                { "params": self.radiance_network.parameters_linear() },
+                {
+                    "params": self.radiance_network.parameters_gaussian(), 
+                    "lr": self.gaussian_learning_rate_factor * self.radiance_learning_rate
+                },
+            ], 
             lr=self.radiance_learning_rate, 
             weight_decay=self.radiance_weight_decay,
         )

@@ -1,3 +1,5 @@
+from typing import Iterator
+
 import torch as th
 import torch.nn as nn
 
@@ -12,29 +14,32 @@ class RadianceNetwork(nn.Module):
         super().__init__()
         self.gaussian_init_min = gaussian_init_min
         self.gaussian_init_max = gaussian_init_max
-        gauss_act = lambda x: GaussAct(x, gaussian_init_min, gaussian_init_max)
+        
+        self._parameters_linear: list[nn.Parameter] = []
+        self._parameters_gaussian: list[nn.Parameter] = []
+
 
         # Creates the first module of the network 
         self.model_density_1 = nn.Sequential(
-            nn.Linear(3, 256),
-            gauss_act(256),
-            nn.Linear(256, 256),
-            gauss_act(256),
-            nn.Linear(256, 256),
-            gauss_act(256),
-            nn.Linear(256, 256),
-            gauss_act(256),
+            self._create_linear(3, 256),
+            self._create_gaussian(256),
+            self._create_linear(256, 256),
+            self._create_gaussian(256),
+            self._create_linear(256, 256),
+            self._create_gaussian(256),
+            self._create_linear(256, 256),
+            self._create_gaussian(256),
         )
 
         # Creates the second module of the network (skip connection of input to the network again)
         self.model_density_2 = nn.Sequential(
-            nn.Linear(256 + 3, 256),
-            gauss_act(256),
-            nn.Linear(256, 256),
-            gauss_act(256),
-            nn.Linear(256, 256),
-            gauss_act(256),
-            nn.Linear(256, 256 + 1)
+            self._create_linear(256 + 3, 256),
+            self._create_gaussian(256),
+            self._create_linear(256, 256),
+            self._create_gaussian(256),
+            self._create_linear(256, 256),
+            self._create_gaussian(256),
+            self._create_linear(256, 256 + 1)
         )
 
         # Creates activation function for density
@@ -42,11 +47,32 @@ class RadianceNetwork(nn.Module):
 
         # Creates the final module of the model that outputs the color
         self.model_color = nn.Sequential(
-            nn.Linear(256 + 3, 128),
-            gauss_act(128),
-            nn.Linear(128, 3),
+            self._create_linear(256 + 3, 128),
+            self._create_gaussian(128),
+            self._create_linear(128, 3),
             nn.Sigmoid()
         )
+
+
+    def _create_linear(self, features_in: int, features_out: int) -> nn.Linear:
+        linear = nn.Linear(features_in, features_out)
+        self._parameters_linear.append(linear.weight) # type: ignore
+        self._parameters_linear.append(linear.bias)
+
+        return linear
+
+    def _create_gaussian(self, features_in) -> GaussAct:
+        act = GaussAct(features_in, self.gaussian_init_min, self.gaussian_init_max)
+        self._parameters_gaussian.append(act.inv_standard_deviation)
+
+        return act
+
+
+    def parameters_linear(self) -> Iterator[nn.Parameter]:
+        return iter(self._parameters_linear)
+
+    def parameters_gaussian(self) -> Iterator[nn.Parameter]:
+        return iter(self._parameters_gaussian)
 
 
     def forward(self, pos: th.Tensor, dir: th.Tensor) -> tuple[th.Tensor, th.Tensor]:

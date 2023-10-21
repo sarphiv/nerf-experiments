@@ -77,13 +77,15 @@ if __name__ == "__main__":
     # Set up model
     # NOTE: Period is in epoch fractions
     PROPOSAL_LEARNING_RATE_START = 2e-3
-    PROPOSAL_LEARNING_RATE_STOP = 5e-6
+    PROPOSAL_LEARNING_RATE_STOP = 5e-7
+    PROPOSAL_LEARNING_RATE_STOP_EPOCH = 10
     PROPOSAL_LEARNING_RATE_PERIOD = 0.01
-    PROPOSAL_LEARNING_RATE_DECAY: float = 2**(log2(PROPOSAL_LEARNING_RATE_STOP/PROPOSAL_LEARNING_RATE_START) * PROPOSAL_LEARNING_RATE_PERIOD/trainer.max_epochs) # type: ignore
+    PROPOSAL_LEARNING_RATE_DECAY: float = 2**(log2(PROPOSAL_LEARNING_RATE_STOP/PROPOSAL_LEARNING_RATE_START) * PROPOSAL_LEARNING_RATE_PERIOD/PROPOSAL_LEARNING_RATE_STOP_EPOCH) # type: ignore
     RADIANCE_LEARNING_RATE_START = 1e-3
-    RADIANCE_LEARNING_RATE_STOP = 5e-5
+    RADIANCE_LEARNING_RATE_STOP = 5e-7
+    RADIANCE_LEARNING_RATE_STOP_EPOCH = 10
     RADIANCE_LEARNING_RATE_PERIOD = 0.02
-    RADIANCE_LEARNING_RATE_DECAY: float = 2**(log2(RADIANCE_LEARNING_RATE_STOP/RADIANCE_LEARNING_RATE_START) * RADIANCE_LEARNING_RATE_PERIOD/trainer.max_epochs) # type: ignore
+    RADIANCE_LEARNING_RATE_DECAY: float = 2**(log2(RADIANCE_LEARNING_RATE_STOP/RADIANCE_LEARNING_RATE_START) * RADIANCE_LEARNING_RATE_PERIOD/RADIANCE_LEARNING_RATE_STOP_EPOCH) # type: ignore
 
     model = Garf(
         near_plane=2,
@@ -91,12 +93,15 @@ if __name__ == "__main__":
         proposal_samples_per_ray=64,
         radiance_samples_per_ray=192,
         gaussian_init_min=1/2.,
-        gaussian_init_max=20.,
+        gaussian_init_max=16.,
+        gaussian_learning_rate_factor=50.,
         proposal_learning_rate=PROPOSAL_LEARNING_RATE_START,
+        proposal_learning_rate_stop_epoch=PROPOSAL_LEARNING_RATE_STOP_EPOCH,
         proposal_learning_rate_decay=PROPOSAL_LEARNING_RATE_DECAY,
         proposal_learning_rate_period=PROPOSAL_LEARNING_RATE_PERIOD,
         proposal_weight_decay=0,
         radiance_learning_rate=RADIANCE_LEARNING_RATE_START,
+        radiance_learning_rate_stop_epoch=PROPOSAL_LEARNING_RATE_STOP_EPOCH,
         radiance_learning_rate_decay=RADIANCE_LEARNING_RATE_DECAY,
         radiance_learning_rate_period=RADIANCE_LEARNING_RATE_PERIOD,
         radiance_weight_decay=0,
