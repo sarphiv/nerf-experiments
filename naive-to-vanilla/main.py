@@ -9,8 +9,6 @@ from pytorch_lightning.loggers import WandbLogger  # type: ignore
 from data_module import ImagePoseDataModule
 from image_logger import Log2dImageReconstruction
 from epoch_fraction_logger import LogEpochFraction
-from model_naive import NerfNaive
-from model_original import NerfOriginal
 from model_interpolation import NerfInterpolation
 
 
@@ -86,29 +84,6 @@ if __name__ == "__main__":
         ]
     )
 
-
-    # Set up model
-    # model = NerfNaive(
-    #     near_sphere_normalized=1/10,
-    #     far_sphere_normalized=1/3,
-    #     samples_per_ray=64 + 192,
-    #     learning_rate=5e-4,
-    #     learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
-    #     weight_decay=0
-    # )
-
-    # Set up model
-    # model = NerfOriginal(
-    #     near_sphere_normalized=1/10,
-    #     far_sphere_normalized=1/3,
-    #     samples_per_ray_coarse=64,
-    #     samples_per_ray_fine=192,
-    #     fourier_levels_pos=10,
-    #     fourier_levels_dir=4,
-    #     learning_rate=5e-4,
-    #     learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
-    #     weight_decay=0
-    # )
 
     # Set up model
     model = NerfInterpolation(

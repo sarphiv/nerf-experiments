@@ -158,6 +158,7 @@ class NerfModel(nn.Module):
         
         print(f"Final layer: {self.model_color}")
 
+
 class NerfInterpolation(pl.LightningModule):
     def __init__(
         self, 
@@ -173,7 +174,8 @@ class NerfInterpolation(pl.LightningModule):
         learning_rate: float = 1e-4,
         learning_rate_decay: float = 0.5,
         weight_decay: float = 0.0
-    ):
+    ):  
+        
         super().__init__()
         self.save_hyperparameters()
 
@@ -195,9 +197,6 @@ class NerfInterpolation(pl.LightningModule):
             delayed_density=delayed_density,
             n_segments=n_segments)
         
-        # TODO REMOVE FOR DEBUGGING 
-        print(f"Model: Coarse")
-        self.model_coarse.list_segments()
 
         # If there is a proposal network separate the samples into coarse and fine sampling
         self.proposal = proposal[0]
@@ -213,10 +212,6 @@ class NerfInterpolation(pl.LightningModule):
                 delayed_direction=delayed_direction,
                 delayed_density=delayed_density,
                 n_segments=n_segments)
-            
-            # TODO REMOVE FOR DEBUGGING 
-            print(f"Model: Fine")
-            self.model_coarse.list_segments()
 
         else: 
             self.samples_per_ray_coarse = samples_per_ray
@@ -346,7 +341,6 @@ class NerfInterpolation(pl.LightningModule):
         return positions, directions
 
 
-
     def _render_rays(self, densities: th.Tensor, colors: th.Tensor, distances: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
         Render the rays using the given densities and colors.
@@ -385,6 +379,7 @@ class NerfInterpolation(pl.LightningModule):
         
         # Compute the final color by summing over the weighted colors (the unsqueeze(-1) is to mach dimensions)
         return th.sum(weights.unsqueeze(-1)*colors, dim=1), weights
+
 
     def _compute_color(self, model: NerfModel,
                             t_start: th.Tensor,
@@ -434,7 +429,6 @@ class NerfInterpolation(pl.LightningModule):
         rgb, weights = self._render_rays(sample_density, sample_color, sample_dist)
         
         return rgb, weights, sample_dist
-
 
 
     def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
@@ -497,6 +491,9 @@ class NerfInterpolation(pl.LightningModule):
         general function for training and validation step
         """
         ray_origs, ray_dirs, ray_colors = batch
+
+        # TODO: Add schedular here that changes which gaussian to use
+        ray_colors = ray_colors[:, 0, :]
         
         # Compute the rgb values for the given rays for both models
         ray_colors_pred_fine, ray_colors_pred_coarse = self(ray_origs, ray_dirs)
