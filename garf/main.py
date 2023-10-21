@@ -105,7 +105,7 @@ if __name__ == "__main__":
         radiance_learning_rate_stop_epoch=PROPOSAL_LEARNING_RATE_STOP_EPOCH,
         radiance_learning_rate_decay=RADIANCE_LEARNING_RATE_DECAY,
         radiance_learning_rate_period=RADIANCE_LEARNING_RATE_PERIOD,
-        radiance_weight_decay=0.1,
+        radiance_weight_decay=0.01,
     )
 
     # Log model gradients and parameters
