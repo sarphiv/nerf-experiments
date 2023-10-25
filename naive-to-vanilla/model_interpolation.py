@@ -493,7 +493,7 @@ class NerfInterpolation(pl.LightningModule):
         ray_origs, ray_dirs, ray_colors = batch
 
         # TODO: Add schedular here that changes which gaussian to use
-        ray_colors = ray_colors[:, 0, :]
+        ray_colors = ray_colors[:, :, 0]
         
         # Compute the rgb values for the given rays for both models
         ray_colors_pred_fine, ray_colors_pred_coarse = self(ray_origs, ray_dirs)
