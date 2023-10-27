@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Any, cast, Optional
 from math import tanh, log, sqrt
 
 import torch as th
@@ -10,6 +10,45 @@ from pytorch_lightning.loggers import WandbLogger #type: ignore
 from tqdm import tqdm
 
 from data_module import ImagePoseDataset
+
+
+class GaussianBlurScheduler(Callback):
+    def __init__(self,
+                 update_every_n_train_step: Optional[float] = None,
+                 update_every_n_epoch: Optional[float] = None,
+                 ):
+        assert not (update_every_n_train_step == None and update_every_n_epoch == None), "Either update_every_n_train_step or update_every_n_eopch must be set"
+        assert not (update_every_n_train_step != None and update_every_n_epoch != None), "update_every_n_train_step or update_every_n_eopch can't both be set"
+        self.sigma_idx = 0
+        self.update_every = cast(float, update_every_n_epoch) if update_every_n_train_step == None else cast(float, update_every_n_train_step)
+        self.update_on_train_batch_start = (update_every_n_train_step != None)
+        self.update_on_epoch_start = (update_every_n_epoch != None)
+
+    # I imagine this will be rewritten.
+    # the update_sigma function should be on the pl_module
+    # and then it can just pick and choose from the dataloader (batch)
+    # what part of it, it will use.
+    # this callback should automatically set the sigma on the modul
+    # and raise an error, if it does not already exist.
+
+    def on_train_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        print("hej")
+
+
+    def on_train_batch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule, batch: Any, batch_idx: int) -> None:
+        if self.update_on_train_batch_start:
+            new_sigma_idx = float(trainer.global_step) // self.update_every
+            if new_sigma_idx != self.sigma_idx:
+                self.sigma_idx = new_sigma_idx
+                trainer.datamodule.update_sigma(self.sigma_idx) #type: ignore
+    
+    def on_train_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        if self.update_on_epoch_start:
+            new_sigma_idx = float(trainer.global_step) // self.update_every
+            if new_sigma_idx != self.sigma_idx:
+                self.sigma_idx = new_sigma_idx
+                trainer.datamodule.update_sigma(self.sigma_idx) #type: ignore
+    
 
 
 class Log2dImageReconstruction(Callback):
