@@ -1,4 +1,5 @@
 from typing import Callable, Literal, Optional, Dict
+from itertools import chain
 
 import torch as th
 import torch.nn as nn
@@ -361,7 +362,12 @@ class Garf(pl.LightningModule):
         # Set up radiance optimizers
         self._radiance_optimizer = th.optim.Adam(
             [
-                { "params": self.radiance_network.parameters_linear() },
+                { 
+                    "params": chain(
+                        self.radiance_network.parameters_linear(), 
+                        self.radiance_network.parameters_batch_norm()
+                    )
+                },
                 {
                     "params": self.radiance_network.parameters_gaussian(), 
                     "lr": self.gaussian_learning_rate_factor * self.radiance_learning_rate
