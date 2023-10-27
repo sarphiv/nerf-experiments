@@ -19,13 +19,13 @@ class ProposalNetwork(nn.Module):
         self._parameters_gaussian: list[nn.Parameter] = []
 
         self.model = nn.Sequential(
-            self._create_linear(3, 256),
+            self._create_linear(3, 512),
+            self._create_gaussian(512),
+            self._create_linear(512, 256),
             self._create_gaussian(256),
-            self._create_linear(256, 256),
-            self._create_gaussian(256),
-            self._create_linear(256, 256),
-            self._create_gaussian(256),
-            self._create_linear(256, 1),
+            self._create_linear(256, 128),
+            self._create_gaussian(128),
+            self._create_linear(128, 1),
             nn.Softplus(threshold=8)
         )
 

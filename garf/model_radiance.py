@@ -21,25 +21,25 @@ class RadianceNetwork(nn.Module):
 
         # Creates the first module of the network 
         self.model_density_1 = nn.Sequential(
-            self._create_linear(3, 256),
+            self._create_linear(3, 512),
+            self._create_gaussian(512),
+            self._create_linear(512, 256),
             self._create_gaussian(256),
-            self._create_linear(256, 256),
-            self._create_gaussian(256),
-            self._create_linear(256, 256),
-            self._create_gaussian(256),
-            self._create_linear(256, 256),
-            self._create_gaussian(256),
+            self._create_linear(256, 128),
+            self._create_gaussian(128),
+            self._create_linear(128, 64),
+            self._create_gaussian(64),
         )
 
         # Creates the second module of the network (skip connection of input to the network again)
         self.model_density_2 = nn.Sequential(
-            self._create_linear(256 + 3, 256),
+            self._create_linear(64 + 3, 512),
+            self._create_gaussian(512),
+            self._create_linear(512, 256),
             self._create_gaussian(256),
-            self._create_linear(256, 256),
-            self._create_gaussian(256),
-            self._create_linear(256, 256),
-            self._create_gaussian(256),
-            self._create_linear(256, 256 + 1)
+            self._create_linear(256, 128),
+            self._create_gaussian(128),
+            self._create_linear(128, 64 + 1)
         )
 
         # Creates activation function for density
@@ -47,9 +47,9 @@ class RadianceNetwork(nn.Module):
 
         # Creates the final module of the model that outputs the color
         self.model_color = nn.Sequential(
-            self._create_linear(256 + 3, 128),
-            self._create_gaussian(128),
-            self._create_linear(128, 3),
+            self._create_linear(64 + 3, 256),
+            self._create_gaussian(256),
+            self._create_linear(256, 3),
             nn.Sigmoid()
         )
 
@@ -80,10 +80,10 @@ class RadianceNetwork(nn.Module):
         z = self.model_density_2(th.cat((z, pos), dim=1))
 
         # Extract density
-        density = self.softplus(z[:, 256] - 1)
+        density = self.softplus(z[:, 64] - 1)
 
         # Extract the color estimate
-        rgb = self.model_color(th.cat((z[:, :256], dir), dim=1))
+        rgb = self.model_color(th.cat((z[:, :64], dir), dim=1))
 
 
         # Return estimates
