@@ -24,7 +24,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         return resize_pil_image_inner
 
     @staticmethod
-    def apply_gaussian_smoothing(sigmas: tuple[float]): 
+    def apply_gaussian_smoothing(sigmas: list[float]): 
         def apply_gaussian_smoothing_inner(img: Image.Image):
             return [(img.filter(ImageFilter.GaussianBlur(sigma)) if sigma != 0 else img) for sigma in sigmas]
         return apply_gaussian_smoothing_inner
@@ -37,7 +37,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         return img[:, -1].unsqueeze(1) * img[:, :3] + (1 - img[:, -1]).unsqueeze(1)
     
     @staticmethod
-    def permute_channels(img: th.Tensor): return img.permute(0, 2, 3, 1)
+    def permute_channels(img: th.Tensor): return img.permute(2, 3, 1, 0)
 
 
     def __init__(self,
@@ -63,17 +63,18 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
 
         # Transform from PIL image to Tensor
         self.transform = cast(
-            Callable[[Image.Image], th.Tensor], 
+            Callable[[list[Image.Image]], th.Tensor], 
             tv.transforms.Compose([
-                # Resize image maybe add 
-                tv.transforms.Lambda(ImagePoseDataset.resize_pil_image(self.image_height, self.image_width)), # type: ignore
-                # gaussian blur
-                tv.transforms.Lambda(ImagePoseDataset.apply_gaussian_smoothing(self.gaussian_smoothing_sigmas)), # type: ignore
+                # # Does not work with pytorch lightning
+                # # Resize image maybe add 
+                # tv.transforms.Lambda(ImagePoseDataset.resize_pil_image(self.image_height, self.image_width)), # type: ignore
+                # # gaussian blur
+                # tv.transforms.Lambda(ImagePoseDataset.apply_gaussian_smoothing(self.gaussian_smoothing_sigmas)), # type: ignore
                 # Transform form PIL image to Tensor
                 tv.transforms.Lambda(ImagePoseDataset.images_to_tensor),
 
-                # Transform alpha to white background (removes alpha too)
-                tv.transforms.Lambda(ImagePoseDataset.transform_alpha_to_white),
+                # # Transform alpha to white background (removes alpha too)
+                # tv.transforms.Lambda(ImagePoseDataset.transform_alpha_to_white),
                 # Permute channels to (H, W, C)
                 # WARN: This is against the convention of PyTorch.
                 #  Doing it to enable easier batching of rays.
@@ -176,6 +177,13 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         And close file afterwards - see https://pillow.readthedocs.io/en/stable/reference/open_files.html
         """
         with Image.open(os.path.join(self.images_path, path)) as img:
+            # Resize the PIL image (this needs to be done before the gaussian blur is applied, hence cannot be done in the transform)
+            img = ImagePoseDataset.resize_pil_image(self.image_height, self.image_width)(img)
+            # Turn alpha to white background 
+            img = Image.alpha_composite(Image.new("RGBA", img.size, "WHITE"), img).convert("RGB")
+
+            # Apply gaussian blur
+            img = ImagePoseDataset.apply_gaussian_smoothing(self.gaussian_smoothing_sigmas)(img)
             return self.transform(img)
 
 
@@ -185,7 +193,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         # Get pixel index
         i = index % self.image_batch_size
 
-        return o.view(-1, 3)[i], d.view(-1, 3)[i], c.view(-1, 3)[i]
+        return o.view(-1, 3)[i], d.view(-1, 3)[i], c.view(-1, 3, len(self.gaussian_smoothing_sigmas))[i]
 
     def __len__(self) -> int:
         return len(self.dataset) * self.image_batch_size
