@@ -25,7 +25,7 @@ if __name__ == "__main__":
 
 
     # Set up data module
-    BATCH_SIZE = 1024*2
+    BATCH_SIZE = 1024
     
     dm = ImagePoseDataModule(
         image_width=800,

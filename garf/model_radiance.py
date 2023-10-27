@@ -17,39 +17,29 @@ class RadianceNetwork(nn.Module):
         
         self._parameters_linear: list[nn.Parameter] = []
         self._parameters_gaussian: list[nn.Parameter] = []
-        self._parameters_batch_norm: list[nn.Parameter] = []
 
 
         # Creates the first module of the network 
         self.model_density_1 = nn.Sequential(
             self._create_linear(3, 1024),
             self._create_gaussian(1024),
-            self._create_batch_norm(1024),
             self._create_linear(1024, 256),
             self._create_gaussian(256),
-            self._create_batch_norm(256),
             self._create_linear(256, 128),
             self._create_gaussian(128),
-            self._create_batch_norm(128),
             self._create_linear(128, 128),
             self._create_gaussian(128),
-            self._create_batch_norm(128),
         )
 
         # Creates the second module of the network (skip connection of input to the network again)
         self.model_density_2 = nn.Sequential(
             self._create_linear(128 + 3, 512),
             self._create_gaussian(512),
-            self._create_batch_norm(512),
             self._create_linear(512, 256),
             self._create_gaussian(256),
-            self._create_batch_norm(256),
             self._create_linear(256, 128),
             self._create_gaussian(128),
-            self._create_batch_norm(128),
-            self._create_linear(128, 128 + 1),
-            self._create_gaussian(128 + 1),
-            self._create_batch_norm(128 + 1),
+            self._create_linear(128, 128 + 1)
         )
 
         # Creates activation function for density
@@ -59,7 +49,6 @@ class RadianceNetwork(nn.Module):
         self.model_color = nn.Sequential(
             self._create_linear(128 + 3, 256),
             self._create_gaussian(256),
-            self._create_batch_norm(256),
             self._create_linear(256, 3),
             nn.Sigmoid()
         )
@@ -79,22 +68,11 @@ class RadianceNetwork(nn.Module):
         return act
 
 
-    def _create_batch_norm(self, features_in: int) -> nn.BatchNorm1d:
-        batch_norm = nn.BatchNorm1d(features_in)
-        self._parameters_batch_norm.append(batch_norm.weight)
-        self._parameters_batch_norm.append(batch_norm.bias)
-
-        return batch_norm
-
-
     def parameters_linear(self) -> Iterator[nn.Parameter]:
         return iter(self._parameters_linear)
 
     def parameters_gaussian(self) -> Iterator[nn.Parameter]:
         return iter(self._parameters_gaussian)
-
-    def parameters_batch_norm(self) -> Iterator[nn.Parameter]:
-        return iter(self._parameters_batch_norm)
 
 
     def forward(self, pos: th.Tensor, dir: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
