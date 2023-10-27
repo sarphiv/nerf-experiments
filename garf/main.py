@@ -82,7 +82,7 @@ if __name__ == "__main__":
     PROPOSAL_LEARNING_RATE_PERIOD = 0.01
     PROPOSAL_LEARNING_RATE_DECAY: float = 2**(log2(PROPOSAL_LEARNING_RATE_STOP/PROPOSAL_LEARNING_RATE_START) * PROPOSAL_LEARNING_RATE_PERIOD/PROPOSAL_LEARNING_RATE_STOP_EPOCH) # type: ignore
 
-    RADIANCE_LEARNING_RATE_START = 1e-3
+    RADIANCE_LEARNING_RATE_START = 7e-4
     RADIANCE_LEARNING_RATE_STOP = 5e-7
     RADIANCE_LEARNING_RATE_STOP_EPOCH = 8
     RADIANCE_LEARNING_RATE_PERIOD = 0.02
@@ -105,7 +105,7 @@ if __name__ == "__main__":
         radiance_learning_rate_stop_epoch=PROPOSAL_LEARNING_RATE_STOP_EPOCH,
         radiance_learning_rate_decay=RADIANCE_LEARNING_RATE_DECAY,
         radiance_learning_rate_period=RADIANCE_LEARNING_RATE_PERIOD,
-        radiance_weight_decay=1e-8,
+        radiance_weight_decay=1e-9,
     )
 
     # Log model gradients and parameters
