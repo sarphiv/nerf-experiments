@@ -70,8 +70,7 @@ class NerfInterpolation(pl.LightningModule):
 
             # Define the prediction network 
             self.model_prediction = self.model_coarse
-        
-        
+
 
     def _get_intervals(self, t: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
@@ -337,6 +336,11 @@ class NerfInterpolation(pl.LightningModule):
         # Return colors for the given pixel coordinates (batch_size, 3)
         return rgb_fine, rgb_coarse
 
+    def validation_image(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+        """
+        Forward pass of the model for a validation step. In vanilla nerf this is equivalent to the usual forward pass. 
+        """
+        return self.forward(ray_origs, ray_dirs)
 
     ############ pytorch lightning functions ############
 
@@ -344,7 +348,7 @@ class NerfInterpolation(pl.LightningModule):
         """
         general function for training and validation step
         """
-        ray_origs, ray_dirs, ray_colors = batch
+        ray_origs, ray_dirs, ray_colors, _ = batch
 
         # TODO: Add schedular here that changes which gaussian to use
         ray_colors = ray_colors[:, :, 0]

@@ -3,48 +3,78 @@ import os
 import pathlib
 import math
 from copy import copy
-from typing import Any, Callable, Iterator, Optional, Literal, cast
+from typing import Any, Callable, Iterator, Optional, Literal, cast, Tuple
 
 import pytorch_lightning as pl
 import torch as th
 import torchvision as tv
-from PIL import Image
+from PIL import Image, ImageFilter
 from torch.utils.data import DataLoader, Dataset, Subset
 
 
-DatasetOutput = tuple[th.Tensor, th.Tensor, th.Tensor, int]
+DatasetOutput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]
 
 
 class ImagePoseDataset(Dataset[DatasetOutput]):
-
-    @staticmethod
-    def transform_alpha_to_white(img: th.Tensor): return img[-1] * img[:3] + (1 - img[-1])
     
     @staticmethod
-    def permute_channels(img: th.Tensor): return img.permute(1, 2, 0)
+    def resize_pil_image(image_height: int, image_width: int):
+        def resize_pil_image_inner(img: Image.Image):
+            return img.resize((image_height, image_width),  resample=Image.Resampling.BILINEAR)
+        return resize_pil_image_inner
 
-    def __init__(self, image_width: int, image_height: int, images_path: str, pose_path: str, space_transform: Optional[tuple[float, th.Tensor]]=None) -> None:
+    @staticmethod
+    def apply_gaussian_smoothing(sigmas: list[float]): 
+        def apply_gaussian_smoothing_inner(img: Image.Image):
+            return [(img.filter(ImageFilter.GaussianBlur(sigma)) if sigma != 0 else img) for sigma in sigmas]
+        return apply_gaussian_smoothing_inner
+    
+    @staticmethod
+    def images_to_tensor(imgs: list): return th.stack([tv.transforms.ToTensor()(image) for image in imgs], dim=0)
+
+    @staticmethod
+    def transform_alpha_to_white(img: th.Tensor): 
+        return img[:, -1].unsqueeze(1) * img[:, :3] + (1 - img[:, -1]).unsqueeze(1)
+    
+    @staticmethod
+    def permute_channels(img: th.Tensor): return img.permute(2, 3, 1, 0)
+
+
+    def __init__(self,
+                 image_width: int,
+                 image_height: int,
+                 images_path: str,
+                 pose_path: str,
+                 space_transform: Optional[tuple[float, th.Tensor]]=None,
+                 gaussian_smoothing_sigmas: tuple[float] = (0.,), # float in [0 , infty), determines std relative to image size (max image hight, width)
+                 ) -> None:
         super().__init__()
         
         # Store image dimensions
         self.image_height, self.image_width = image_width, image_height
         self.image_batch_size = self.image_width * self.image_height
         self.space_transform = space_transform
+        self.gaussian_smoothing_sigmas = [max(image_height, image_width)*sigma for sigma in gaussian_smoothing_sigmas] # [0, 0.02, 0.05, 0.07, 0.1]
         
+
         # Store paths
         self.images_path = images_path
         self.pose_path = pose_path
 
         # Transform from PIL image to Tensor
         self.transform = cast(
-            Callable[[Image.Image], th.Tensor], 
+            Callable[[list[Image.Image]], th.Tensor], 
             tv.transforms.Compose([
+                # # Does not work with pytorch lightning
+                # # Resize image maybe add 
+                # tv.transforms.Lambda(ImagePoseDataset.resize_pil_image(self.image_height, self.image_width)), # type: ignore
+                # # gaussian blur
+                # tv.transforms.Lambda(ImagePoseDataset.apply_gaussian_smoothing(self.gaussian_smoothing_sigmas)), # type: ignore
                 # Transform form PIL image to Tensor
-                tv.transforms.ToTensor(),
-                # Resize image
-                tv.transforms.Resize((self.image_height, self.image_width), antialias=True), # type: ignore
-                # Transform alpha to white background (removes alpha too)
-                tv.transforms.Lambda(ImagePoseDataset.transform_alpha_to_white),
+                tv.transforms.Lambda(ImagePoseDataset.images_to_tensor),
+
+                # # Transform alpha to white background (removes alpha too)
+                # tv.transforms.Lambda(ImagePoseDataset.transform_alpha_to_white),
                 # Permute channels to (H, W, C)
                 # WARN: This is against the convention of PyTorch.
                 #  Doing it to enable easier batching of rays.
@@ -67,7 +97,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             for path, rotation, camera_to_world in [frame.values()] 
         }
 
- 
+
         # If space transform is given, initialize transform parameters from data
         if self.space_transform is None:
             # Get average position of all cameras (get last columns and average over each entry)
@@ -93,9 +123,9 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         camera_max_distance_matrix[:-1, -1] = camera_max_distance
 
         # Move origin to average position of all cameras and scale world coordinates by the 3*the maximum distance of any two cameras
-        # self.camera_to_world = { image_name: (camera_to_world - camera_average_position)/camera_max_distance_matrix
-        #                          for image_name, camera_to_world 
-        #                          in self.camera_to_world.items() }
+        self.camera_to_world = { image_name: (camera_to_world - camera_average_position)/camera_max_distance_matrix
+                                 for image_name, camera_to_world 
+                                 in self.camera_to_world.items() }
 
         # Create unit directions (H, W, 3) in camera space
         # NOTE: Initially normalized such that z=-1 via the focal length.
@@ -136,7 +166,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
                 self.origins[image_name],
                 self.directions[image_name], 
                 self.images[image_name],
-                i
+                th.Tensor(i)
             ) 
             for i, (image_name, camera_to_world) in enumerate(self.camera_to_world.items())
         ]
@@ -148,6 +178,13 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         And close file afterwards - see https://pillow.readthedocs.io/en/stable/reference/open_files.html
         """
         with Image.open(os.path.join(self.images_path, path)) as img:
+            # Resize the PIL image (this needs to be done before the gaussian blur is applied, hence cannot be done in the transform)
+            img = ImagePoseDataset.resize_pil_image(self.image_height, self.image_width)(img)
+            # Turn alpha to white background 
+            img = Image.alpha_composite(Image.new("RGBA", img.size, "WHITE"), img).convert("RGB")
+
+            # Apply gaussian blur
+            img = ImagePoseDataset.apply_gaussian_smoothing(self.gaussian_smoothing_sigmas)(img)
             return self.transform(img)
 
 
@@ -157,7 +194,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         # Get pixel index
         i = index % self.image_batch_size
 
-        return o.view(-1, 3)[i], d.view(-1, 3)[i], c.view(-1, 3)[i], img_idx
+        return o.view(-1, 3)[i], d.view(-1, 3)[i], c.view(-1, 3, len(self.gaussian_smoothing_sigmas))[i], img_idx
 
     def __len__(self) -> int:
         return len(self.dataset) * self.image_batch_size
@@ -265,6 +302,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
 
 
     def train_dataloader(self):
+        # TODO: true_origins, true_directions, augmented_origins, augmented_directions, color, indexes
         return DataLoader(
             self.dataset_train,
             *self.dataloader_args,
@@ -272,6 +310,8 @@ class ImagePoseDataModule(pl.LightningDataModule):
         )
 
     def val_dataloader(self):
+        # TODO: true_origins, true_directions, color
+              # TODO: train_dataloader
         # Disable shuffle on the data loader
         args, kwargs = self._disable_shuffle_arg(self.dataloader_args, self.dataloader_kwargs)
 

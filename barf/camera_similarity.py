@@ -23,5 +23,5 @@ def align_paired_point_clouds(P, Q):
     # rotate P to Q
     R = align_rotation(P-cP, Q-cQ)
     Qhat = (P - cP)@R + cQ
-    return Qhat, R, cQ@R - cP # t = cQ@R - cP
+    return Qhat, R, cQ-cP@R # t = cQ@R - cP
 
