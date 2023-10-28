@@ -180,6 +180,9 @@ class Log2dImageReconstruction(Callback):
                 shuffle=False
             )
 
+            pixel_width = th.tensor(dataset.pixel_width, dtype=dataset.origins[name].dtype, device=model.device)
+            pixel_width = pixel_width.view(1,1).expand(self.batch_size, 1)
+
             # Iterate over batches of rays to get RGB values
             rgb = th.empty((dataset.image_batch_size, 3), dtype=cast(th.dtype, model.dtype))
             i = 0
@@ -193,7 +196,7 @@ class Log2dImageReconstruction(Callback):
                 batch_size = ray_origs.shape[0]
                 
                 # Predict RGB values
-                rgb[i:i+batch_size, :] = model(ray_origs, ray_dirs)[0].clip(0, 1).cpu()
+                rgb[i:i+batch_size, :] = model(ray_origs, ray_dirs, pixel_width[:batch_size])[0].clip(0, 1).cpu()
             
                 # Update write head
                 i += batch_size

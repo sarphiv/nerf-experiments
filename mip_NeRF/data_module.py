@@ -12,7 +12,7 @@ from PIL import Image, ImageFilter
 from torch.utils.data import DataLoader, Dataset, Subset
 
 
-DatasetOutput = tuple[th.Tensor, th.Tensor, th.Tensor]
+DatasetOutput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]
 
 
 class ImagePoseDataset(Dataset[DatasetOutput]):
@@ -91,6 +91,8 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         camera_data = json.loads(open(self.pose_path).read())
         
         self.focal_length = self.image_width / 2 / math.tan(camera_data["camera_angle_x"] / 2)
+        self.pixel_width = 1/self.image_width
+
         self.camera_to_world: dict[str, th.Tensor] = { 
             pathlib.PurePath(path).stem: th.tensor(camera_to_world) / camera_to_world[-1][-1]
             for frame in camera_data["frames"] 
@@ -193,7 +195,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         # Get pixel index
         i = index % self.image_batch_size
 
-        return o.view(-1, 3)[i], d.view(-1, 3)[i], c.view(-1, 3, len(self.gaussian_smoothing_sigmas))[i]
+        return o.view(-1, 3)[i], d.view(-1, 3)[i], c.view(-1, 3, len(self.gaussian_smoothing_sigmas))[i], th.tensor(self.pixel_width, dtype=o.dtype)
 
     def __len__(self) -> int:
         return len(self.dataset) * self.image_batch_size

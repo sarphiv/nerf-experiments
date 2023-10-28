@@ -10,6 +10,7 @@ from data_module import ImagePoseDataModule
 from image_logger import Log2dImageReconstruction
 from epoch_fraction_logger import LogEpochFraction
 from model_interpolation import NerfInterpolation
+from mip_model import MipNerf
 
 
 if __name__ == "__main__":
@@ -31,7 +32,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="nerf-naive-comparison"
+        name="mip-nerf-test-1"
     )
 
 
@@ -65,9 +66,9 @@ if __name__ == "__main__":
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
                 logging_start=0.002,
-                delay_start=1/4,
-                delay_end=1/4,
-                delay_taper=4.0,
+                delay_start=0.05,
+                delay_end=1/4.,
+                delay_taper=2.0,
                 validation_image_names=["r_2", "r_84"],
                 reconstruction_batch_size=BATCH_SIZE,
                 reconstruction_num_workers=4,
@@ -86,15 +87,13 @@ if __name__ == "__main__":
 
 
     # Set up model
-    model = NerfInterpolation(
+    model = MipNerf(
         near_sphere_normalized=1/10,
         far_sphere_normalized=1/3,
         samples_per_ray=64 + 192,
         n_hidden=args.n_hidden,
         fourier=(args.use_fourier, 10, 4),
         proposal=(args.use_proposal, 64),
-        delayed_direction=args.delayed_direction,
-        delayed_density=args.delayed_density,
         n_segments=args.n_segments,
         learning_rate=5e-4,
         learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
