@@ -10,6 +10,7 @@ from pytorch_lightning.loggers import WandbLogger #type: ignore
 from tqdm import tqdm
 
 from data_module import ImagePoseDataset
+from model_camera_calibration import NerfCameraCalibration
 
 
 class GaussianBlurScheduler(Callback):
@@ -144,7 +145,7 @@ class Log2dImageReconstruction(Callback):
 
 
     @th.no_grad()
-    def on_train_batch_start(self, trainer: pl.Trainer, model: pl.LightningModule, batch: th.Tensor, batch_idx: int) -> None:
+    def on_train_batch_start(self, trainer: pl.Trainer, model: NerfCameraCalibration, batch: th.Tensor, batch_idx: int) -> None:
         # Get current step
         step = trainer.current_epoch + batch_idx/trainer.num_training_batches
 
@@ -169,11 +170,18 @@ class Log2dImageReconstruction(Callback):
 
         # Reconstruct each image
         for name in tqdm(self.validation_image_names, desc="Reconstructing images", leave=False):
+            # Get rays for image
+            origins = dataset.origins_raw[name].view(-1, 3)
+            directions = dataset.directions_raw[name].view(-1, 3)
+
+            # Transform origins to model space
+            origins, directions, _, _ = model.validation_transform(origins, directions)
+
             # Set up data loader for validation image
             data_loader = DataLoader(
                 dataset=TensorDataset(
-                    dataset.origins[name].view(-1, 3), 
-                    dataset.directions[name].view(-1, 3)
+                    origins, 
+                    directions
                 ),
                 batch_size=self.batch_size,
                 num_workers=self.num_workers,

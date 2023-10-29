@@ -3,7 +3,7 @@ import argparse
 
 import pytorch_lightning as pl
 import torch as th
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, LambdaCallback
 from pytorch_lightning.loggers import WandbLogger  # type: ignore
 
 from data_module import ImagePoseDataModule
@@ -42,6 +42,12 @@ if __name__ == "__main__":
         image_width=800,
         image_height=800,
         scene_path="../data/lego",
+        rotation_noise_sigma=1.0,
+        translation_noise_sigma=1.0,
+        noise_seed=13571113,
+        gaussian_blur_kernel_size=80,
+        gaussian_blur_relative_sigma_start=80.,
+        gaussian_blur_relative_sigma_decay=0.99,
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
         batch_size=BATCH_SIZE,
@@ -80,6 +86,14 @@ if __name__ == "__main__":
                 filename='ckpt_epoch={epoch:02d}-val_loss={val_loss:.2f}',
                 every_n_epochs=2,
                 save_top_k=-1,
+            ),
+            dm.get_dataset_blur_scheduler_callback(
+                epoch_fraction_period=0.02,
+                dataset_name="train"
+            ),
+            dm.get_dataset_blur_scheduler_callback(
+                epoch_fraction_period=0.02,
+                dataset_name="val"
             )
         ]
     )
