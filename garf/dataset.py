@@ -344,8 +344,8 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         # Calculate padding
         left = max(kernel_half - x, 0)
         top = max(kernel_half - y, 0)
-        right = max(kernel_half + x - img_width, 0)
-        bottom = max(kernel_half + y - img_height, 0)
+        right = max(kernel_half + x - (img_width-1), 0)
+        bottom = max(kernel_half + y - (img_height-1), 0)
 
         pad = tv.transforms.Pad(
             padding=(left, top, right, bottom), 
@@ -353,15 +353,12 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         )
 
         # Pad image and retrieve pixel and neighbors
-        img_padded: th.Tensor = pad(img)[
-            min(y-kernel_half, 0):max(y+kernel_half+1, img_height), 
-            min(x-kernel_half, 0):max(x+kernel_half+1, img_width)
+        neighborhood: th.Tensor = pad(img)[
+            :,
+            (top+y-kernel_half):(top+y+kernel_half)+1, 
+            (left+x-kernel_half):(left+x+kernel_half)+1
         ]
 
-        neighborhood: th.Tensor = img_padded[
-            (y+kernel_half):(y+kernel_half+kernel_size), 
-            (x+kernel_half):(x+kernel_half+kernel_size)
-        ]
 
         # Blur y-direction and store y-column of pixel
         # (H, W, C) -> (W, C)
