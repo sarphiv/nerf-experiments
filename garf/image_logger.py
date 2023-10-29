@@ -2,7 +2,6 @@ from typing import cast
 from math import tanh, log, sqrt
 
 import torch as th
-import torchvision as tv
 from torch.utils.data import DataLoader, TensorDataset
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import Callback
@@ -10,6 +9,8 @@ from pytorch_lightning.loggers import WandbLogger #type: ignore
 from tqdm import tqdm
 
 from data_module import ImagePoseDataset
+from model_camera_calibration import CameraCalibrationModel
+
 
 
 class Log2dImageReconstruction(Callback):
@@ -78,7 +79,7 @@ class Log2dImageReconstruction(Callback):
         self.metric_name = metric_name
 
         # Calculate next reconstruction step
-        self._reconstruction_milestone = self._get_next_delay(0)
+        self.reconstruction_point = self._get_next_delay(0)
 
 
     def _get_next_delay(self, step: float | int) -> float:
@@ -105,7 +106,7 @@ class Log2dImageReconstruction(Callback):
 
 
     @th.no_grad()
-    def on_train_batch_start(self, trainer: pl.Trainer, model: pl.LightningModule, batch: th.Tensor, batch_idx: int) -> None:
+    def on_train_batch_start(self, trainer: pl.Trainer, model: CameraCalibrationModel, batch: th.Tensor, batch_idx: int) -> None:
         # Get current step
         step = trainer.current_epoch + batch_idx/trainer.num_training_batches
 
@@ -114,11 +115,11 @@ class Log2dImageReconstruction(Callback):
             return
 
         # If not at the right step, return
-        if step < self._reconstruction_milestone:
+        if step < self.reconstruction_point:
             return
 
         # Update reconstruction step and reconstruct
-        self._reconstruction_milestone = step + self._get_next_delay(step)
+        self.reconstruction_point = step + self._get_next_delay(step)
 
 
         # Retrieve validation dataset from trainer
@@ -130,11 +131,18 @@ class Log2dImageReconstruction(Callback):
 
         # Reconstruct each image
         for name in tqdm(self.validation_image_names, desc="Reconstructing images", leave=False):
+            # Get rays for image
+            origins = dataset.origins_raw[name].view(-1, 3)
+            directions = dataset.directions_raw[name].view(-1, 3)
+
+            # Transform origins to model space
+            origins, directions, _, _ = model.validation_transform_rays(origins, directions)
+
             # Set up data loader for validation image
             data_loader = DataLoader(
                 dataset=TensorDataset(
-                    dataset.origins[name].view(-1, 3), 
-                    dataset.directions[name].view(-1, 3)
+                    origins, 
+                    directions
                 ),
                 batch_size=self.batch_size,
                 num_workers=self.num_workers,

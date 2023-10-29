@@ -8,7 +8,8 @@ from pytorch_lightning.loggers import WandbLogger  # type: ignore
 from data_module import ImagePoseDataModule
 from image_logger import Log2dImageReconstruction
 from epoch_fraction_logger import LogEpochFraction
-from model import Garf
+from model_camera_calibration import CameraCalibrationModel
+
 
 
 if __name__ == "__main__":
@@ -25,18 +26,27 @@ if __name__ == "__main__":
 
 
     # Set up data module
-    BATCH_SIZE = 1024
-    
+    BATCH_SIZE = 1024*2
+
     dm = ImagePoseDataModule(
         image_width=800,
         image_height=800,
         scene_path="../data/lego",
+        rotation_noise_sigma=1.0,
+        translation_noise_sigma=1.0,
+        noise_seed=13571113,
+        gaussian_blur_kernel_size=81,
+        gaussian_blur_relative_sigma_start=80.,
+        gaussian_blur_relative_sigma_decay=0.99,
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
         batch_size=BATCH_SIZE,
         num_workers=4,
         shuffle=True,
     )
+
+    dm.setup("fit")
+
 
     # Set up trainer
     th.set_float32_matmul_precision("medium")
@@ -69,6 +79,14 @@ if __name__ == "__main__":
                 filename='ckpt_epoch={epoch:02d}-val_loss={val_loss:.2f}',
                 every_n_epochs=2,
                 save_top_k=-1,
+            ),
+            dm.get_dataset_blur_scheduler_callback(
+                epoch_fraction_period=0.02,
+                dataset_name="train"
+            ),
+            dm.get_dataset_blur_scheduler_callback(
+                epoch_fraction_period=0.02,
+                dataset_name="val"
             )
         ]
     )
@@ -88,7 +106,16 @@ if __name__ == "__main__":
     RADIANCE_LEARNING_RATE_PERIOD = 0.01
     RADIANCE_LEARNING_RATE_DECAY: float = 2**(log2(RADIANCE_LEARNING_RATE_STOP/RADIANCE_LEARNING_RATE_START) * RADIANCE_LEARNING_RATE_PERIOD/RADIANCE_LEARNING_RATE_STOP_EPOCH) # type: ignore
 
-    model = Garf(
+    model = CameraCalibrationModel(
+        n_training_images=len(dm.dataset_train.images),
+        camera_rotation_init_sigma=1.0, 
+        camera_translation_init_sigma=1.0,
+        camera_learning_rate=5e-5,
+        camera_learning_rate_stop_epoch= 8,
+        camera_learning_rate_decay=0.999,
+        camera_learning_rate_period=0.02,
+        camera_weight_decay=0.0,
+
         near_plane=2,
         far_plane=7,
         proposal_samples_per_ray=64,

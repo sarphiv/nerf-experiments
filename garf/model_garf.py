@@ -5,12 +5,16 @@ import torch.nn as nn
 import pytorch_lightning as pl
 import nerfacc
 
-from data_module import DatasetOutput
 from model_radiance import RadianceNetwork
 from model_proposal import ProposalNetwork
 
 
-class Garf(pl.LightningModule):
+# Type alias for inner model batch input
+#  (origin, direction, pixel_color, pixel_relative_blur)
+InnerModelBatchInput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]
+
+
+class GarfModel(pl.LightningModule):
     def __init__(
         self, 
         near_plane: float,
@@ -238,19 +242,17 @@ class Garf(pl.LightningModule):
 
 
 
-    def _forward_loss(self, batch: DatasetOutput, batch_idx: int, stage: Literal["train", "val", "test"]):
-        """Forward pass that also calculates and logs losses.
+    def _forward_loss(self, batch: InnerModelBatchInput) -> tuple[th.Tensor, tuple[th.Tensor, th.Tensor]]:
+        """Forward pass that also calculates losses.
         
         Args:
-            batch (DatasetOutput): Batch of data
-            batch_idx (int): Index of the batch
-            stage (Literal["train", "val", "test"]): Stage of training
-        
+            batch (InnerModelBatchInput): Batch of data
+
         Returns:
-            tuple[th.Tensor]: Ordered losses for each optimizer
+            tuple[th.Tensor, tuple[th.Tensor, th.Tensor]]: Color predictions and ordered losses for each optimizer
         """
         # Decontsruct batch
-        ray_origs, ray_dirs, ray_colors = batch
+        ray_origs, ray_dirs, ray_colors, ray_scales = batch
         
         # Forward pass
         ray_colors_pred, ray_opacity, ray_depth, extras = self(ray_origs, ray_dirs)
@@ -259,53 +261,27 @@ class Garf(pl.LightningModule):
         proposal_loss = self.transmittance_estimator.compute_loss(extras["trans"])
         radiance_loss = nn.functional.mse_loss(ray_colors_pred, ray_colors)
 
-        # Calculate total loss
-        network_loss = proposal_loss + radiance_loss
-        
-        # Calculate PSNR
-        # NOTE: Cannot calculate SSIM because it relies on image patches
-        # NOTE: Cannot calculate LPIPS because it relies on image patches
-        psnr = -10 * th.log10(radiance_loss)
-
-        # Log metrics
-        self.log_dict({
-            f"{stage}_network_loss": network_loss,
-            f"{stage}_proposal_loss": proposal_loss,
-            f"{stage}_radiance_loss": radiance_loss,
-            f"{stage}_psnr": psnr,
-        }) 
-
-        # NOTE: Assuming losses are ordered according to associated optimizer
-        return proposal_loss, radiance_loss
+        # Return color prediction and losses
+        return (
+            ray_colors_pred
+            (proposal_loss, radiance_loss)
+        )
 
 
-    def training_step(self, batch: DatasetOutput, batch_idx: int):
-        """Perform a single training forward pass and optimization step.
-        
-        Args:
-            batch (DatasetOutput): Batch of data
-            batch_idx (int): Index of the batch
-        
-        Returns:
-            th.Tensor: Total loss
-        """
-        # Get optimizers for manual optimization
-        # NOTE: Technically getting a list of LightningOptimizer wrappers,
-        #  but they have not set up typing correctly. Expect more type ignores.
-        optimizers: list[th.optim.Optimizer] = self.optimizers() # type: ignore
 
-        # Forward pass
-        # NOTE: Assuming losses are ordered according to associated optimizers
-        losses = self._forward_loss(batch, batch_idx, "train")
-
-        # Backward pass and step through each optimizer
-        for loss, optimizer in zip(losses, optimizers):
-            optimizer.zero_grad()
-            self.manual_backward(loss, retain_graph=True)
-            optimizer.step()
+    def _proposal_optimizer_step(self, loss: th.Tensor):
+        self._proposal_optimizer.zero_grad()
+        self.manual_backward(loss, retain_graph=True)
+        self._proposal_optimizer.step()
 
 
-        # Step learning rate schedulers
+    def _radiance_optimizer_step(self, loss: th.Tensor):
+        self._radiance_optimizer.zero_grad()
+        self.manual_backward(loss, retain_graph=True)
+        self._radiance_optimizer.step()
+
+
+    def _proposal_scheduler_step(self, batch_idx: int):
         epoch_fraction = self.trainer.current_epoch + batch_idx/self.trainer.num_training_batches
 
         if (
@@ -315,6 +291,10 @@ class Garf(pl.LightningModule):
             self._proposal_learning_rate_milestone += self.proposal_learning_rate_period
             self._proposal_learning_rate_scheduler.step()
 
+
+    def _radiance_scheduler_step(self, batch_idx: int):
+        epoch_fraction = self.trainer.current_epoch + batch_idx/self.trainer.num_training_batches
+
         if (
             epoch_fraction >= self._radiance_learning_rate_milestone and
             epoch_fraction <= self.radiance_learning_rate_stop_epoch
@@ -323,21 +303,83 @@ class Garf(pl.LightningModule):
             self._radiance_learning_rate_scheduler.step()
 
 
-        # Return summed loss
-        return sum(losses)
+    def _get_logging_losses(
+        self, 
+        stage: Literal["train", "val", "test"], 
+        proposal_loss: th.Tensor, 
+        radiance_loss: th.Tensor, 
+        *args, 
+        **kwargs
+    ) -> dict[str, th.Tensor]:
+        # Calculate PSNR
+        # NOTE: Cannot calculate SSIM because it relies on image patches
+        # NOTE: Cannot calculate LPIPS because it relies on image patches
+        psnr = -10 * th.log10(radiance_loss)
+
+        # Return losses to be logged
+        return {
+            f"{stage}_proposal_loss": proposal_loss,
+            f"{stage}_radiance_loss": radiance_loss,
+            f"{stage}_psnr": psnr,
+        }
+        
 
 
-    def validation_step(self, batch: DatasetOutput, batch_idx: int):
-        """Perform a single validation forward pass.
+    def training_step(self, batch: InnerModelBatchInput, batch_idx: int):
+        """Perform a single training forward pass and optimization step.
         
         Args:
-            batch (DatasetOutput): Batch of data
+            batch (InnerModelBatchInput): Batch of data
             batch_idx (int): Index of the batch
         
         Returns:
-            th.Tensor: Total loss
+            th.Tensor: Loss
         """
-        return sum(self._forward_loss(batch, batch_idx, "val"))
+        # Forward pass
+        _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
+
+        # Backward pass and step through each optimizer
+        self._proposal_optimizer_step(proposal_loss)
+        self._radiance_optimizer_step(radiance_loss)
+
+        # Step learning rate schedulers
+        self._proposal_scheduler_step(batch_idx)
+        self._radiance_scheduler_step(batch_idx)
+
+        # Log metrics
+        self.log_dict(self._get_logging_losses(
+            "train",
+            proposal_loss,
+            radiance_loss,
+        ))
+
+
+        # Return loss
+        return radiance_loss
+
+
+    def validation_step(self, batch: InnerModelBatchInput, batch_idx: int):
+        """Perform a single validation forward pass.
+        
+        Args:
+            batch (InnerModelBatchInput): Batch of data
+            batch_idx (int): Index of the batch
+        
+        Returns:
+            th.Tensor: Loss
+        """
+        # Forward pass
+        _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
+
+        # Log metrics
+        self.log_dict(self._get_logging_losses(
+            "val",
+            proposal_loss,
+            radiance_loss,
+        ))
+        
+        return radiance_loss
+
 
 
     def configure_optimizers(self):
@@ -377,7 +419,6 @@ class Garf(pl.LightningModule):
 
 
         # Set optimizers and schedulers
-        # NOTE: Assuming losses are ordered according to associated optimizer
         return (
             [self._proposal_optimizer, self._radiance_optimizer], 
             [self._proposal_learning_rate_scheduler, self._radiance_learning_rate_scheduler]
