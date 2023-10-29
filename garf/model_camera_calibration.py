@@ -60,17 +60,17 @@ class CameraCalibrationModel(GarfModel):
             R: th.Tensor - the rotation matrix
             t: th.Tensor - the translation vector
         """
-        def align_rotation(P, Q):
+        def align_rotation(P: th.Tensor, Q: th.Tensor):
             """
             Optimize ||P - Q@R||^2 using SVD
             """
             H = P.T@Q
-            U, S, V = th.linalg.svd(H) # In normal notation this is U, S, V^T 
-            d = th.linalg.det(V.T@U.T)
-            K = th.eye(len(S))
+            U, S, V = th.linalg.svd(H.to(dtype=th.float)) # In normal notation this is U, S, V^T 
+            d = th.linalg.det((V.T@U.T).to(dtype=th.float))
+            K = th.eye(len(S), dtype=th.float, device=P.device)
             K[-1,-1] = d
             R = V.T@K@U.T
-            return R
+            return R.to(dtype=P.dtype)
 
         # Translate both point clouds to the origin 
         mean_from = th.mean(point_cloud_from, dim=0, keepdim=True)
@@ -189,18 +189,19 @@ class CameraCalibrationModel(GarfModel):
             rotations: th.Tensor - the rotation matrices
         """
         # Get the raw and noise origins 
-        origs_raw = self.trainer.datamodule.dataset_train.origins_raw.view(-1, 3) # type: ignore
-        origs_noisy = self.trainer.datamodule.dataset_train.origins_noisy.view(-1, 3) # type: ignore
-        dirs_noisy = self.trainer.datamodule.dataset_train.origins_noisy.view(-1, 3) # type: ignore
-        img_idxs = th.arange(len(origs_raw), device=origs_raw.device).view(-1, 1)
+        # TODO: Unnastify this mess of bug fixes
+        #  Maybe get rid of the list comprehension, the cat, the device, and stuff
+        origs_raw = th.cat([origs[0, 0] for origs in self.trainer.datamodule.dataset_train.origins_raw.values()]).to(device=origs_val.device).view(-1, 3) # type: ignore
+        origs_noisy = th.cat([origs[0, 0] for origs in self.trainer.datamodule.dataset_train.origins_noisy.values()]).to(device=origs_val.device).view(-1, 3) # type: ignore
+        img_idxs = th.arange(len(self.trainer.datamodule.dataset_train.origins_raw), device=origs_raw.device) # type: ignore
 
         # Get the predicted origins 
-        origs_pred, _, _, _ = self.camera_extrinsics(img_idxs, origs_noisy, dirs_noisy)
+        origs_pred, _, _ = self.camera_extrinsics.forward_origins(img_idxs, origs_noisy)
 
         #TODO: Add a flag so that we do not need to calculate the rotation matrix and translation vector
         #  every time if the network has not changed 
         # Get the rotation matrix and the translation vector 
-        R, t = self.kabsch_algorithm(self, origs_raw, origs_pred) # type: ignore
+        R, t = self.kabsch_algorithm(origs_raw, origs_pred) # type: ignore
 
         # Transform the validation image to this space 
         origs_model = th.matmul(R, origs_val.unsqueeze(-1)).squeeze(-1) + t

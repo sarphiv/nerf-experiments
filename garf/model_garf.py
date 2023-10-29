@@ -263,7 +263,7 @@ class GarfModel(pl.LightningModule):
 
         # Return color prediction and losses
         return (
-            ray_colors_pred
+            ray_colors_pred,
             (proposal_loss, radiance_loss)
         )
 

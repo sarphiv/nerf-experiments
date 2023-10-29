@@ -353,11 +353,11 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         )
 
         # Pad image and retrieve pixel and neighbors
-        neighborhood: th.Tensor = pad(img)[
+        neighborhood: th.Tensor = pad(img.permute(2, 0, 1))[
             :,
             (top+y-kernel_half):(top+y+kernel_half)+1, 
-            (left+x-kernel_half):(left+x+kernel_half)+1
-        ]
+            (left+x-kernel_half):(left+x+kernel_half)+1,
+        ].permute(1, 2, 0)
 
 
         # Blur y-direction and store y-column of pixel
@@ -365,7 +365,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         blurred_y = (neighborhood * gaussian_blur_kernel.view(-1, 1, 1)).sum(dim=0)
         # Blur x-direction and store pixel
         # (W, C) -> (C)
-        blurred_pixel = blurred_y * gaussian_blur_kernel.view(-1, 1).sum(dim=0)
+        blurred_pixel = (blurred_y * gaussian_blur_kernel.view(-1, 1)).sum(dim=0)
 
         # Return blurred pixel
         return blurred_pixel
@@ -414,8 +414,8 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             d_n.view(-1, 3)[i], 
             c_r,
             c_b, 
-            th.Tensor(self.gaussian_blur_relative_sigma_current), 
-            th.Tensor(img_idx)
+            th.tensor(self.gaussian_blur_relative_sigma_current), 
+            th.tensor(img_idx)
         )
 
 

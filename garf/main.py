@@ -41,7 +41,7 @@ if __name__ == "__main__":
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
         batch_size=BATCH_SIZE,
-        num_workers=4,
+        num_workers=8,
         shuffle=True,
     )
 
