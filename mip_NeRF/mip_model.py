@@ -1,7 +1,7 @@
 import torch as th
 import pytorch_lightning as pl
 
-from typing import cast
+from typing import cast, Optional, Tuple
 
 from model_interpolation_architecture import NerfModel, FourierFeatures
 from model_interpolation import NerfInterpolation
@@ -9,35 +9,70 @@ from model_interpolation import NerfInterpolation
 
 
 class IntegratedFourierFeatures(FourierFeatures):
-    def forward(self, pos: th.Tensor, dir: th.Tensor, t_start: th.Tensor, t_end: th.Tensor, pixel_width: float) -> th.Tensor:
+
+    def __init__(self, 
+        levels: int,
+        scale: float = 2*th.pi,
+        distribute_variance: Optional[bool] = False,
+    ):
+        super().__init__(levels, scale)
+        self.distribute_variance = distribute_variance
+
+    def forward(self,
+                pos: th.Tensor,
+                dir: th.Tensor,
+                t_start: th.Tensor,
+                t_end: th.Tensor,
+                pixel_width: float,
+                distribute_variance: Optional[bool] = None,
+                ) -> th.Tensor:
         
+        batch_size, space_dim = pos.shape
+        distribute_variance = distribute_variance or self.distribute_variance
+        assert space_dim == 3, "Only 3D supported"
+
         # Mip nerf helper constants
         t_mu = (t_start + t_end) / 2 # below eq 7
         t_delta = (t_end - t_start) / 2 # below eq 7
 
         # compute updated position (mu)
-        mu_diff = 2*t_mu*t_delta**2/(3*t_mu**2+t_delta) # eq 8
+        mu_diff = 2*t_mu*t_delta**2/(3*t_mu**2+t_delta**2) # eq 8
         pos_mu = pos + mu_diff*dir # eq 8
 
         # compute diag_sigma_gamma
         # helper constants
-        frustum_radius = pixel_width * (t_start + mu_diff)
-        frustum_radius = frustum_radius.to()
-        r_dot = 2/12**0.5*frustum_radius # above eq 5
+        # Lauge: I think this is wrong:
+        # frustum_radius = pixel_width * (t_start + mu_diff)
+        # r_dot = 2/12**0.5*frustum_radius # above eq 5
+        # Lauge: I think this is right:
+        r_dot = pixel_width * 2 / (12**0.5) # above eq 5
 
         sigma_t_sq = t_delta**2/3 - (4*t_delta**4*(12*t_mu**2 - t_delta**2))/(15*(3*t_mu**2 + t_delta**2)**2) # eq 7
         sigma_r_sq = r_dot**2*(t_mu**2/4 + 5*t_delta**2/12-4*t_delta**4/(15*(3*t_mu**2+t_delta**2))) # eq 7
 
-        # calculate that diagonal
-        diag_sigma = sigma_t_sq*dir**2 + sigma_r_sq*(1-dir**2/th.sum(dir**2, dim=1, keepdim=True)) # eq 16
-        diag = diag_sigma.repeat(1, self.levels*2)*4**th.arange(self.levels, device=diag_sigma.device).repeat(pos.shape[0], 2).repeat_interleave(3, 1) # eq 15
+        scale = 4**th.arange(self.levels, device=pos.device).repeat(space_dim) # [4,16,4,16,4,16]
 
-        # compute positional encoding
-        weight = th.exp(-diag/2) # eq 14
-        # call selv.super.forward
-        pos_enc = super(IntegratedFourierFeatures, self).forward(pos_mu)*weight
+        if distribute_variance:
+            Sigma = (sigma_t_sq + sigma_r_sq * 2)/space_dim*scale
+            weight = th.exp(-Sigma/2)
 
-        return pos_enc
+        else:
+            # calculate that diagonal
+            diag_Sigma = sigma_t_sq*dir**2 + sigma_r_sq*(1-dir**2/th.sum(dir**2, dim=1, keepdim=True)) # eq 16
+
+            # repeat and multiply by 4**i
+            tmp = diag_Sigma.repeat_interleave(self.levels, dim=1) # with levels = 2 we get [x,x,y,y,z,z] ... times batch size
+            diag_Sigma_gamma = tmp*scale # = [4x, 16x, 4y, ... ] times batch size.
+
+            # compute positional encoding
+            weight = th.exp(-diag_Sigma_gamma/2) # eq 14
+
+        # call self.super.forward
+        pe = super(IntegratedFourierFeatures, self).forward(pos_mu)
+
+        ipe = pe*weight.repeat(1,2)
+
+        return ipe
         
 
 
@@ -46,7 +81,8 @@ class MipNerfModel(NerfModel):
         n_hidden: int,
         hidden_dim: int,
         fourier: tuple[bool, int, int],
-        n_segments: int
+        n_segments: int,
+        distribute_variance: Optional[bool] = False,
     ):
         super().__init__(
             n_hidden,
@@ -56,10 +92,10 @@ class MipNerfModel(NerfModel):
             delayed_density=False,
             n_segments=n_segments,
                 )
-        
+
         if self.fourier:
             fourier_levels_pos = self.position_encoder.levels
-            self.position_encoder = IntegratedFourierFeatures(fourier_levels_pos, 2*th.pi)
+            self.position_encoder = IntegratedFourierFeatures(fourier_levels_pos, 2*th.pi, distribute_variance)
 
     def forward(self, pos, dir, t_start, t_end, pixel_width):
         if self.fourier:
@@ -81,7 +117,8 @@ class MipNerf(NerfInterpolation):#, pl.LightningModule):
         n_segments: int,
         learning_rate: float = 1e-4,
         learning_rate_decay: float = 0.5,
-        weight_decay: float = 0.0
+        weight_decay: float = 0.0,
+        distribute_variance: Optional[bool] = False,
     ): 
         
         # super(pl.LightningModule, self).__init__()
@@ -112,7 +149,8 @@ class MipNerf(NerfInterpolation):#, pl.LightningModule):
             n_hidden,
             hidden_dim=256,
             fourier=fourier,
-            n_segments=n_segments
+            n_segments=n_segments,
+            distribute_variance=distribute_variance,
         )
 
         self.model_coarse = self.model

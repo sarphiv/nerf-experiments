@@ -91,7 +91,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         camera_data = json.loads(open(self.pose_path).read())
         
         self.focal_length = self.image_width / 2 / math.tan(camera_data["camera_angle_x"] / 2)
-        self.pixel_width = 1/self.image_width
+        self.pixel_width = 1/self.focal_length
 
         self.camera_to_world: dict[str, th.Tensor] = { 
             pathlib.PurePath(path).stem: th.tensor(camera_to_world) / camera_to_world[-1][-1]

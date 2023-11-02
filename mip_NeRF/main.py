@@ -22,7 +22,11 @@ if __name__ == "__main__":
     parser.add_argument('--delayed_density', type=bool, default=True, help='When the network outputs the density')
     parser.add_argument('--n_segments', type=int, default=2, help='Number of times the positional data is feed to the network')
     parser.add_argument('--n_hidden', type=int, default=4, help='Number of hidden layers')
+    parser.add_argument('--mip_distribute_variance', type=bool, default=False, help='Whether to distribute the variance in the MIP model or not')
     args = parser.parse_args()
+
+    print("Using arguments:")
+    print(args)
 
     # Set seeds
     pl.seed_everything(1337)
@@ -32,7 +36,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="mip-nerf-test-1"
+        name="mip-nerf-test-2"
     )
 
 
@@ -97,7 +101,8 @@ if __name__ == "__main__":
         n_segments=args.n_segments,
         learning_rate=5e-4,
         learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
-        weight_decay=0
+        weight_decay=0,
+        distribute_variance=args.mip_distribute_variance,
     )
 
 
