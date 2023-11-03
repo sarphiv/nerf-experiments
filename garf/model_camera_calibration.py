@@ -1,4 +1,4 @@
-from typing import cast, Literal
+from typing import Literal, Optional
 
 import torch as th
 import torch.nn as nn
@@ -65,7 +65,7 @@ class CameraCalibrationModel(GarfModel):
             Optimize ||P - Q@R||^2 using SVD
             """
             H = P.T@Q
-            U, S, V = th.linalg.svd(H.to(dtype=th.float)) # In normal notation this is U, S, V^T 
+            U, S, V = th.linalg.svd(H.to(dtype=th.float)) # Conventional notation is: U, S, V^T 
             d = th.linalg.det((V.T@U.T).to(dtype=th.float))
             K = th.eye(len(S), dtype=th.float, device=P.device)
             K[-1,-1] = d
@@ -154,7 +154,7 @@ class CameraCalibrationModel(GarfModel):
         ) = batch
 
         # Transform rays to model prediction space
-        ray_origs_noisy, ray_dirs_noisy, _, _ = self.validation_transform_rays(
+        ray_origs_noisy, ray_dirs_noisy, _ = self.validation_transform_rays(
             ray_origs_noisy, 
             ray_dirs_noisy
         )
@@ -172,7 +172,7 @@ class CameraCalibrationModel(GarfModel):
         )
 
 
-    def validation_transform_rays(self, origs_val: th.Tensor, dirs_val: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]:
+    def validation_transform_rays(self, origs_val: th.Tensor, dirs_val: th.Tensor, post_transform_params: Optional[tuple[th.Tensor, th.Tensor]] = None) -> tuple[th.Tensor, th.Tensor, tuple[th.Tensor, th.Tensor]]:
         """
         Takes in validation rays and transforms them to the predicting space 
 
@@ -180,6 +180,7 @@ class CameraCalibrationModel(GarfModel):
         -----------
             origs_val: th.Tensor - the origins of the rays
             dirs_val: th.Tensor - the directions of the rays
+            post_transform_params: Optional[tuple[th.Tensor, th.Tensor]] - the post-transform parameters (R, t) to use. If None, then they are calculated
 
         Returns:
         --------
@@ -198,16 +199,18 @@ class CameraCalibrationModel(GarfModel):
         # Get the predicted origins 
         origs_pred, _, _ = self.camera_extrinsics.forward_origins(img_idxs, origs_noisy)
 
-        #TODO: Add a flag so that we do not need to calculate the rotation matrix and translation vector
-        #  every time if the network has not changed 
-        # Get the rotation matrix and the translation vector 
-        R, t = self.kabsch_algorithm(origs_raw, origs_pred) # type: ignore
+        # If not supplied, get the rotation matrix and the translation vector 
+        if post_transform_params is None:
+            R, t = self.kabsch_algorithm(origs_raw, origs_pred)
+        # Else, use the supplied parameters
+        else:
+            R, t = post_transform_params
 
         # Transform the validation image to this space 
         origs_model = th.matmul(R, origs_val.unsqueeze(-1)).squeeze(-1) + t
         dirs_model = th.matmul(R, dirs_val.unsqueeze(-1)).squeeze(-1)
 
-        return origs_model, dirs_model, t, R
+        return origs_model, dirs_model, (R, t)
 
 
 
@@ -348,6 +351,7 @@ class CameraCalibrationModel(GarfModel):
 
     def validation_step(self, batch: DatasetOutput, batch_idx: int):
         # Transform to the model prediction space
+        # TODO: Cache post-transformation params from Kabsc algorithm
         batch = self.validation_transform(batch)
 
         # Forward pass

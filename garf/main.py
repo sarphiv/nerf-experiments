@@ -32,17 +32,18 @@ if __name__ == "__main__":
         image_width=800,
         image_height=800,
         scene_path="../data/lego",
-        rotation_noise_sigma=1.0,
-        translation_noise_sigma=1.0,
+        rotation_noise_sigma=0.0,
+        translation_noise_sigma=0.0,
         noise_seed=13571113,
         gaussian_blur_kernel_size=81,
-        gaussian_blur_relative_sigma_start=80.,
+        gaussian_blur_relative_sigma_start=0.,
         gaussian_blur_relative_sigma_decay=0.99,
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
         batch_size=BATCH_SIZE,
         num_workers=8,
         shuffle=True,
+        pin_memory=True
     )
 
     dm.setup("fit")

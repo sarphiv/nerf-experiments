@@ -135,10 +135,12 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
 
 
     def _load_images(self, image_dir_path, image_width, image_height) -> dict[str, th.Tensor]:
-        # Transform from PIL image to Tensor
+        # Transform image to correct format
         transform = cast(
             Callable[[th.Tensor], th.Tensor], 
             tv.transforms.Compose([
+                # Convert to float
+                tv.transforms.Lambda(lambda img: img.float() / 255.),
                 # Resize image
                 tv.transforms.Resize(
                     (image_height, image_width), 

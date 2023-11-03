@@ -135,9 +135,6 @@ class Log2dImageReconstruction(Callback):
             origins = dataset.origins_raw[name].view(-1, 3)
             directions = dataset.directions_raw[name].view(-1, 3)
 
-            # Transform origins to model space
-            origins, directions, _, _ = model.validation_transform_rays(origins, directions)
-
             # Set up data loader for validation image
             data_loader = DataLoader(
                 dataset=TensorDataset(
@@ -146,18 +143,24 @@ class Log2dImageReconstruction(Callback):
                 ),
                 batch_size=self.batch_size,
                 num_workers=self.num_workers,
-                shuffle=False
+                shuffle=False,
+                pin_memory=True
             )
 
             # Iterate over batches of rays to get RGB values
             rgb = th.empty((dataset.image_batch_size, 3), dtype=cast(th.dtype, model.dtype))
+            transform_params = None
             i = 0
             
             for ray_origs, ray_dirs in tqdm(data_loader, desc="Predicting RGB values", leave=False):
                 # Prepare for model prediction
                 ray_origs = ray_origs.to(model.device)
                 ray_dirs = ray_dirs.to(model.device)
-                
+
+                # Transform origins to model space
+                # TODO: The flag for inside validation_transform_rays should be implemented for performance
+                ray_origs, ray_dirs, transform_params = model.validation_transform_rays(ray_origs, ray_dirs, transform_params)
+
                 # Get size of batch
                 batch_size = ray_origs.shape[0]
                 
