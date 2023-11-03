@@ -8,8 +8,8 @@ class CameraExtrinsics(nn.Module):
         
         self.size = n_train_images
         # Rotation stored as so3 Lie algebra
-        self.rotation = nn.Parameter(th.randn((n_train_images, 3))*rotation_init_sigma)
-        self.translation = nn.Parameter(th.randn((n_train_images, 3))*translation_init_sigma)
+        self.rotation = nn.Parameter(th.zeros((n_train_images, 3))*rotation_init_sigma)
+        self.translation = nn.Parameter(th.zeros((n_train_images, 3))*translation_init_sigma)
 
 
     def get_rotations(self, img_idx: th.Tensor) -> th.Tensor:
