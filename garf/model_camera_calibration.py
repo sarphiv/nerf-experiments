@@ -15,8 +15,6 @@ class CameraCalibrationModel(GarfModel):
     def __init__(
         self, 
         n_training_images: int,
-        camera_rotation_init_sigma: float, 
-        camera_translation_init_sigma: float,
         camera_learning_rate: float,
         camera_learning_rate_stop_epoch: int = 10,
         camera_learning_rate_decay: float = 0.999,
@@ -28,11 +26,7 @@ class CameraCalibrationModel(GarfModel):
         super().__init__(*inner_model_args, **inner_model_kwargs)
 
         # Create camera calibration model
-        self.camera_extrinsics = CameraExtrinsics(
-            rotation_init_sigma=camera_rotation_init_sigma,
-            translation_init_sigma=camera_translation_init_sigma,
-            n_train_images=n_training_images
-        )
+        self.camera_extrinsics = CameraExtrinsics(n_training_images)
 
         # Store hyperparameters
         self.camera_learning_rate = camera_learning_rate

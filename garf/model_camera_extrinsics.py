@@ -3,13 +3,13 @@ import torch.nn as nn
 
 
 class CameraExtrinsics(nn.Module):
-    def __init__(self, rotation_init_sigma: float, translation_init_sigma: float, n_train_images: int) -> None:
+    def __init__(self, n_train_images: int) -> None:
         super().__init__()
         
         self.size = n_train_images
         # Rotation stored as so3 Lie algebra
-        self.rotation = nn.Parameter(th.zeros((n_train_images, 3))*rotation_init_sigma)
-        self.translation = nn.Parameter(th.zeros((n_train_images, 3))*translation_init_sigma)
+        self.rotation = nn.Parameter(th.zeros((n_train_images, 3)))
+        self.translation = nn.Parameter(th.zeros((n_train_images, 3)))
 
 
     def get_rotations(self, img_idx: th.Tensor) -> th.Tensor:

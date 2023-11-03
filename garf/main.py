@@ -32,6 +32,8 @@ if __name__ == "__main__":
         image_width=800,
         image_height=800,
         scene_path="../data/lego",
+        # NOTE: Supplying identity transform because GARF has trouble with small inputs
+        space_transform=(1, th.arange(3)),
         rotation_noise_sigma=0.0,
         translation_noise_sigma=0.0,
         noise_seed=13571113,
@@ -109,8 +111,6 @@ if __name__ == "__main__":
 
     model = CameraCalibrationModel(
         n_training_images=len(dm.dataset_train.images),
-        camera_rotation_init_sigma=1.0, 
-        camera_translation_init_sigma=1.0,
         camera_learning_rate=5e-5,
         camera_learning_rate_stop_epoch= 8,
         camera_learning_rate_decay=0.999,

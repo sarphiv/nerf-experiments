@@ -20,6 +20,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         scene_path: str, 
         image_width: int,
         image_height: int,
+        space_transform: Optional[tuple[float, th.Tensor]]=None,
         rotation_noise_sigma: float=1.0,
         translation_noise_sigma: float=1.0,
         noise_seed: Optional[int]=None,
@@ -36,6 +37,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
             scene_path (str): Path to the scene directory containing the camera and image data.
             image_width (int): Width to resize images to.
             image_height (int): Height to resize images to.
+            space_transform (Optional[tuple[float, th.Tensor]], optional): Space transform parameters (cam_max_distance (float), cam_mean (3,)) to apply to the data.
             rotation_noise_sigma (float, optional): Standard deviation of rotation noise in radians. Defaults to 1.0.
             translation_noise_sigma (float, optional): Standard deviation of translation noise. Defaults to 1.0.
             noise_seed (Optional[int], optional): Seed for the noise generator. Defaults to None.
@@ -58,8 +60,8 @@ class ImagePoseDataModule(pl.LightningDataModule):
         self.image_width = image_width
         self.image_height = image_height
 
-        self.space_transform: Optional[tuple[float, th.Tensor]] = None
-        
+        self.space_transform = space_transform
+
         self.rotation_noise_sigma = rotation_noise_sigma
         self.translation_noise_sigma = translation_noise_sigma
         self.noise_seed = noise_seed
