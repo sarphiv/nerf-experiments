@@ -1,4 +1,5 @@
 from math import log2
+import argparse
 
 import pytorch_lightning as pl
 import torch as th
@@ -13,6 +14,12 @@ from model_camera_calibration import CameraCalibrationModel
 
 
 if __name__ == "__main__":
+    # Load arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-r", "--r_noise", type=float, default=0.0)
+    parser.add_argument("-t", "--t_noise", type=float, default=0.0)
+    args = parser.parse_args()
+
     # Set seeds
     pl.seed_everything(1337)
 
@@ -34,8 +41,8 @@ if __name__ == "__main__":
         scene_path="../data/lego",
         # NOTE: Supplying identity transform because GARF has trouble with small inputs
         space_transform=(1, th.arange(3)),
-        rotation_noise_sigma=0.0,
-        translation_noise_sigma=0.0,
+        rotation_noise_sigma=float(args.r_noise),
+        translation_noise_sigma=float(args.t_noise),
         noise_seed=13571113,
         gaussian_blur_kernel_size=81,
         gaussian_blur_relative_sigma_start=0.,
