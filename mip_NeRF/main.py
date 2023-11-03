@@ -23,6 +23,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_segments', type=int, default=2, help='Number of times the positional data is feed to the network')
     parser.add_argument('--n_hidden', type=int, default=4, help='Number of hidden layers')
     parser.add_argument('--mip_distribute_variance', type=bool, default=False, help='Whether to distribute the variance in the MIP model or not')
+    parser.add_argument('--experiment_name', type=str, default=f"Unnamed experiment at '{os.path.basename(os.path.dirname(__file__))}'")
     args = parser.parse_args()
 
     print("Using arguments:")
