@@ -22,7 +22,8 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         image_height: int,
         images_path: str,
         camera_info_path: str,
-        space_transform: Optional[tuple[float, th.Tensor]]=None,
+        space_transform_scale: Optional[float]=None,
+        space_transform_translate: Optional[th.Tensor]=None,
         rotation_noise_sigma: float=1.0,
         translation_noise_sigma: float=1.0,
         noise_seed: Optional[int]=None,
@@ -37,7 +38,8 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             image_height (int): Height to resize images to.
             images_path (str): Path to the image directory.
             camera_info_path (str): Path to the camera info file.
-            space_transform (Optional[tuple[float, th.Tensor]], optional): Space transform parameters (cam_max_distance (float), cam_mean (3,)). Defaults to None.
+            space_transform_scale (Optional[float], optional): Scale parameter for the space transform. Defaults to None, which auto-calculates based on max distance.
+            space_transform_translate (Optional[th.Tensor], optional): Translation parameter for the space transform. Defaults to None, which auto-calculates the mean.
             rotation_noise_sigma (float, optional): Sigma parameter for the rotation noise in radians. Defaults to 1.0.
             translation_noise_sigma (float, optional): Sigma parameter for the translation noise. Defaults to 1.0.
             noise_seed (Optional[int], optional): Seed for the noise generator. Defaults to None.
@@ -87,9 +89,14 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         )
 
         # Transform camera to world matrices
-        self.camera_to_world, self.space_transform = self._transform_camera_to_world(
+        (
             self.camera_to_world, 
-            space_transform
+            self.space_transform_scale, 
+            self.space_transform_translate
+        ) = self._transform_camera_to_world(
+            self.camera_to_world, 
+            space_transform_scale,
+            space_transform_translate
         )
 
 
@@ -187,39 +194,37 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         return focal_length, camera_to_world
 
 
-    def _transform_camera_to_world(self, camera_to_world: dict[str, th.Tensor], space_transform: Optional[tuple[float, th.Tensor]]) -> tuple[dict[str, th.Tensor], tuple[float, th.Tensor]]:
+    def _transform_camera_to_world(self, camera_to_world: dict[str, th.Tensor], space_transform_scale: Optional[float], space_transform_translate: Optional[th.Tensor]) -> tuple[dict[str, th.Tensor], float, th.Tensor]:
         # If space transform is not given, initialize transform parameters from data
         # NOTE: Assuming camera_to_world has scale 1
-        if space_transform is None:
-            camera_positions = th.vstack(tuple(camera_to_world.values()))[:3, -1].reshape(-1, 3)
-            camera_average_position = camera_positions.mean(dim=0)
+        camera_positions = th.vstack(tuple(camera_to_world.values()))[:3, -1].reshape(-1, 3)
 
-            # Get the maximum distance of any two cameras 
-            camera_max_distance: float = 3*th.cdist(camera_positions, camera_positions, compute_mode="donot_use_mm_for_euclid_dist").max().item()
-            
-            # Define space transform 
-            space_transform = (camera_max_distance, camera_average_position)
+        # If no scale is given, initialize to 3*the maximum distance of any two cameras
+        if space_transform_scale is None:
+            space_transform_scale = 3*th.cdist(camera_positions, camera_positions, compute_mode="donot_use_mm_for_euclid_dist").max().item()
 
+        # If no translation is given, initialize to mean
+        if space_transform_translate is None:
+            space_transform_translate = camera_positions.mean(dim=0)
 
-        # Deconstruct the space transform tuple
-        (camera_max_distance, camera_average_position) = space_transform
 
         # Only move the offset
-        camera_average_position_matrix = th.cat((camera_average_position, th.zeros(1))).view(4, 1)
-        camera_average_position_matrix = th.hstack((th.zeros((4,3)), camera_average_position_matrix))
+        translate_matrix = th.cat((space_transform_translate, th.zeros(1))).view(4, 1)
+        translate_matrix = th.hstack((th.zeros((4,3)), translate_matrix))
 
         # Scale the camera distances
-        camera_max_distance_matrix = th.ones((4, 4))
-        camera_max_distance_matrix[:-1, -1] = camera_max_distance
+        scale_matrix = th.ones((4, 4))
+        scale_matrix[:-1, -1] = space_transform_scale
 
         # Move origin to average position of all cameras and scale world coordinates by the 3*the maximum distance of any two cameras
         return (
             { 
-                image_name: (camera_to_world - camera_average_position_matrix)/camera_max_distance_matrix
+                image_name: (camera_to_world - translate_matrix)/scale_matrix
                 for image_name, camera_to_world 
                 in camera_to_world.items() 
             },
-            space_transform
+            space_transform_scale,
+            space_transform_translate
         )
 
 

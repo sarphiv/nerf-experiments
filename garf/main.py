@@ -39,11 +39,11 @@ if __name__ == "__main__":
         image_width=800,
         image_height=800,
         scene_path="../data/lego",
-        # NOTE: Supplying identity transform because GARF has trouble with small inputs
-        space_transform=(1, th.arange(3)),
+        space_transform_scale=1,
+        space_transform_translate=None,
         rotation_noise_sigma=float(args.r_noise),
         translation_noise_sigma=float(args.t_noise),
-        noise_seed=13571113,
+        camera_noise_seed=13571113,
         gaussian_blur_kernel_size=81,
         gaussian_blur_relative_sigma_start=0.,
         gaussian_blur_relative_sigma_decay=0.99,
@@ -118,8 +118,8 @@ if __name__ == "__main__":
 
     model = CameraCalibrationModel(
         n_training_images=len(dm.dataset_train.images),
-        camera_learning_rate=5e-5,
-        camera_learning_rate_stop_epoch= 8,
+        camera_learning_rate=5e-4,
+        camera_learning_rate_stop_epoch=8,
         camera_learning_rate_decay=0.999,
         camera_learning_rate_period=0.02,
         camera_weight_decay=0.0,
@@ -144,7 +144,7 @@ if __name__ == "__main__":
     )
 
     # Log model gradients and parameters
-    wandb_logger.watch(model, log="all")
+    # wandb_logger.watch(model, log="all")
 
     # Start training, resume from checkpoint
     trainer.fit(model, dm)

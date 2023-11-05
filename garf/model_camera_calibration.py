@@ -41,13 +41,13 @@ class CameraCalibrationModel(GarfModel):
 
     def kabsch_algorithm(self, point_cloud_from: th.Tensor, point_cloud_to: th.Tensor): 
         """
-        Align "point_cloud_2" to "point_cloud_1" with a matrix R and a vector t.
+        Align "point_cloud_from" to "point_cloud_to" with a matrix R and a vector t.
         align_rotation: helper function that optimizes the subproblem ||P - Q@R||^2 using SVD
         
         Parameters:
         -----------
-            point_cloud_1: th.Tensor - the point cloud where we transform to
-            point_cloud_2: th.Tensor - the point cloud where we transform from
+            point_cloud_from: th.Tensor - the point cloud where we transform from
+            point_cloud_to: th.Tensor - the point cloud where we transform to
 
         Returns:
         --------
@@ -183,22 +183,25 @@ class CameraCalibrationModel(GarfModel):
             translations: th.Tensor - the translation vectors
             rotations: th.Tensor - the rotation matrices
         """
-        # Get the raw and noise origins 
-        # TODO: Unnastify this mess of bug fixes
-        #  Maybe get rid of the list comprehension, the cat, the device, and stuff
-        origs_raw = th.cat([origs[0, 0] for origs in self.trainer.datamodule.dataset_train.origins_raw.values()]).to(device=origs_val.device).view(-1, 3) # type: ignore
-        origs_noisy = th.cat([origs[0, 0] for origs in self.trainer.datamodule.dataset_train.origins_noisy.values()]).to(device=origs_val.device).view(-1, 3) # type: ignore
-        img_idxs = th.arange(len(self.trainer.datamodule.dataset_train.origins_raw), device=origs_raw.device) # type: ignore
-
-        # Get the predicted origins 
-        origs_pred, _, _ = self.camera_extrinsics.forward_origins(img_idxs, origs_noisy)
 
         # If not supplied, get the rotation matrix and the translation vector 
         if post_transform_params is None:
-            R, t = self.kabsch_algorithm(origs_raw, origs_pred)
-        # Else, use the supplied parameters
-        else:
-            R, t = post_transform_params
+            # TODO: Unnastify this mess of bug fixes
+            #  Maybe get rid of the list comprehension, the cat, the device, and stuff
+            # Get the raw and noise origins 
+            origs_raw = th.cat([origs[0, 0] for origs in self.trainer.datamodule.dataset_train.origins_raw.values()]).to(device=origs_val.device).view(-1, 3) # type: ignore
+            origs_noisy = th.cat([origs[0, 0] for origs in self.trainer.datamodule.dataset_train.origins_noisy.values()]).to(device=origs_val.device).view(-1, 3) # type: ignore
+            img_idxs = th.arange(len(self.trainer.datamodule.dataset_train.origins_noisy), device=origs_raw.device) # type: ignore
+
+            # Get the predicted origins 
+            origs_pred, _, _ = self.camera_extrinsics.forward_origins(img_idxs, origs_noisy)
+
+            # Align raw space to predicted model space
+            post_transform_params = self.kabsch_algorithm(origs_raw, origs_pred)
+
+
+        # Deconstruct post-transform parameters
+        R, t = post_transform_params
 
         # Transform the validation image to this space 
         origs_model = th.matmul(R, origs_val.unsqueeze(-1)).squeeze(-1) + t
