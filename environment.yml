@@ -2,9 +2,15 @@ name: nerf-experiments-env
 channels:
   - defaults
   - conda-forge
+  - nvidia
 dependencies:
   - pip
   - python=3.10.8
+  - gcc=12.3.0
+  - gxx
+  - ninja
+  - cuda-toolkit
+  - cuda-nvcc
   - pip:
     - ipython
     - ipykernel
@@ -18,4 +24,5 @@ dependencies:
     - torchvision
     - torchaudio
     - pytorch-lightning
+    - nerfacc
     - wandb

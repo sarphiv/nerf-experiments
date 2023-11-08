@@ -1,181 +1,82 @@
-# import torch as th
-# from torch import nn
-# import numpy as np
-# import matplotlib.pyplot as plt
+from gaussian import GaussAct
+from model import GaussActMLP, Function1, Function2
 
-# # def rot_mat(angle, idx, requires_grad=False, **kwargs):
-# #     R = th.zeros((3,3), requires_grad=requires_grad, **kwargs)
-# #     R[idx[0], idx[0]] = R[idx[1], idx[1]] = th.cos(angle)
-# #     R[idx[1], idx[0]] = th.sin(angle)
-# #     R[idx[0], idx[1]] = -th.sin(angle)
-# #     i = 3 - sum(idx)
-# #     R[i,i] = 1
-# #     return R 
+import torch.nn as nn
+import torch as th
+import matplotlib.pyplot as plt
 
-# # class RotationOptimizerExp(nn.Module):
-# #     def __init__(self):
-# #         super().__init__()
-# #         self.params = nn.Parameter(th.randn(3))
-
-    
-# #     def forward(self, O):
-# #         """
-# #         O: (N,3)
-# #         """
-
-# #         A = th.tensor([[0,1,0],[-1,0,0],[0,0,0]], requires_grad=False)
-# #         B = th.tensor([[0,0,1], [0,0,0], [-1,0,0]], requires_grad=False)
-# #         C = th.tensor([[0,0,0], [0,0,1], [0,-1,0]], requires_grad=False)
-# #         R = self.params[0]*A + self.params[1]*B + self.params[2]*C
-
-# #         return R @ O.T
-
-# # class RotationOptimizerRegularized(nn.Module):
-# #     def __init__(self, alpha):
-# #         super().__init__()
-# #         self.alpha = alpha
-# #         self.R = nn.Parameter(th.randn(3))
-
-# #     def forward(self, O):
-# #         return self.R @ O.T
-        
+from itertools import product
+from typing import cast
 
 
+def true_func(x, scale, frequency=1):
+    return Function1(x, scale)
+    # return Function2(x, scale, frequency)
 
-# # N = 100
+hidden_dim = 70
+n_hidden = 3
+epochs = 20000
+# scales_test = th.tensor([[6,2],[0.1, th.nan]])
+scales_test = th.tensor([[5., 2.5, ],[0.5, th.nan]])
+size_train = lambda: int(th.randint(10, 100, (1,)).int().item())
+x_train_func = lambda size: th.rand(size, 1)*40 - 20 + th.rand(size, 1)*8 - 4
 
-# # t_noise = 0
-# # r_noise = 0.1
+initial_values_func = lambda shape: th.rand(shape)*10 + 0.5
+model = GaussActMLP(n_hidden, 1, 1, hidden_dim, initial_values_func)
 
+optimizer_gauss = th.optim.Adam(model.parameters(), lr=0.001)
+loss_func = nn.MSELoss()
+plt.ion()
+fig, axs = plt.subplots(*scales_test.shape)#, sharex=True, sharey=True, figsize=(15,23))
+axs = axs.reshape(scales_test.shape)
 
+def slice_(arr, idx):
+    if len(idx) == 1:  return arr[idx[0]]
+    else:              return slice_(arr[idx[0]], idx[1:])
 
-# # angles = th.rand(3, requires_grad=False)*2*th.pi
+for j in range(epochs):
+    optimizer_gauss.zero_grad()
+    size_train_epoch = size_train()
+    # size_train = 1000
+    x_train = x_train_func(size_train_epoch)
+    scale = 50/size_train_epoch
+    y_train = true_func(x_train, scale)
+    y_pred = model(x_train, scale)
+    # loss_activation = sum([a.loss for a in model.activations])
+    loss = loss_func(y_pred, y_train)# + loss_activation
+    loss.backward()
+    optimizer_gauss.step()
+    if j % 100 == 0:
+        with th.no_grad():
+            x_test = th.linspace(-35, 35, 1000).reshape(-1, 1)
+            for idx in product(*[range(i) for i in axs.shape]):
+                ax = cast(plt.Axes, slice_(axs, idx))
+                ax.clear()
+                scale = cast(th.Tensor, slice_(scales_test, idx))
+                if th.isnan(scale):
+                    act_params = th.cat([a.param for a in model.activations]).flatten() #type: ignore
+                    ax.hist(act_params, bins=50)
+                else:
+                    y_test = true_func(x_test, cast(float, scale))
+                    y_pred_test1 = model(x_test, scale)
+                    ax.plot(x_test, y_test, label="true")
+                    ax.plot(x_test, y_pred_test1, label="pred")
+                    ax.set_title(f"scale={scale:.3}")
+                    ax.legend()
 
-# # R = rot_mat(angles[0], [0,1])@rot_mat(angles[1], [0,2])@rot_mat(angles[2], [1,2])
+            # ax.clear()
+            # # ax.plot(x_test2, y_test2, label="true1")
+            # # ax.plot(x_test2, y_pred_test2, label="pred")
+            # mask = th.argsort(x_train.flatten())
+            # ax.plot(x_train[mask], y_train[mask], label="true")
+            # ax.plot(x_train[mask], y_pred[mask], label="pred")
+            # ax.set_title(f"{scale}")
+            # ax.legend()
+            fig.canvas.draw_idle()
+            fig.canvas.flush_events()
 
-# # O = th.randn(N, 3, requires_grad=False)
-# # C = R @ O.T + th.rand_like(O.T, requires_grad=False)*t_noise
-
-
-# # ro_exp = RotationOptimizerExp()
-# # ro_reg = RotationOptimizerRegularized(2.)
-# # optimiser = th.optim.SGD(ro_reg.parameters(), lr=0.001)
-# # mse = th.nn.MSELoss()
-
-
-# # ro = ro_reg
-# # criterion = mse
-
-# # for i in range(10000):
-# #     optimiser.zero_grad()
-
-# #     C_hat = ro_reg(O)
-# #     l = criterion(C_hat, C)
-# #     l.backward()
-# #     optimiser.step()
-# #     if not i%100: print(l.item())
-
-
-# class SimpleSimple(nn.Module):
-#     def __init__(self, a_true):
-#         super().__init__()
-#         self.a = nn.Parameter(th.randn_like(a_true))
-#         # self.p = nn.Parameter(th.randn(1))
-
-    
-#     def forward(self, x):
-#         # t = th.tensor([[0,1],[-1,0]], requires_grad=False).float()
-#         # tmp = th.exp(t*self.p)
-#         # self.a = tmp.detach().clone()
-#         # return x@tmp
-#         return x@self.a
-
-# th.manual_seed(1)
-
-# a1 = -4
-# a2 = 1
-# noise_level = 3
-# reg = 10
-# N=11
-
-# a_true = np.array([[a1,a2], [-a2,a1]])
-# a_true = th.tensor(a_true, requires_grad=False).float()
-# a_true = a_true / th.norm(a_true, dim=0)
-# m = a_true.shape
-# n_param = np.prod(m)
-
-# x = th.rand((N, m[-1]), requires_grad=False)*10.
-# t = x@a_true
-# noise = th.randn_like(t, requires_grad=False)*noise_level
-# t += noise 
-# empirical_noise_level = th.sqrt(th.mean(noise**2)).item()
-
-# s = SimpleSimple(a_true)
-# optim = th.optim.SGD(s.parameters(), lr=0.001)
-
-# loss = []
-# epoch = []
-# params = []
-# x_pred = []
-# rot_losss = []
+            print(f"Epoch {j}: loss_gauss = {loss}")
 
 
-# for i in range(1000):
-#     optim.zero_grad()
-#     pred = s(x)
-#     l = th.mean((t - pred)**2) + reg*th.norm(s.a.T@s.a-th.eye(len(m)))**2
-#     rot_loss = th.sum((s.a.T @ s.a - th.eye(m[1]))**2)
-#     if reg > 0:
-#         l += rot_loss
-#     l.backward()
 
-#     x_pred.append(pred.detach().numpy())
-#     loss.append(l.item()/x.shape[0])
-#     epoch.append(i)
-#     params.append(s.a.detach().numpy().copy())
-#     rot_losss.append(rot_loss.item())
-
-#     optim.step()
-#     if l.item() < 0.001 + empirical_noise_level: break
-
-# # x_pred.append(pred.detach().numpy())
-# # loss.append(l.item()/x.shape[0])
-# # epoch.append(i)
-# # params.append(s.a.detach().numpy())
-
-# x_pred = np.array(x_pred)
-# params = np.array(params).reshape(-1, n_param)
-
-# fig = plt.figure()
-# fig.add_subplot(2,2,1)
-# plt.plot(epoch, np.sqrt(loss), label='loss')
-# plt.legend()
-# fig.add_subplot(2,2,2)
-# plt.plot(epoch, empirical_noise_level*np.ones_like(epoch), label='empirical noise level')
-# for i in range(np.prod(m)):
-#     plt.plot(epoch, params[:,i], label=f'param {i}')
-# plt.legend()
-# fig.add_subplot(2,2,3)
-# # for i in range(5):
-# #     plt.plot(x_pred[:,i,0], x_pred[:,i,1], label=f'pred {i}')
-# mask = np.argsort(x[:,0])[:4]
-# plt.plot(x[mask,0], x[mask,1], "-o", label='start')
-# plt.plot(t[mask,0], t[mask,1], "-o", label='true')
-# plt.plot(x_pred[-1,mask,0], x_pred[-1,mask,1], "-o", label='pred')
-# lin = np.linspace(0,2*np.pi,100)
-# plt.plot(np.cos(lin)*10, np.sin(lin)*10, label='circle')
-# plt.axis('equal')
-
-
-# # plt.legend()
-# fig.add_subplot(2,2,4)
-# plt.plot(epoch, rot_losss, label='rot loss')
-# # plt.legend()
-
-
-# sa = s.a.detach().numpy()
-# print("predicted A", sa, sep='\n')
-# print("true A", a_true, sep='\n')
-# print("predicted A^TA", sa.T@sa, sep='\n')
-
-# plt.show()
+plt.savefig("fig.png", dpi=300)
