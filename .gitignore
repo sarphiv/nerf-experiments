@@ -177,3 +177,7 @@ sprinkle-job-export.sh
 
 # Data folders
 data/
+
+# bsub output files
+*\.err
+*\.out

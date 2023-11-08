@@ -119,6 +119,7 @@ class MipNerf(NerfInterpolation):#, pl.LightningModule):
         learning_rate_decay: float = 0.5,
         weight_decay: float = 0.0,
         distribute_variance: Optional[bool] = False,
+        seperate_coarse_fine: Optional[bool] = False,
     ): 
         
         # super(pl.LightningModule, self).__init__()
@@ -145,7 +146,8 @@ class MipNerf(NerfInterpolation):#, pl.LightningModule):
             self.samples_per_ray_coarse = samples_per_ray
             self.samples_per_ray_fine = 0
         
-        self.model = MipNerfModel(
+        # build the model(s)
+        self.model_fine = MipNerfModel(
             n_hidden,
             hidden_dim=256,
             fourier=fourier,
@@ -153,5 +155,13 @@ class MipNerf(NerfInterpolation):#, pl.LightningModule):
             distribute_variance=distribute_variance,
         )
 
-        self.model_coarse = self.model
-        self.model_fine = self.model
+        if seperate_coarse_fine:
+            self.model_coarse = MipNerfModel(
+                n_hidden,
+                hidden_dim=256,
+                fourier=fourier,
+                n_segments=n_segments,
+                distribute_variance=distribute_variance,
+            )
+        else:
+            self.model_coarse = self.model_fine

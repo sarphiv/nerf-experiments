@@ -23,8 +23,9 @@ if __name__ == "__main__":
     parser.add_argument('--delayed_density', type=bool, default=True, help='When the network outputs the density')
     parser.add_argument('--n_segments', type=int, default=2, help='Number of times the positional data is feed to the network')
     parser.add_argument('--n_hidden', type=int, default=4, help='Number of hidden layers')
-    parser.add_argument('--mip_distribute_variance', type=bool, default=False, help='Whether to distribute the variance in the MIP model or not')
+    parser.add_argument('--mip_distribute_variance', type=bool, default=True, help='Whether to distribute the variance in the MIP model or not')
     parser.add_argument('--experiment_name', type=str, default=f"Unnamed experiment at '{os.path.basename(os.path.dirname(__file__))}'")
+    parser.add_argument('--use_seperate_coarse_fine', type=bool, default=False, help='Whether to use seperate coarse and fine models or one model for both')
     args = parser.parse_args()
 
     print("Using arguments:")
@@ -38,7 +39,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="mip-nerf-test-2"
+        name=args.experiment_name
     )
 
 
@@ -62,7 +63,7 @@ if __name__ == "__main__":
     trainer = pl.Trainer(
         accelerator="auto",
         max_epochs=100,
-        precision="16-mixed",
+        precision="32",
         logger=wandb_logger,
         callbacks=[
             LogEpochFraction(
@@ -75,7 +76,7 @@ if __name__ == "__main__":
                 delay_start=0.05,
                 delay_end=1/4.,
                 delay_taper=2.0,
-                validation_image_names=["r_2", "r_84"],
+                validation_image_names=["r_2"],#, "r_84"],
                 reconstruction_batch_size=BATCH_SIZE,
                 reconstruction_num_workers=4,
                 metric_name="val_img",
@@ -105,6 +106,7 @@ if __name__ == "__main__":
         learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
         weight_decay=0,
         distribute_variance=args.mip_distribute_variance,
+        seperate_coarse_fine=args.use_seperate_coarse_fine,
     )
 
 
