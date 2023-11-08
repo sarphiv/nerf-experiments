@@ -11,7 +11,7 @@ import torchvision as tv
 
 
 # Type alias for dataset output
-#  (origin_raw, origin_noisy, direction_raw, direction_noisy, pixel_color, pixel_color_blur, pixel_relative_blur, image_index)
+#  (origin_raw, origin_noisy, direction_raw, direction_noisy, pixel_color_raw, pixel_color_blur, pixel_relative_blur, image_index)
 DatasetOutput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor, th.Tensor, th.Tensor, th.Tensor, th.Tensor]
 
 
@@ -22,7 +22,8 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         image_height: int,
         images_path: str,
         camera_info_path: str,
-        space_transform: Optional[tuple[float, th.Tensor]]=None,
+        space_transform_scale: Optional[float]=None,
+        space_transform_translate: Optional[th.Tensor]=None,
         rotation_noise_sigma: float=1.0,
         translation_noise_sigma: float=1.0,
         noise_seed: Optional[int]=None,
@@ -37,7 +38,8 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             image_height (int): Height to resize images to.
             images_path (str): Path to the image directory.
             camera_info_path (str): Path to the camera info file.
-            space_transform (Optional[tuple[float, th.Tensor]], optional): Space transform parameters. Defaults to None.
+            space_transform_scale (Optional[float], optional): Scale parameter for the space transform. Defaults to None, which auto-calculates based on max distance.
+            space_transform_translate (Optional[th.Tensor], optional): Translation parameter for the space transform. Defaults to None, which auto-calculates the mean.
             rotation_noise_sigma (float, optional): Sigma parameter for the rotation noise in radians. Defaults to 1.0.
             translation_noise_sigma (float, optional): Sigma parameter for the translation noise. Defaults to 1.0.
             noise_seed (Optional[int], optional): Seed for the noise generator. Defaults to None.
@@ -87,9 +89,14 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         )
 
         # Transform camera to world matrices
-        self.camera_to_world, self.space_transform = self._transform_camera_to_world(
+        (
             self.camera_to_world, 
-            space_transform
+            self.space_transform_scale, 
+            self.space_transform_translate
+        ) = self._transform_camera_to_world(
+            self.camera_to_world, 
+            space_transform_scale,
+            space_transform_translate
         )
 
 
@@ -135,10 +142,12 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
 
 
     def _load_images(self, image_dir_path, image_width, image_height) -> dict[str, th.Tensor]:
-        # Transform from PIL image to Tensor
+        # Transform image to correct format
         transform = cast(
             Callable[[th.Tensor], th.Tensor], 
             tv.transforms.Compose([
+                # Convert to float
+                tv.transforms.Lambda(lambda img: img.float() / 255.),
                 # Resize image
                 tv.transforms.Resize(
                     (image_height, image_width), 
@@ -155,7 +164,10 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         )
 
         # Open RGBA image
-        read = lambda path: tv.io.read_image(path, tv.io.ImageReadMode.RGB_ALPHA)
+        read = lambda path: tv.io.read_image(
+            os.path.join(image_dir_path, path), 
+            tv.io.ImageReadMode.RGB_ALPHA
+        )
 
         # Load each image, transform, and store
         return {
@@ -182,38 +194,37 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         return focal_length, camera_to_world
 
 
-    def _transform_camera_to_world(self, camera_to_world: dict[str, th.Tensor], space_transform: Optional[tuple[float, th.Tensor]]) -> tuple[dict[str, th.Tensor], tuple[float, th.Tensor]]:
+    def _transform_camera_to_world(self, camera_to_world: dict[str, th.Tensor], space_transform_scale: Optional[float], space_transform_translate: Optional[th.Tensor]) -> tuple[dict[str, th.Tensor], float, th.Tensor]:
         # If space transform is not given, initialize transform parameters from data
-        if space_transform is None:
-            camera_positions = th.vstack(tuple(camera_to_world.values()))[:, -1].reshape(-1, 4)
-            camera_average_position = camera_positions.mean(dim=0)
-            camera_average_position[-1] = 0
+        # NOTE: Assuming camera_to_world has scale 1
+        camera_positions = th.vstack(tuple(camera_to_world.values()))[:3, -1].reshape(-1, 3)
 
-            # Get the maximum distance of any two cameras 
-            camera_max_distance: float = 3*th.cdist(camera_positions, camera_positions, compute_mode="donot_use_mm_for_euclid_dist").max().item()
-            
-            # Define space transform 
-            space_transform = (camera_max_distance, camera_average_position)
+        # If no scale is given, initialize to 3*the maximum distance of any two cameras
+        if space_transform_scale is None:
+            space_transform_scale = 3*th.cdist(camera_positions, camera_positions, compute_mode="donot_use_mm_for_euclid_dist").max().item()
 
+        # If no translation is given, initialize to mean
+        if space_transform_translate is None:
+            space_transform_translate = camera_positions.mean(dim=0)
 
-        # Deconstruct the space transform tuple
-        (camera_max_distance, camera_average_position) = space_transform
 
         # Only move the offset
-        camera_average_position = th.hstack((th.zeros((4,3)), camera_average_position.unsqueeze(1)))
+        translate_matrix = th.cat((space_transform_translate, th.zeros(1))).view(4, 1)
+        translate_matrix = th.hstack((th.zeros((4,3)), translate_matrix))
 
         # Scale the camera distances
-        camera_max_distance_matrix = th.ones((4, 4))
-        camera_max_distance_matrix[:-1, -1] = camera_max_distance
+        scale_matrix = th.ones((4, 4))
+        scale_matrix[:-1, -1] = space_transform_scale
 
         # Move origin to average position of all cameras and scale world coordinates by the 3*the maximum distance of any two cameras
         return (
             { 
-                image_name: (camera_to_world - camera_average_position)/camera_max_distance_matrix
+                image_name: (camera_to_world - translate_matrix)/scale_matrix
                 for image_name, camera_to_world 
                 in camera_to_world.items() 
             },
-            space_transform
+            space_transform_scale,
+            space_transform_translate
         )
 
 
@@ -332,17 +343,17 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         # NOTE: Assuming x and y are within bounds of img
 
         # Retrive kernel dimensions
-        kernel_height, kernel_width = gaussian_blur_kernel.shape
-        kernel_y, kernel_x = kernel_height//2, kernel_width//2
+        kernel_size = gaussian_blur_kernel.shape[0]
+        kernel_half = kernel_size//2
 
         # Retrieve image dimensions
         img_height, img_width = img.shape[:2]
 
         # Calculate padding
-        left = max(kernel_x - x, 0)
-        top = max(kernel_y - y, 0)
-        right = max(kernel_x + x - img_width, 0)
-        bottom = max(kernel_y + y - img_height, 0)
+        left = max(kernel_half - x, 0)
+        top = max(kernel_half - y, 0)
+        right = max(kernel_half + x - (img_width-1), 0)
+        bottom = max(kernel_half + y - (img_height-1), 0)
 
         pad = tv.transforms.Pad(
             padding=(left, top, right, bottom), 
@@ -350,17 +361,19 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         )
 
         # Pad image and retrieve pixel and neighbors
-        neighborhood: th.Tensor = pad(img)[
-            (y+kernel_y):(y+kernel_y+kernel_height), 
-            (x+kernel_x):(x+kernel_x+kernel_width)
-        ]
+        neighborhood: th.Tensor = pad(img.permute(2, 0, 1))[
+            :,
+            (top+y-kernel_half):(top+y+kernel_half)+1, 
+            (left+x-kernel_half):(left+x+kernel_half)+1,
+        ].permute(1, 2, 0)
+
 
         # Blur y-direction and store y-column of pixel
         # (H, W, C) -> (W, C)
         blurred_y = (neighborhood * gaussian_blur_kernel.view(-1, 1, 1)).sum(dim=0)
         # Blur x-direction and store pixel
         # (W, C) -> (C)
-        blurred_pixel = blurred_y * gaussian_blur_kernel.view(-1, 1).sum(dim=0)
+        blurred_pixel = (blurred_y * gaussian_blur_kernel.view(-1, 1)).sum(dim=0)
 
         # Return blurred pixel
         return blurred_pixel
@@ -409,8 +422,8 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             d_n.view(-1, 3)[i], 
             c_r,
             c_b, 
-            th.Tensor(self.gaussian_blur_relative_sigma_current), 
-            th.Tensor(img_idx)
+            th.tensor(self.gaussian_blur_relative_sigma_current), 
+            th.tensor(img_idx)
         )
 
 

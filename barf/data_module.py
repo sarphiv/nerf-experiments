@@ -20,9 +20,11 @@ class ImagePoseDataModule(pl.LightningDataModule):
         scene_path: str, 
         image_width: int,
         image_height: int,
+        space_transform_scale: Optional[float]=None,
+        space_transform_translate: Optional[th.Tensor]=None,
         rotation_noise_sigma: float=1.0,
         translation_noise_sigma: float=1.0,
-        noise_seed: Optional[int]=None,
+        camera_noise_seed: Optional[int]=None,
         gaussian_blur_kernel_size: int=40,
         gaussian_blur_relative_sigma_start: float=0.,
         gaussian_blur_relative_sigma_decay: float=1.,
@@ -36,9 +38,11 @@ class ImagePoseDataModule(pl.LightningDataModule):
             scene_path (str): Path to the scene directory containing the camera and image data.
             image_width (int): Width to resize images to.
             image_height (int): Height to resize images to.
+            space_transform_scale (Optional[float], optional): Scale parameter for the space transform. Defaults to None, which auto-calculates based on max distance.
+            space_transform_translate (Optional[th.Tensor], optional): Translation parameter for the space transform. Defaults to None, which auto-calculates the mean.
             rotation_noise_sigma (float, optional): Standard deviation of rotation noise in radians. Defaults to 1.0.
             translation_noise_sigma (float, optional): Standard deviation of translation noise. Defaults to 1.0.
-            noise_seed (Optional[int], optional): Seed for the noise generator. Defaults to None.
+            camera_noise_seed (Optional[int], optional): Seed for the camera noise generator. Defaults to None.
             gaussian_blur_kernel_size (int, optional): Kernel size of the Gaussian blur. Defaults to 40.
             gaussian_blur_relative_sigma_start (float, optional): Starting relative sigma of the Gaussian blur. Defaults to 0..
             gaussian_blur_relative_sigma_decay (float, optional): Relative sigma decay of the Gaussian blur. Defaults to 1..
@@ -58,11 +62,12 @@ class ImagePoseDataModule(pl.LightningDataModule):
         self.image_width = image_width
         self.image_height = image_height
 
-        self.space_transform: Optional[tuple[float, th.Tensor]] = None
-        
+        self.space_transform_scale = space_transform_scale
+        self.space_transform_translate = space_transform_translate
+
         self.rotation_noise_sigma = rotation_noise_sigma
         self.translation_noise_sigma = translation_noise_sigma
-        self.noise_seed = noise_seed
+        self.camera_noise_seed = camera_noise_seed
         
         self.gaussian_blur_kernel_size = gaussian_blur_kernel_size
         self.gaussian_blur_relative_sigma_start = gaussian_blur_relative_sigma_start
@@ -96,10 +101,11 @@ class ImagePoseDataModule(pl.LightningDataModule):
             image_height=self.image_height,
             images_path=images_path,
             camera_info_path=camera_info_path,
-            space_transform=self.space_transform,
+            space_transform_scale=self.space_transform_scale,
+            space_transform_translate=self.space_transform_translate,
             rotation_noise_sigma=self.rotation_noise_sigma,
             translation_noise_sigma=self.translation_noise_sigma,
-            noise_seed=self.noise_seed,
+            noise_seed=None if self.camera_noise_seed is None else self.camera_noise_seed + hash(purpose),
             gaussian_blur_kernel_size=self.gaussian_blur_kernel_size,
             gaussian_blur_relative_sigma_start=self.gaussian_blur_relative_sigma_start,
             gaussian_blur_relative_sigma_decay=self.gaussian_blur_relative_sigma_decay
@@ -110,7 +116,8 @@ class ImagePoseDataModule(pl.LightningDataModule):
 
     def setup(self, stage: Literal["fit", "test", "predict"]):
         self.dataset_train = self._get_dataset("train")
-        self.space_transform = self.dataset_train.space_transform
+        self.space_transform_scale = self.dataset_train.space_transform_scale
+        self.space_transform_translate = self.dataset_train.space_transform_translate
 
 
         match stage:

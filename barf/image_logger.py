@@ -1,8 +1,7 @@
-from typing import Any, cast, Optional
+from typing import cast
 from math import tanh, log, sqrt
 
 import torch as th
-import torchvision as tv
 from torch.utils.data import DataLoader, TensorDataset
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import Callback
@@ -10,46 +9,8 @@ from pytorch_lightning.loggers import WandbLogger #type: ignore
 from tqdm import tqdm
 
 from data_module import ImagePoseDataset
-from model_camera_calibration import NerfCameraCalibration
+from model_camera_calibration import CameraCalibrationModel
 
-
-class GaussianBlurScheduler(Callback):
-    def __init__(self,
-                 update_every_n_train_step: Optional[float] = None,
-                 update_every_n_epoch: Optional[float] = None,
-                 ):
-        assert not (update_every_n_train_step == None and update_every_n_epoch == None), "Either update_every_n_train_step or update_every_n_eopch must be set"
-        assert not (update_every_n_train_step != None and update_every_n_epoch != None), "update_every_n_train_step or update_every_n_eopch can't both be set"
-        self.sigma_idx = 0
-        self.update_every = cast(float, update_every_n_epoch) if update_every_n_train_step == None else cast(float, update_every_n_train_step)
-        self.update_on_train_batch_start = (update_every_n_train_step != None)
-        self.update_on_epoch_start = (update_every_n_epoch != None)
-
-    # I imagine this will be rewritten.
-    # the update_sigma function should be on the pl_module
-    # and then it can just pick and choose from the dataloader (batch)
-    # what part of it, it will use.
-    # this callback should automatically set the sigma on the modul
-    # and raise an error, if it does not already exist.
-
-    def on_train_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
-        print("hej")
-
-
-    def on_train_batch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule, batch: Any, batch_idx: int) -> None:
-        if self.update_on_train_batch_start:
-            new_sigma_idx = float(trainer.global_step) // self.update_every
-            if new_sigma_idx != self.sigma_idx:
-                self.sigma_idx = new_sigma_idx
-                trainer.datamodule.update_sigma(self.sigma_idx) #type: ignore
-    
-    def on_train_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
-        if self.update_on_epoch_start:
-            new_sigma_idx = float(trainer.global_step) // self.update_every
-            if new_sigma_idx != self.sigma_idx:
-                self.sigma_idx = new_sigma_idx
-                trainer.datamodule.update_sigma(self.sigma_idx) #type: ignore
-    
 
 
 class Log2dImageReconstruction(Callback):
@@ -145,7 +106,7 @@ class Log2dImageReconstruction(Callback):
 
 
     @th.no_grad()
-    def on_train_batch_start(self, trainer: pl.Trainer, model: NerfCameraCalibration, batch: th.Tensor, batch_idx: int) -> None:
+    def on_train_batch_start(self, trainer: pl.Trainer, model: CameraCalibrationModel, batch: th.Tensor, batch_idx: int) -> None:
         # Get current step
         step = trainer.current_epoch + batch_idx/trainer.num_training_batches
 
@@ -174,9 +135,6 @@ class Log2dImageReconstruction(Callback):
             origins = dataset.origins_raw[name].view(-1, 3)
             directions = dataset.directions_raw[name].view(-1, 3)
 
-            # Transform origins to model space
-            origins, directions, _, _ = model.validation_transform(origins, directions)
-
             # Set up data loader for validation image
             data_loader = DataLoader(
                 dataset=TensorDataset(
@@ -185,18 +143,24 @@ class Log2dImageReconstruction(Callback):
                 ),
                 batch_size=self.batch_size,
                 num_workers=self.num_workers,
-                shuffle=False
+                shuffle=False,
+                pin_memory=True
             )
 
             # Iterate over batches of rays to get RGB values
             rgb = th.empty((dataset.image_batch_size, 3), dtype=cast(th.dtype, model.dtype))
+            transform_params = None
             i = 0
             
             for ray_origs, ray_dirs in tqdm(data_loader, desc="Predicting RGB values", leave=False):
                 # Prepare for model prediction
                 ray_origs = ray_origs.to(model.device)
                 ray_dirs = ray_dirs.to(model.device)
-                
+
+                # Transform origins to model space
+                # TODO: The flag for inside validation_transform_rays should be implemented for performance
+                ray_origs, ray_dirs, transform_params = model.validation_transform_rays(ray_origs, ray_dirs, transform_params)
+
                 # Get size of batch
                 batch_size = ray_origs.shape[0]
                 

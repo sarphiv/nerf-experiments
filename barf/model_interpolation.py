@@ -1,9 +1,15 @@
+from typing import Literal
+from itertools import chain
+
 import torch as th
 import torch.nn as nn
 import pytorch_lightning as pl
 
-from data_module import DatasetOutput
 from model_interpolation_architecture import NerfModel
+
+# Type alias for inner model batch input
+#  (origin, direction, pixel_color, pixel_relative_blur)
+InnerModelBatchInput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]
 
 MAGIC_NUMBER = 7
 
@@ -20,7 +26,9 @@ class NerfInterpolation(pl.LightningModule):
         delayed_density: bool, 
         n_segments: int,
         learning_rate: float = 1e-4,
+        learning_rate_stop_epoch: int = 10,
         learning_rate_decay: float = 0.5,
+        learning_rate_period: float = 0.4,
         weight_decay: float = 0.0
     ):  
         
@@ -29,7 +37,10 @@ class NerfInterpolation(pl.LightningModule):
 
         # Hyper parameters for the optimizer 
         self.learning_rate = learning_rate
+        self.learning_rate_stop_epoch = learning_rate_stop_epoch
         self.learning_rate_decay = learning_rate_decay
+        self.learning_rate_period = learning_rate_period
+        self._learning_rate_milestone = learning_rate_period
         self.weight_decay = weight_decay
 
         # The near and far sphere distances 
@@ -64,12 +75,21 @@ class NerfInterpolation(pl.LightningModule):
             # Define the prediction network 
             self.model_prediction = self.model_fine
 
+            # Define list of models 
+            self.models = [self.model_coarse, self.model_fine]
+
         else: 
             self.samples_per_ray_coarse = samples_per_ray
             self.samples_per_ray_fine = 0
 
             # Define the prediction network 
             self.model_prediction = self.model_coarse
+
+            # List of models 
+            self.models =  [self.model_coarse]
+        
+        # Now lightning does not step the optimizer on its own any more and we do it manually in the training step 
+        self.automatic_optimization = False
 
 
     def _get_intervals(self, t: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
@@ -283,6 +303,64 @@ class NerfInterpolation(pl.LightningModule):
         
         return rgb, weights, sample_dist
 
+    
+
+    def _proposal_optimizer_step(self, loss: th.Tensor):
+        pass 
+        # self._proposal_optimizer.zero_grad()
+        # self.manual_backward(loss, retain_graph=True)
+        # self._proposal_optimizer.step()
+
+
+    def _radiance_optimizer_step(self, loss: th.Tensor):
+        self._optimizer.zero_grad()
+        self.manual_backward(loss, retain_graph=True)
+        self._optimizer.step()
+
+
+    def _proposal_scheduler_step(self, batch_idx: int):
+        pass 
+        # epoch_fraction = self.trainer.current_epoch + batch_idx/self.trainer.num_training_batches
+
+        # if (
+        #     epoch_fraction >= self._proposal_learning_rate_milestone and
+        #     epoch_fraction <= self.proposal_learning_rate_stop_epoch
+        # ):
+        #     self._proposal_learning_rate_milestone += self.proposal_learning_rate_period
+        #     self._proposal_learning_rate_scheduler.step()
+
+
+    def _radiance_scheduler_step(self, batch_idx: int):
+        epoch_fraction = self.trainer.current_epoch + batch_idx/self.trainer.num_training_batches
+
+        if (
+            epoch_fraction >= self._learning_rate_milestone and
+            epoch_fraction <= self.learning_rate_stop_epoch
+        ):
+            self._learning_rate_milestone += self.learning_rate_period
+            self._scheduler.step()
+
+    
+    def _get_logging_losses(
+        self, 
+        stage: Literal["train", "val", "test"], 
+        proposal_loss: th.Tensor, 
+        radiance_loss: th.Tensor, 
+        *args, 
+        **kwargs
+    ) -> dict[str, th.Tensor]:
+        # Calculate PSNR
+        # NOTE: Cannot calculate SSIM because it relies on image patches
+        # NOTE: Cannot calculate LPIPS because it relies on image patches
+        psnr = -10 * th.log10(radiance_loss)
+
+        # Return losses to be logged
+        return {
+            f"{stage}_proposal_loss": proposal_loss,
+            f"{stage}_radiance_loss": radiance_loss,
+            f"{stage}_psnr": psnr,
+        }
+        
 
     def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
@@ -343,62 +421,104 @@ class NerfInterpolation(pl.LightningModule):
         return self.forward(ray_origs, ray_dirs)
 
     ############ pytorch lightning functions ############
-
-    def _step_helpher(self, batch: DatasetOutput, batch_idx: int, stage: str):
-        """
-        general function for training and validation step
-        """
-        ray_origs, ray_dirs, ray_colors, _ = batch
-
-        # TODO: Add schedular here that changes which gaussian to use
-        ray_colors = ray_colors[:, :, 0]
+    
+    
+    def _forward_loss(self, batch: InnerModelBatchInput) -> tuple[th.Tensor, tuple[th.Tensor, th.Tensor]]:
+        """Forward pass that also calculates losses.
         
-        # Compute the rgb values for the given rays for both models
+        Args:
+            batch (InnerModelBatchInput): Batch of data
+
+        Returns:
+            tuple[th.Tensor, tuple[th.Tensor, th.Tensor]]: Color predictions and ordered losses for each optimizer
+        """
+        # Decontsruct batch
+        ray_origs, ray_dirs, ray_colors, ray_scales = batch
+        
+        # Forward pass
         ray_colors_pred_fine, ray_colors_pred_coarse = self(ray_origs, ray_dirs)
 
-        # Compute the individual losses
+        # Calculate losses for training
         proposal_loss = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors)
         radiance_loss = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors)
 
-        # Calculate total loss
-        network_loss = proposal_loss + radiance_loss
+        # Return color prediction and losses
+        return (
+            ray_colors_pred_fine,
+            (proposal_loss, radiance_loss)
+        )
+    
+    
+    def training_step(self, batch: InnerModelBatchInput, batch_idx: int):
+        """Perform a single training forward pass and optimization step.
         
-        # Calculate PSNR
-        # NOTE: Cannot calculate SSIM because it relies on image patches
-        # NOTE: Cannot calculate LPIPS because it relies on image patches
-        psnr = -10 * th.log10(radiance_loss)
+        Args:
+            batch (InnerModelBatchInput): Batch of data
+            batch_idx (int): Index of the batch
+        
+        Returns:
+            th.Tensor: Loss
+        """
+        # Forward pass
+        _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
+
+        # Backward pass and step through each optimizer
+        self._proposal_optimizer_step(proposal_loss)
+        self._radiance_optimizer_step(radiance_loss)
+
+        # Step learning rate schedulers
+        self._proposal_scheduler_step(batch_idx)
+        self._radiance_scheduler_step(batch_idx)
 
         # Log metrics
-        self.log_dict({
-            f"{stage}_network_loss": network_loss,
-            f"{stage}_proposal_loss": proposal_loss,
-            f"{stage}_radiance_loss": radiance_loss,
-            f"{stage}_psnr": psnr,
-        }) 
+        self.log_dict(self._get_logging_losses(
+            "train",
+            proposal_loss,
+            radiance_loss,
+        ))
 
-        return network_loss
 
-    def training_step(self, batch: DatasetOutput, batch_idx: int):
-        return self._step_helpher(batch, batch_idx, "train")
+        # Return loss
+        return radiance_loss
 
-    def validation_step(self, batch: DatasetOutput, batch_idx: int):
-        return self._step_helpher(batch, batch_idx, "val")
+
+    def validation_step(self, batch: InnerModelBatchInput, batch_idx: int):
+        """Perform a single validation forward pass.
+        
+        Args:
+            batch (InnerModelBatchInput): Batch of data
+            batch_idx (int): Index of the batch
+        
+        Returns:
+            th.Tensor: Loss
+        """
+        # Forward pass
+        _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
+
+        # Log metrics
+        self.log_dict(self._get_logging_losses(
+            "val",
+            proposal_loss,
+            radiance_loss,
+        ))
+        
+        return radiance_loss
 
 
     def configure_optimizers(self):
-        optimizer = th.optim.Adam(
-            self.parameters(), 
+        self._optimizer = th.optim.Adam(
+            chain(*(model.parameters() for model in self.models)),
             lr=self.learning_rate, 
             weight_decay=self.weight_decay,
         )
-        scheduler = th.optim.lr_scheduler.ExponentialLR(
-            optimizer, 
+        self._scheduler = th.optim.lr_scheduler.ExponentialLR(
+            self._optimizer, 
             gamma=self.learning_rate_decay
         )
 
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": scheduler,
-        }
+        return (
+            [self._optimizer],
+            [self._scheduler],
+        )
 
 
