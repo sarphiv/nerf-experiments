@@ -216,9 +216,8 @@ class CameraCalibrationModel(GarfModel):
         # NOTE: Assuming camera loss is calculated right after radiance loss.
         #  This saves a backwards pass by using the same graph.
         #  If this is not the case, then the step function should be altered
-        
-        # self._camera_optimizer.zero_grad()
-        # self.manual_backward(loss, retain_graph=True)
+        self._camera_optimizer.zero_grad()
+        self.manual_backward(loss)
         self._camera_optimizer.step()
 
 
