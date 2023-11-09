@@ -234,8 +234,8 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         #  Camera is looking in the negative z direction.
         #  y-axis is also flipped.
         y, x = th.meshgrid(
-            -th.linspace(-image_height/2, image_height/2, image_height) / focal_length,
-            th.linspace(-image_width/2, image_width/2, image_width) / focal_length,
+            -th.linspace(-(image_height-1)/2, (image_height-1)/2, image_height) / focal_length,
+            th.linspace(-(image_width-1)/2, (image_width-1)/2, image_width) / focal_length,
             indexing="ij"
         )
         directions = th.stack((x, y, -th.ones_like(x)), dim=-1)
