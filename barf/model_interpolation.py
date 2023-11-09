@@ -21,7 +21,7 @@ class NerfInterpolation(pl.LightningModule):
         samples_per_ray: int,
         n_hidden: int,
         proposal: tuple[bool, int],
-        fourier: tuple[bool, int, int],
+        fourier: tuple[bool, int, int, bool, float, float],
         delayed_direction: bool, 
         delayed_density: bool, 
         n_segments: int,
@@ -459,6 +459,12 @@ class NerfInterpolation(pl.LightningModule):
         Returns:
             th.Tensor: Loss
         """
+        # Set alpha value in the nerf models
+        for model in self.models: 
+            # TODO instead of using epoch fraction use global step count  
+            # The fourier_levels_per_epoch is a hyperparameter 
+            model.alpha = model.fourier_levels_start + (self.trainer.current_epoch + batch_idx/self.trainer.num_training_batches)*model.fourier_levels_per_epoch
+
         # Forward pass
         _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
 

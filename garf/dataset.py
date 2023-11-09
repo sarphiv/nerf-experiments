@@ -197,7 +197,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
     def _transform_camera_to_world(self, camera_to_world: dict[str, th.Tensor], space_transform_scale: Optional[float], space_transform_translate: Optional[th.Tensor]) -> tuple[dict[str, th.Tensor], float, th.Tensor]:
         # If space transform is not given, initialize transform parameters from data
         # NOTE: Assuming camera_to_world has scale 1
-        camera_positions = th.vstack(tuple(camera_to_world.values()))[:3, -1].reshape(-1, 3)
+        camera_positions = th.stack(tuple(camera_to_world.values()))[:, :3, -1] 
 
         # If no scale is given, initialize to 3*the maximum distance of any two cameras
         if space_transform_scale is None:

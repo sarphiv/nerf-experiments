@@ -34,7 +34,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="barf"
+        name="barf-naive-no-noise"
     )
 
 
@@ -120,7 +120,8 @@ if __name__ == "__main__":
         far_sphere_normalized=1/3,
         samples_per_ray=64 + 192,
         n_hidden=args.n_hidden,
-        fourier=(args.use_fourier, 10, 4),
+        # fourier=(args.use_fourier, 10, 4),
+        fourier = (True, 10, 4, True, 0.5, 1),
         proposal=(args.use_proposal, 64),
         delayed_direction=args.delayed_direction,
         delayed_density=args.delayed_density,
