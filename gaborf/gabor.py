@@ -18,17 +18,13 @@ class GaborActivation(th.autograd.Function):
     @staticmethod
     def backward(ctx: FunctionCtx, grad_output: th.Tensor):
         # Retrieve parameters
-        x, v, s = cast(tuple[th.Tensor, th.Tensor], ctx.saved_tensors) # type: ignore
+        x, v, s = cast(tuple[th.Tensor, th.Tensor, th.Tensor], ctx.saved_tensors) # type: ignore
 
         # Compute gradients
-        x2 = x**2
-        go_mevx2 = -th.exp(-v*x2) * grad_output
-        sinsx = th.sin(s*x)
-        cossx = th.cos(s*x)
-        
-        grad_input_x = go_mevx2 * (2*cossx*v*x + s*sinsx)
-        grad_input_v = go_mevx2 * x2 * cossx
-        grad_input_s = go_mevx2 * x * sinsx
+        go_mevx2 = -th.exp(-v*x**2) * grad_output
+        grad_input_x = go_mevx2 * (2*th.cos(s*x)*v*x + s*th.sin(s*x))
+        grad_input_v = go_mevx2 * x**2 * th.cos(s*x)
+        grad_input_s = go_mevx2 * x * th.sin(s*x)
 
         return grad_input_x, grad_input_v, grad_input_s
 
@@ -60,7 +56,7 @@ class GaborAct(nn.Module):
             th.rand(features_in) * (inv_standard_deviation_init_max - inv_standard_deviation_init_min) + inv_standard_deviation_init_min
         )
         self.spread = nn.Parameter(
-            th.rand(features_in) * 8 * th.pi
+            th.rand(features_in) * 2 * th.pi
         )
 
 

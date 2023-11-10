@@ -388,7 +388,7 @@ class GaborfModel(pl.LightningModule):
             [
                 { "params": self.proposal_network.parameters_linear() },
                 {
-                    "params": self.proposal_network.parameters_gaussian(), 
+                    "params": self.proposal_network.parameters_gabor(), 
                     "lr": self.gaussian_learning_rate_factor * self.proposal_learning_rate
                 },
             ], 
@@ -405,7 +405,7 @@ class GaborfModel(pl.LightningModule):
             [
                 { "params": self.radiance_network.parameters_linear() },
                 {
-                    "params": self.radiance_network.parameters_gaussian(), 
+                    "params": self.radiance_network.parameters_gabor(), 
                     "lr": self.gaussian_learning_rate_factor * self.radiance_learning_rate
                 },
             ], 
