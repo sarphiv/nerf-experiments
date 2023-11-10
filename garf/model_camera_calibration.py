@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Literal, Optional, cast
 
 import torch as th
 import torch.nn as nn
@@ -65,6 +65,8 @@ class CameraCalibrationModel(GarfModel):
             K[-1,-1] = d
             R = V.T@K@U.T
             return R.to(dtype=P.dtype)
+
+        # TODO: Seems like a scaling operation is missing here
 
         # Translate both point clouds to the origin 
         mean_from = th.mean(point_cloud_from, dim=0, keepdim=True)
@@ -186,12 +188,9 @@ class CameraCalibrationModel(GarfModel):
 
         # If not supplied, get the rotation matrix and the translation vector 
         if post_transform_params is None:
-            # TODO: Unnastify this mess of bug fixes
-            #  Maybe get rid of the list comprehension, the cat, the device, and stuff
             # Get the raw and noise origins 
-            origs_raw = th.cat([origs[0, 0] for origs in self.trainer.datamodule.dataset_train.origins_raw.values()]).to(device=origs_val.device).view(-1, 3) # type: ignore
-            origs_noisy = th.cat([origs[0, 0] for origs in self.trainer.datamodule.dataset_train.origins_noisy.values()]).to(device=origs_val.device).view(-1, 3) # type: ignore
-            img_idxs = th.arange(len(self.trainer.datamodule.dataset_train.origins_noisy), device=origs_raw.device) # type: ignore
+            (origs_raw, _), (origs_noisy, _) = cast(ImagePoseDataModule, self.trainer.datamodule).train_camera_center_rays(self.device) # type: ignore
+            img_idxs = th.arange(len(origs_raw), device=origs_raw.device)
 
             # Get the predicted origins 
             origs_pred, _, _ = self.camera_extrinsics.forward_origins(img_idxs, origs_noisy)
