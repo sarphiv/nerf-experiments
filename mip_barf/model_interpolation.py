@@ -5,15 +5,15 @@ import torch as th
 import torch.nn as nn
 import pytorch_lightning as pl
 
-from model_interpolation_architecture import NerfModel
+from model_interpolation_architecture import MipNerfModel
 
 # Type alias for inner model batch input
-#  (origin, direction, pixel_color, pixel_relative_blur)
-InnerModelBatchInput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]
+#  (origin, direction, pixel_color, pixel_relative_blur, pixel_width)
+InnerModelBatchInput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor, th.Tensor]
 
 MAGIC_NUMBER = 7
 
-class NerfInterpolation(pl.LightningModule):
+class MipNeRF(pl.LightningModule):
     def __init__(
         self, 
         near_sphere_normalized: float,
@@ -29,7 +29,8 @@ class NerfInterpolation(pl.LightningModule):
         learning_rate_stop_epoch: int = 10,
         learning_rate_decay: float = 0.5,
         learning_rate_period: float = 0.4,
-        weight_decay: float = 0.0
+        weight_decay: float = 0.0,
+        proposal_weight: float = 0.1
     ):  
         
         super().__init__()
@@ -42,13 +43,14 @@ class NerfInterpolation(pl.LightningModule):
         self.learning_rate_period = learning_rate_period
         self._learning_rate_milestone = learning_rate_period
         self.weight_decay = weight_decay
+        self.proposal_weight = proposal_weight
 
         # The near and far sphere distances 
         self.near_sphere_normalized = near_sphere_normalized
         self.far_sphere_normalized = far_sphere_normalized
 
         # Coarse model -> proposal network, but when there is no proposal network it is the actual prediction
-        self.model_coarse = NerfModel(
+        self.model_coarse = MipNerfModel(
             n_hidden=n_hidden,
             hidden_dim=256,
             fourier=fourier,
@@ -64,19 +66,15 @@ class NerfInterpolation(pl.LightningModule):
             self.samples_per_ray_fine = samples_per_ray - proposal[1]
 
             # Fine model -> actual prediction 
-            self.model_fine = NerfModel(
-                n_hidden=n_hidden,
-                hidden_dim=256,
-                fourier=fourier,
-                delayed_direction=delayed_direction,
-                delayed_density=delayed_density,
-                n_segments=n_segments)
+            self.model_fine = self.model_coarse
             
+            
+            # These to can come out of the if statement in this version 
             # Define the prediction network 
             self.model_prediction = self.model_fine
 
             # Define list of models 
-            self.models = [self.model_coarse, self.model_fine]
+            self.models = [self.model_coarse]
 
         else: 
             self.samples_per_ray_coarse = samples_per_ray
@@ -254,13 +252,14 @@ class NerfInterpolation(pl.LightningModule):
         return th.sum(weights.unsqueeze(-1)*colors, dim=1), weights
 
 
-    def _compute_color(self, model: NerfModel,
+    def _compute_color(self, model: MipNerfModel,
                             t_start: th.Tensor,
                             t_end: th.Tensor,
                             ray_origs: th.Tensor,
                             ray_dirs: th.Tensor,
                             batch_size: int,
-                            samples_per_ray: int) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
+                            samples_per_ray: int,
+                            pixel_width: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
         
         """
         A helper function to compute the color for given model, t values, ray origins and ray directions.
@@ -290,9 +289,12 @@ class NerfInterpolation(pl.LightningModule):
         # Ungroup samples by ray (for the model)
         sample_pos = sample_pos.view(batch_size * samples_per_ray, 3)
         sample_dir = sample_dir.view(batch_size * samples_per_ray, 3)
+        sample_pixel_width = pixel_width.view(batch_size, 1).repeat(samples_per_ray, 1)
+        sample_t_start = t_start.view(batch_size * samples_per_ray, 1)
+        sample_t_end = t_end.view(batch_size * samples_per_ray, 1)
         
         # Evaluate density and color at sample positions
-        sample_density, sample_color = model(sample_pos, sample_dir)
+        sample_density, sample_color = model(sample_pos, sample_dir, sample_t_start, sample_t_end, sample_pixel_width)
         
         # Group samples by ray
         sample_density = sample_density.view(batch_size, samples_per_ray)
@@ -362,7 +364,7 @@ class NerfInterpolation(pl.LightningModule):
         }
         
 
-    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor, pixel_width: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
         Forward pass of the model.
         Given the ray origins and directions, compute the rgb values for the given rays.
@@ -393,7 +395,8 @@ class NerfInterpolation(pl.LightningModule):
                                                 ray_origs,
                                                 ray_dirs,
                                                 batch_size,
-                                                self.samples_per_ray_coarse)
+                                                self.samples_per_ray_coarse,
+                                                pixel_width)
         
         if self.proposal:
             ### Fine sampling
@@ -406,7 +409,8 @@ class NerfInterpolation(pl.LightningModule):
                                                     ray_origs,
                                                     ray_dirs,
                                                     batch_size,
-                                                    self.samples_per_ray_coarse + self.samples_per_ray_fine)
+                                                    self.samples_per_ray_coarse + self.samples_per_ray_fine,
+                                                    pixel_width)
         else: 
             rgb_fine = rgb_coarse
             rgb_coarse = th.zeros_like(rgb_coarse)
@@ -414,11 +418,11 @@ class NerfInterpolation(pl.LightningModule):
         # Return colors for the given pixel coordinates (batch_size, 3)
         return rgb_fine, rgb_coarse
 
-    def validation_image(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+    def validation_image(self, ray_origs: th.Tensor, ray_dirs: th.Tensor, pixel_width: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
         Forward pass of the model for a validation step. In vanilla nerf this is equivalent to the usual forward pass. 
         """
-        return self.forward(ray_origs, ray_dirs)
+        return self.forward(ray_origs, ray_dirs, pixel_width)
 
     ############ pytorch lightning functions ############
     
@@ -433,10 +437,10 @@ class NerfInterpolation(pl.LightningModule):
             tuple[th.Tensor, tuple[th.Tensor, th.Tensor]]: Color predictions and ordered losses for each optimizer
         """
         # Decontsruct batch
-        ray_origs, ray_dirs, ray_colors, ray_scales = batch
+        ray_origs, ray_dirs, ray_colors, ray_scales, pixel_width = batch
         
         # Forward pass
-        ray_colors_pred_fine, ray_colors_pred_coarse = self(ray_origs, ray_dirs)
+        ray_colors_pred_fine, ray_colors_pred_coarse = self(ray_origs, ray_dirs, pixel_width)
 
         # Calculate losses for training
         proposal_loss = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors)
@@ -469,8 +473,8 @@ class NerfInterpolation(pl.LightningModule):
         _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
 
         # Backward pass and step through each optimizer
-        self._proposal_optimizer_step(proposal_loss + radiance_loss)
-        self._radiance_optimizer_step(proposal_loss + radiance_loss)
+        self._proposal_optimizer_step(self.proposal_weight*proposal_loss + radiance_loss)
+        self._radiance_optimizer_step(self.proposal_weight*proposal_loss + radiance_loss)
 
         # Step learning rate schedulers
         self._proposal_scheduler_step(batch_idx)
