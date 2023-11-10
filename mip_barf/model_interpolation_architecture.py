@@ -1,6 +1,7 @@
+from typing import Optional
+
 import torch as th
 import torch.nn as nn
-
 
 class FourierFeatures(nn.Module):
     def __init__(self, levels: int, scale: float = 2*th.pi): 
@@ -102,7 +103,8 @@ class MipNerfModel(nn.Module):
         fourier: tuple[bool, int, int, bool, float, float],
         delayed_direction: bool, 
         delayed_density: bool, 
-        n_segments: int
+        n_segments: int,
+        distribute_variance: bool
     ):
         """
         This is an interpolation between the original NeRF vanilla model and a naive version
@@ -124,7 +126,7 @@ class MipNerfModel(nn.Module):
         
         # If there is a positional encoding define it here
         if self.fourier:
-            self.position_encoder = IntegratedFourierFeatures(fourier_levels_pos, 2*th.pi, distribute_variance)
+            self.position_encoder = IntegratedFourierFeatures(self.fourier_levels_pos, 2*th.pi, distribute_variance)
             self.direction_encoder = FourierFeatures(self.fourier_levels_dir, 1.0)
             self.alpha = self.fourier_levels_start
 

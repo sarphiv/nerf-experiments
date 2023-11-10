@@ -30,7 +30,8 @@ class MipNeRF(pl.LightningModule):
         learning_rate_decay: float = 0.5,
         learning_rate_period: float = 0.4,
         weight_decay: float = 0.0,
-        proposal_weight: float = 0.1
+        proposal_weight: float = 0.1,
+        distribute_variance: bool=False
     ):  
         
         super().__init__()
@@ -56,7 +57,8 @@ class MipNeRF(pl.LightningModule):
             fourier=fourier,
             delayed_direction=delayed_direction,
             delayed_density=delayed_density,
-            n_segments=n_segments)
+            n_segments=n_segments,
+            distribute_variance=distribute_variance)
         
 
         # If there is a proposal network separate the samples into coarse and fine sampling

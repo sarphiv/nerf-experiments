@@ -21,7 +21,7 @@ if __name__ == "__main__":
     parser.add_argument('--use_fourier', type=bool, default=True, help='Whether to use Fourier features or not')
     parser.add_argument('--use_proposal', type=bool, default=True, help='Whether to have a proposal network or not')
     parser.add_argument('--delayed_direction', type=bool, default=True, help='When the directional input is feed to the network')
-    parser.add_argument('--delayed_density', type=bool, default=True, help='When the network outputs the density')
+    parser.add_argument('--delayed_density', type=bool, default=False, help='When the network outputs the density')
     parser.add_argument('--n_segments', type=int, default=2, help='Number of times the positional data is feed to the network')
     parser.add_argument('--n_hidden', type=int, default=4, help='Number of hidden layers')
     args = parser.parse_args()
@@ -34,7 +34,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="barf-naive-no-noise"
+        name="mmip-barf-no-noise"
     )
 
 
@@ -131,7 +131,8 @@ if __name__ == "__main__":
         learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
         learning_rate_period = 1.0,
         weight_decay=0,
-        proposal_weight=0.1
+        proposal_weight=0.1,
+        distribute_variance=False
     )
 
 

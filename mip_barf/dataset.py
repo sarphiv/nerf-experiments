@@ -182,7 +182,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         
         # Calculate focal length from camera horizontal angle
         focal_length = image_width / 2 / math.tan(camera_data["camera_angle_x"] / 2)
-        self.pixel_width = 1/self.focal_length # This is an approximation because we look at the image sphere and the pixel with is in a plane
+        self.pixel_width = 1/focal_length # This is an approximation because we look at the image sphere and the pixel with is in a plane
         # Get camera to world matrices
         # NOTE: Projections are scaled to have scale 1
         camera_to_world: dict[str, th.Tensor] = { 

@@ -134,6 +134,9 @@ class Log2dImageReconstruction(Callback):
             # Get rays for image
             origins = dataset.origins_raw[name].view(-1, 3)
             directions = dataset.directions_raw[name].view(-1, 3)
+            # Get pixel width (only for mip nerf)
+            pixel_width = th.tensor(dataset.pixel_width, dtype=dataset.origins_raw[name].dtype, device=model.device)
+            
 
             # Set up data loader for validation image
             data_loader = DataLoader(
@@ -156,6 +159,7 @@ class Log2dImageReconstruction(Callback):
                 # Prepare for model prediction
                 ray_origs = ray_origs.to(model.device)
                 ray_dirs = ray_dirs.to(model.device)
+                pixel_width_batch = pixel_width.view(1,1).expand(ray_origs.shape[0], 1)
 
                 # Transform origins to model space
                 # TODO: The flag for inside validation_transform_rays should be implemented for performance
@@ -165,7 +169,7 @@ class Log2dImageReconstruction(Callback):
                 batch_size = ray_origs.shape[0]
                 
                 # Predict RGB values
-                rgb[i:i+batch_size, :] = model(ray_origs, ray_dirs)[0].clip(0, 1).cpu()
+                rgb[i:i+batch_size, :] = model(ray_origs, ray_dirs, pixel_width_batch)[0].clip(0, 1).cpu()
             
                 # Update write head
                 i += batch_size
