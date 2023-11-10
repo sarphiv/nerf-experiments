@@ -60,7 +60,7 @@ class GaborAct(nn.Module):
             th.rand(features_in) * (inv_standard_deviation_init_max - inv_standard_deviation_init_min) + inv_standard_deviation_init_min
         )
         self.spread = nn.Parameter(
-            th.rand(features_in) * 2 * th.pi
+            th.rand(features_in) * 8 * th.pi
         )
 
 
