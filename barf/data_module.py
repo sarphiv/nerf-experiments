@@ -258,7 +258,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
 
 
     def _get_camera_center_rays(self, dataset: ImagePoseDataset, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
-        """Get camera center rays from dataset.
+        """Get camera center rays from dataset. Rays are ordered by camera index.
         
         Args:
             dataset (ImagePoseDataset): Dataset to get camera center rays from.
@@ -300,7 +300,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
 
 
     def train_camera_center_rays(self, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
-        """Get camera center rays from training dataset.
+        """Get camera center rays from training dataset. Rays are ordered by camera index.
 
         Args:
             device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
@@ -311,7 +311,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         return self._get_camera_center_rays(self.dataset_train, device)
 
     def val_camera_center_rays(self, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
-        """Get camera center rays from training dataset.
+        """Get camera center rays from training dataset. Rays are ordered by camera index.
 
         Args:
             device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
@@ -322,7 +322,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         return self._get_camera_center_rays(self.dataset_val, device)
 
     def test_camera_center_rays(self, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
-        """Get camera center rays from training dataset.
+        """Get camera center rays from training dataset. Rays are ordered by camera index.
 
         Args:
             device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.

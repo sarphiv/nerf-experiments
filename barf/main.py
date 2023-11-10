@@ -8,6 +8,7 @@ from pytorch_lightning.loggers import WandbLogger  # type: ignore
 
 from data_module import ImagePoseDataModule
 from image_logger import Log2dImageReconstruction
+from point_logger import LogCameraExtrinsics
 from epoch_fraction_logger import LogEpochFraction
 from model_camera_calibration import CameraCalibrationModel
 
@@ -34,12 +35,13 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="barf-naive-no-noise"
+        name="point-cloud-test"
     )
 
 
     # Set up data module
     BATCH_SIZE = 1024*2
+    NUM_WORKERS = 8
     
     dm = ImagePoseDataModule(
         image_width=80,
@@ -56,7 +58,7 @@ if __name__ == "__main__":
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
         batch_size=BATCH_SIZE,
-        num_workers=8,
+        num_workers=NUM_WORKERS,
         shuffle=True,
         pin_memory=True
     )
@@ -80,13 +82,24 @@ if __name__ == "__main__":
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
                 logging_start=0.002,
-                delay_start=1/4,
-                delay_end=1/4,
+                delay_start=1/200,
+                delay_end=1/16,
                 delay_taper=4.0,
                 validation_image_names=["r_2", "r_84"],
                 reconstruction_batch_size=BATCH_SIZE,
-                reconstruction_num_workers=4,
+                reconstruction_num_workers=NUM_WORKERS,
                 metric_name="val_img",
+            ),
+            LogCameraExtrinsics(
+                wandb_logger=wandb_logger,
+                logging_start=0.002,
+                delay_start=1/200,
+                delay_end=1/16,
+                delay_taper=4.0,
+                batch_size=BATCH_SIZE,
+                num_workers=NUM_WORKERS,
+                ray_direction_length=1/10,
+                metric_name="train_point",
             ),
             LearningRateMonitor(
                 logging_interval="step"

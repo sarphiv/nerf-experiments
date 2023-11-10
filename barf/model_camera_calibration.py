@@ -66,6 +66,8 @@ class CameraCalibrationModel(NerfInterpolation):
             R = V.T@K@U.T
             return R.to(dtype=P.dtype)
 
+        # TODO: Seems like a scaling operation is missing here
+
         # Translate both point clouds to the origin 
         mean_from = th.mean(point_cloud_from, dim=0, keepdim=True)
         mean_to = th.mean(point_cloud_to, dim=0, keepdim=True)
@@ -188,8 +190,6 @@ class CameraCalibrationModel(NerfInterpolation):
         if post_transform_params is None:
             # Get the raw and noise origins 
             (origs_raw, _), (origs_noisy, _) = cast(ImagePoseDataModule, self.trainer.datamodule).train_camera_center_rays(self.device) # type: ignore
-            # origs_raw = th.cat([origs[0, 0] for origs in self.trainer.datamodule.dataset_train.origins_raw.values()]).to(device=origs_val.device).view(-1, 3) # type: ignore
-            # origs_noisy = th.cat([origs[0, 0] for origs in self.trainer.datamodule.dataset_train.origins_noisy.values()]).to(device=origs_val.device).view(-1, 3) # type: ignore
             img_idxs = th.arange(len(origs_raw), device=origs_raw.device)
 
             # Get the predicted origins 
