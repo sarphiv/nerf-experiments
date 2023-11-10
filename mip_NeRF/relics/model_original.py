@@ -1,96 +1,169 @@
-from typing import Literal
-from itertools import chain
-
 import torch as th
 import torch.nn as nn
 import pytorch_lightning as pl
 
-from model_interpolation_architecture import NerfModel
-
-# Type alias for inner model batch input
-#  (origin, direction, pixel_color, pixel_relative_blur)
-InnerModelBatchInput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]
+from data_module import DatasetOutput
 
 MAGIC_NUMBER = 7
 
-class NerfInterpolation(pl.LightningModule):
+class FourierFeatures(nn.Module):
+    def __init__(self, levels: int, scale: float = 2*th.pi): 
+        """
+        Positional encoding using Fourier features of "levels" periods. 
+        
+        """
+        super().__init__()
+
+        self.levels = levels
+        self.scale = scale
+
+
+    def forward(self, x: th.Tensor) -> th.Tensor:
+        """
+        Gets the positional encoding of x for each channel.
+        x_i in [-0.5, 0.5] -> function(x_i * pi * 2^j) for function in (cos, sin) for j in [0, levels-1]
+        """
+        scale = self.scale*(2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
+        args = x.repeat_interleave(self.levels, dim=1) * scale
+
+        return th.hstack((th.cos(args), th.sin(args)))
+
+
+class NerfModel(nn.Module):
+    def __init__(self, 
+        n_hidden: int,
+        hidden_dim: int,
+        fourier_levels_pos: int,
+        fourier_levels_dir: int
+    ):
+        """
+        An instance of a NeRF model the architecture; 
+        
+            Hn( Hn( Ep(x)), Ep(x))          -> density 
+        H(  Hn( Hn( Ep(x)), Ep(x)), Ed(d))  -> color 
+
+        H: a hidden fully connected layer with hidden_dim neurons,
+        Hn: H applied n_hidden times, 
+        Ep: is the positional encoding with fourier_levels_pos levels,
+        Ed: is the direction encoding with fourier_levels_dir levels,
+        x: is the position
+        d: is the direction of the camera ray
+        """
+        super().__init__()
+        self.n_hidden = n_hidden
+        self.hidden_dim = hidden_dim
+        self.position_encoder = FourierFeatures(fourier_levels_pos, 2*th.pi)
+        self.direction_encoder = FourierFeatures(fourier_levels_dir, 1.0)
+
+        # Creates the first module of the network 
+        self.model_density_1 = self.contruct_model_density(fourier_levels_pos*2*3,
+                                                           self.hidden_dim,
+                                                           self.hidden_dim)
+        self.relu = nn.ReLU(inplace=True)
+        
+        # Creates the second module of the network (feeds the positional incodings into the network again)
+        self.model_density_2 = self.contruct_model_density(self.hidden_dim + fourier_levels_pos*2*3,
+                                                           self.hidden_dim,
+                                                           self.hidden_dim + 1)
+        self.softplus = nn.Softplus(threshold=8)
+
+        # Creates the final layer of the model that outputs the color
+        self.model_color = nn.Sequential(
+            nn.Linear(self.hidden_dim + fourier_levels_dir*2*3, self.hidden_dim//2),
+            nn.ReLU(inplace=True),
+            nn.Linear(self.hidden_dim//2, 3)
+        )
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, pos: th.Tensor, dir: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+        # Ep(x), Ed(x)
+        pos = self.position_encoder(pos)
+        dir = self.direction_encoder(dir)
+        
+        # Hn(Hn(Ep(x)), Ep(x))
+        z = self.model_density_1(pos)
+        z = self.relu(z)
+        z = self.model_density_2(th.cat((z, pos), dim=1))
+
+        # NOTE: Using shifted softplus like mip-NeRF instead of ReLU as in the original paper.
+        #  The weight initialization seemed to cause negative initial values.
+
+        density = self.softplus(z[:, self.hidden_dim] - 1)
+
+        # H(Hn(Hn(Ep(x)), Ep(x)), Ed(d))
+        # Extract the color estimate
+        rgb = self.model_color(th.cat((z[:, :self.hidden_dim], dir), dim=1))
+
+        # Clamp the rgb values to be between 0 and 1
+        rgb = self.sigmoid(rgb)
+
+        return density, rgb
+
+    def contruct_model_density(self, input_dim: int, hidden_dim: int, output_dim: int) -> nn.Module:
+        """
+        Creates a FFNN with n_hidden layers and fits the input and output dimensionality.
+        The activation function is ReLU 
+        """
+        if self.n_hidden == 0:
+            return nn.Linear(input_dim, output_dim)
+        else:
+            # The initial and final layers have special dimensions
+            layer1 = nn.Linear(input_dim, hidden_dim)
+            layer2 = nn.Linear(hidden_dim, output_dim)
+            intermediate_layers = []
+            
+            # Create n_hidden identical layers 
+            for _ in range(self.n_hidden-1):
+                intermediate_layers += [nn.ReLU(True), nn.Linear(hidden_dim, hidden_dim)]
+
+            # Concatenate the layers into one sequential
+            return nn.Sequential(layer1, *intermediate_layers, nn.ReLU(True), layer2)
+
+
+class NerfOriginal(pl.LightningModule):
     def __init__(
         self, 
         near_sphere_normalized: float,
         far_sphere_normalized: float,
-        samples_per_ray: int,
-        n_hidden: int,
-        proposal: tuple[bool, int],
-        fourier: tuple[bool, int, int, bool, float, float],
-        delayed_direction: bool, 
-        delayed_density: bool, 
-        n_segments: int,
+        samples_per_ray_fine: int,
+        samples_per_ray_coarse: int,
+        fourier_levels_pos: int,
+        fourier_levels_dir: int,
         learning_rate: float = 1e-4,
-        learning_rate_stop_epoch: int = 10,
         learning_rate_decay: float = 0.5,
-        learning_rate_period: float = 0.4,
         weight_decay: float = 0.0
-    ):  
-        
+    ):
         super().__init__()
         self.save_hyperparameters()
-
-        # Hyper parameters for the optimizer 
-        self.learning_rate = learning_rate
-        self.learning_rate_stop_epoch = learning_rate_stop_epoch
-        self.learning_rate_decay = learning_rate_decay
-        self.learning_rate_period = learning_rate_period
-        self._learning_rate_milestone = learning_rate_period
-        self.weight_decay = weight_decay
 
         # The near and far sphere distances 
         self.near_sphere_normalized = near_sphere_normalized
         self.far_sphere_normalized = far_sphere_normalized
 
-        # Coarse model -> proposal network, but when there is no proposal network it is the actual prediction
+        # Samples per ray for coarse and fine sampling
+        self.samples_per_ray_fine = samples_per_ray_fine
+        self.samples_per_ray_coarse = samples_per_ray_coarse
+        
+        # Hyper parameters for the optimizer 
+        self.learning_rate = learning_rate
+        self.learning_rate_decay = learning_rate_decay
+        self.weight_decay = weight_decay
+        
+        # Coarse model -> only job is to find out where to sample more by predicting the density
         self.model_coarse = NerfModel(
-            n_hidden=n_hidden,
+            n_hidden=4,
             hidden_dim=256,
-            fourier=fourier,
-            delayed_direction=delayed_direction,
-            delayed_density=delayed_density,
-            n_segments=n_segments)
-        
+            fourier_levels_pos=fourier_levels_pos,
+            fourier_levels_dir=fourier_levels_dir
+        )
 
-        # If there is a proposal network separate the samples into coarse and fine sampling
-        self.proposal = proposal[0]
-        if self.proposal:
-            self.samples_per_ray_coarse = proposal[1]
-            self.samples_per_ray_fine = samples_per_ray - proposal[1]
-
-            # Fine model -> actual prediction 
-            self.model_fine = NerfModel(
-                n_hidden=n_hidden,
-                hidden_dim=256,
-                fourier=fourier,
-                delayed_direction=delayed_direction,
-                delayed_density=delayed_density,
-                n_segments=n_segments)
-            
-            # Define the prediction network 
-            self.model_prediction = self.model_fine
-
-            # Define list of models 
-            self.models = [self.model_coarse, self.model_fine]
-
-        else: 
-            self.samples_per_ray_coarse = samples_per_ray
-            self.samples_per_ray_fine = 0
-
-            # Define the prediction network 
-            self.model_prediction = self.model_coarse
-
-            # List of models 
-            self.models =  [self.model_coarse]
-        
-        # Now lightning does not step the optimizer on its own any more and we do it manually in the training step 
-        self.automatic_optimization = False
-
+        # Fine model -> actual prediction, samples more densely
+        self.model_fine = NerfModel(
+            n_hidden=4,
+            hidden_dim=256,
+            fourier_levels_pos=fourier_levels_pos,
+            fourier_levels_dir=fourier_levels_dir
+        )
 
     def _get_intervals(self, t: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
@@ -214,6 +287,7 @@ class NerfInterpolation(pl.LightningModule):
         return positions, directions
 
 
+
     def _render_rays(self, densities: th.Tensor, colors: th.Tensor, distances: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
         Render the rays using the given densities and colors.
@@ -253,7 +327,7 @@ class NerfInterpolation(pl.LightningModule):
         # Compute the final color by summing over the weighted colors (the unsqueeze(-1) is to mach dimensions)
         return th.sum(weights.unsqueeze(-1)*colors, dim=1), weights
 
-
+    
     def _compute_color(self, model: NerfModel,
                             t_start: th.Tensor,
                             t_end: th.Tensor,
@@ -303,64 +377,7 @@ class NerfInterpolation(pl.LightningModule):
         
         return rgb, weights, sample_dist
 
-    
 
-    def _proposal_optimizer_step(self, loss: th.Tensor):
-        pass 
-        # self._proposal_optimizer.zero_grad()
-        # self.manual_backward(loss, retain_graph=True)
-        # self._proposal_optimizer.step()
-
-
-    def _radiance_optimizer_step(self, loss: th.Tensor):
-        self._optimizer.zero_grad()
-        self.manual_backward(loss, retain_graph=True)
-        self._optimizer.step()
-
-
-    def _proposal_scheduler_step(self, batch_idx: int):
-        pass 
-        # epoch_fraction = self.trainer.current_epoch + batch_idx/self.trainer.num_training_batches
-
-        # if (
-        #     epoch_fraction >= self._proposal_learning_rate_milestone and
-        #     epoch_fraction <= self.proposal_learning_rate_stop_epoch
-        # ):
-        #     self._proposal_learning_rate_milestone += self.proposal_learning_rate_period
-        #     self._proposal_learning_rate_scheduler.step()
-
-
-    def _radiance_scheduler_step(self, batch_idx: int):
-        epoch_fraction = self.trainer.current_epoch + batch_idx/self.trainer.num_training_batches
-
-        if (
-            epoch_fraction >= self._learning_rate_milestone and
-            epoch_fraction <= self.learning_rate_stop_epoch
-        ):
-            self._learning_rate_milestone += self.learning_rate_period
-            self._scheduler.step()
-
-    
-    def _get_logging_losses(
-        self, 
-        stage: Literal["train", "val", "test"], 
-        proposal_loss: th.Tensor, 
-        radiance_loss: th.Tensor, 
-        *args, 
-        **kwargs
-    ) -> dict[str, th.Tensor]:
-        # Calculate PSNR
-        # NOTE: Cannot calculate SSIM because it relies on image patches
-        # NOTE: Cannot calculate LPIPS because it relies on image patches
-        psnr = -10 * th.log10(radiance_loss)
-
-        # Return losses to be logged
-        return {
-            f"{stage}_proposal_loss": proposal_loss,
-            f"{stage}_radiance_loss": radiance_loss,
-            f"{stage}_psnr": psnr,
-        }
-        
 
     def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
@@ -395,136 +412,77 @@ class NerfInterpolation(pl.LightningModule):
                                                 batch_size,
                                                 self.samples_per_ray_coarse)
         
-        if self.proposal:
-            ### Fine sampling
-            # Sample t
-            t_fine_start, t_fine_end = self._sample_t_fine(t_coarse_start, weights, sample_dist_coarse)
-            # compute rgb
-            rgb_fine, _, _ = self._compute_color(self.model_fine,
-                                                    t_fine_start, 
-                                                    t_fine_end,
-                                                    ray_origs,
-                                                    ray_dirs,
-                                                    batch_size,
-                                                    self.samples_per_ray_coarse + self.samples_per_ray_fine)
-        else: 
-            rgb_fine = rgb_coarse
-            rgb_coarse = th.zeros_like(rgb_coarse)
+
+        ### Fine sampling
+        # Sample t
+        t_fine_start, t_fine_end = self._sample_t_fine(t_coarse_start, weights, sample_dist_coarse)
+        # compute rgb
+        rgb_fine, _, _ = self._compute_color(self.model_fine,
+                                                t_fine_start, 
+                                                t_fine_end,
+                                                ray_origs,
+                                                ray_dirs,
+                                                batch_size,
+                                                self.samples_per_ray_coarse + self.samples_per_ray_fine)
 
         # Return colors for the given pixel coordinates (batch_size, 3)
         return rgb_fine, rgb_coarse
 
-    def validation_image(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
-        """
-        Forward pass of the model for a validation step. In vanilla nerf this is equivalent to the usual forward pass. 
-        """
-        return self.forward(ray_origs, ray_dirs)
 
     ############ pytorch lightning functions ############
-    
-    
-    def _forward_loss(self, batch: InnerModelBatchInput) -> tuple[th.Tensor, tuple[th.Tensor, th.Tensor]]:
-        """Forward pass that also calculates losses.
-        
-        Args:
-            batch (InnerModelBatchInput): Batch of data
 
-        Returns:
-            tuple[th.Tensor, tuple[th.Tensor, th.Tensor]]: Color predictions and ordered losses for each optimizer
+    def _step_helpher(self, batch: DatasetOutput, batch_idx: int, stage: str):
         """
-        # Decontsruct batch
-        ray_origs, ray_dirs, ray_colors, ray_scales = batch
+        general function for training and validation step
+        """
+        ray_origs, ray_dirs, ray_colors = batch
         
-        # Forward pass
-        ray_colors_pred_fine, ray_colors_pred_coarse = self(ray_origs, ray_dirs)
+        # Compute the rgb values for the given rays for both models
+        ray_colors_pred_coarse, ray_colors_pred_fine = self(ray_origs, ray_dirs)
 
-        # Calculate losses for training
+        # Compute the individual losses
         proposal_loss = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors)
         radiance_loss = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors)
 
-        # Return color prediction and losses
-        return (
-            ray_colors_pred_fine,
-            (proposal_loss, radiance_loss)
-        )
-    
-    
-    def training_step(self, batch: InnerModelBatchInput, batch_idx: int):
-        """Perform a single training forward pass and optimization step.
+        # Calculate total loss
+        network_loss = proposal_loss + radiance_loss
         
-        Args:
-            batch (InnerModelBatchInput): Batch of data
-            batch_idx (int): Index of the batch
-        
-        Returns:
-            th.Tensor: Loss
-        """
-        # Set alpha value in the nerf models
-        for model in self.models: 
-            # TODO instead of using epoch fraction use global step count  
-            # The fourier_levels_per_epoch is a hyperparameter 
-            model.alpha = model.fourier_levels_start + (self.trainer.current_epoch + batch_idx/self.trainer.num_training_batches)*model.fourier_levels_per_epoch
-
-        # Forward pass
-        _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
-
-        # Backward pass and step through each optimizer
-        self._proposal_optimizer_step(proposal_loss + radiance_loss)
-        self._radiance_optimizer_step(proposal_loss + radiance_loss)
-
-        # Step learning rate schedulers
-        self._proposal_scheduler_step(batch_idx)
-        self._radiance_scheduler_step(batch_idx)
+        # Calculate PSNR
+        # NOTE: Cannot calculate SSIM because it relies on image patches
+        # NOTE: Cannot calculate LPIPS because it relies on image patches
+        psnr = -10 * th.log10(radiance_loss)
 
         # Log metrics
-        self.log_dict(self._get_logging_losses(
-            "train",
-            proposal_loss,
-            radiance_loss,
-        ))
+        self.log_dict({
+            f"{stage}_network_loss": network_loss,
+            f"{stage}_proposal_loss": proposal_loss,
+            f"{stage}_radiance_loss": radiance_loss,
+            f"{stage}_psnr": psnr,
+        }) 
 
+        return network_loss
 
-        # Return loss
-        return radiance_loss
+    def training_step(self, batch: DatasetOutput, batch_idx: int):
+        return self._step_helpher(batch, batch_idx, "train")
 
-
-    def validation_step(self, batch: InnerModelBatchInput, batch_idx: int):
-        """Perform a single validation forward pass.
-        
-        Args:
-            batch (InnerModelBatchInput): Batch of data
-            batch_idx (int): Index of the batch
-        
-        Returns:
-            th.Tensor: Loss
-        """
-        # Forward pass
-        _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
-
-        # Log metrics
-        self.log_dict(self._get_logging_losses(
-            "val",
-            proposal_loss,
-            radiance_loss,
-        ))
-        
-        return radiance_loss
+    def validation_step(self, batch: DatasetOutput, batch_idx: int):
+        return self._step_helpher(batch, batch_idx, "val")
 
 
     def configure_optimizers(self):
-        self._optimizer = th.optim.Adam(
-            chain(*(model.parameters() for model in self.models)),
+        optimizer = th.optim.Adam(
+            self.parameters(), 
             lr=self.learning_rate, 
             weight_decay=self.weight_decay,
         )
-        self._scheduler = th.optim.lr_scheduler.ExponentialLR(
-            self._optimizer, 
+        scheduler = th.optim.lr_scheduler.ExponentialLR(
+            optimizer, 
             gamma=self.learning_rate_decay
         )
 
-        return (
-            [self._optimizer],
-            [self._scheduler],
-        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": scheduler,
+        }
 
 
