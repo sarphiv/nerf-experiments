@@ -44,8 +44,8 @@ if __name__ == "__main__":
     NUM_WORKERS = 8
     
     dm = ImagePoseDataModule(
-        image_width=80,
-        image_height=80,
+        image_width=40,
+        image_height=40,
         scene_path="../data/lego",
         space_transform_scale=None,
         space_transform_translate=None,
@@ -82,8 +82,8 @@ if __name__ == "__main__":
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
                 logging_start=0.002,
-                delay_start=1/200,
-                delay_end=1/16,
+                delay_start=1/4,
+                delay_end=1/4,
                 delay_taper=4.0,
                 validation_image_names=["r_2", "r_84"],
                 reconstruction_batch_size=BATCH_SIZE,
@@ -124,7 +124,7 @@ if __name__ == "__main__":
     # Set up model
     model = CameraCalibrationModel(
         n_training_images=len(dm.dataset_train.images),
-        camera_learning_rate=5e-4,
+        camera_learning_rate=0,
         camera_learning_rate_stop_epoch=8,
         camera_learning_rate_decay=0.999,
         camera_learning_rate_period=0.02,
@@ -134,7 +134,7 @@ if __name__ == "__main__":
         samples_per_ray=64 + 192,
         n_hidden=args.n_hidden,
         # fourier=(args.use_fourier, 10, 4),
-        fourier = (True, 10, 4, True, 0.5, 1),
+        fourier = (True, 10, 4, True, 2, 2),
         proposal=(args.use_proposal, 64),
         delayed_direction=args.delayed_direction,
         delayed_density=args.delayed_density,
@@ -146,6 +146,9 @@ if __name__ == "__main__":
         weight_decay=0
     )
 
+
+    # Log model gradients and parameters
+    wandb_logger.watch(model, log="all")
 
     # Start training, resume from checkpoint
     trainer.fit(model, dm)

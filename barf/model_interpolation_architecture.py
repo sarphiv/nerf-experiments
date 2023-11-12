@@ -96,8 +96,8 @@ class NerfModel(nn.Module):
 
             # If activated the barf mask for weighing positional encodings is applied 
             if self.barf_weight:
-                pos *= self._get_mask(self.fourier_levels_pos, device=pos.device).unsqueeze(0) #type: ignore
-                dir *= self._get_mask(self.fourier_levels_dir, device=dir.device).unsqueeze(0) #type: ignore
+                pos = pos*self._get_mask(self.fourier_levels_pos, device=pos.device).unsqueeze(0) #type: ignore
+                dir = dir*self._get_mask(self.fourier_levels_dir, device=dir.device).unsqueeze(0) #type: ignore
         
         # Apply the model segments with relu activation between segments 
         z = th.zeros((pos.shape[0], 0), device=pos.device)

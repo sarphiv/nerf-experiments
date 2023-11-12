@@ -168,7 +168,7 @@ class CameraCalibrationModel(NerfInterpolation):
         )
 
 
-    def validation_transform_rays(self, origs_val: th.Tensor, dirs_val: th.Tensor, post_transform_params: Optional[tuple[th.Tensor, th.Tensor]] = None) -> tuple[th.Tensor, th.Tensor, tuple[th.Tensor, th.Tensor]]:
+    def validation_transform_rays(self, origs_val: th.Tensor, dirs_val: th.Tensor, post_transform_params: Optional[tuple[th.Tensor, th.Tensor, th.Tensor]] = None) -> tuple[th.Tensor, th.Tensor, tuple[th.Tensor, th.Tensor, th.Tensor]]:
         """
         Takes in validation rays and transforms them to the predicting space 
 
@@ -176,7 +176,7 @@ class CameraCalibrationModel(NerfInterpolation):
         -----------
             origs_val: th.Tensor - the origins of the rays
             dirs_val: th.Tensor - the directions of the rays
-            post_transform_params: Optional[tuple[th.Tensor, th.Tensor]] - the post-transform parameters (R, t) to use. If None, then they are calculated
+            post_transform_params: Optional[tuple[th.Tensor, th.Tensor]] - the post-transform parameters (R, t, c) to use. If None, then they are calculated
 
         Returns:
         --------
@@ -184,6 +184,7 @@ class CameraCalibrationModel(NerfInterpolation):
             dirs_model: th.Tensor - the new directions of the rays
             translations: th.Tensor - the translation vectors
             rotations: th.Tensor - the rotation matrices
+            scale: th.Tensor - the scale from raw to model space
         """
 
         # If not supplied, get the rotation matrix and the translation vector 
@@ -195,20 +196,23 @@ class CameraCalibrationModel(NerfInterpolation):
             # Get the predicted origins 
             origs_pred, _, _ = self.camera_extrinsics.forward_origins(img_idxs, origs_noisy)
 
+            # Get the scale factor
+            scale_factor = th.mean(th.norm(origs_pred, dim=1)) / th.mean(th.norm(origs_raw, dim=1))
+
             # Align raw space to predicted model space
-            post_transform_params = self.kabsch_algorithm(origs_raw, origs_pred)
+            post_transform_params = (*self.kabsch_algorithm(origs_raw, origs_pred), scale_factor)
 
 
         # Deconstruct post-transform parameters
-        R, t = post_transform_params
+        R, t, c = post_transform_params
 
         # Transform the validation image to this space 
-        origs_model = th.matmul(R, origs_val.unsqueeze(-1)).squeeze(-1) + t
+        # R*1/b * (Q - mean(Q)) ~= 1/a * (P - mean(P))  => R*a/b * (Q - mean(Q)) + mean(P) ~= P 
+        # And from our dataloader mean(Q) = 0. (and a/b = c) 
+        origs_model = th.matmul(R, c*origs_val.unsqueeze(-1)).squeeze(-1) + t
         dirs_model = th.matmul(R, dirs_val.unsqueeze(-1)).squeeze(-1)
 
-        return origs_model, dirs_model, (R, t)
-
-
+        return origs_model, dirs_model, (R, t, c)
 
 
     def _camera_optimizer_step(self, loss: th.Tensor):
@@ -318,8 +322,8 @@ class CameraCalibrationModel(NerfInterpolation):
         _, (proposal_loss_blur, radiance_loss_blur, radiance_loss_raw, camera_loss) = self._forward_loss(batch)
 
         # Backward pass and step through each optimizer
-        self._proposal_optimizer_step(proposal_loss_blur)
-        self._radiance_optimizer_step(radiance_loss_blur)
+        self._proposal_optimizer_step(proposal_loss_blur+radiance_loss_blur)
+        self._radiance_optimizer_step(proposal_loss_blur+radiance_loss_blur)
         # NOTE: Assuming camera loss is calculated right after radiance loss.
         #  This saves a backwards pass by using the same graph.
         #  If this is not the case, then the step function should be altered
