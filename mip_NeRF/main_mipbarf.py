@@ -11,26 +11,10 @@ from data_module import ImagePoseDataModule
 from image_logger import Log2dImageReconstruction
 from epoch_fraction_logger import LogEpochFraction
 from model_interpolation import NerfInterpolation
-from mip_model import MipNerf
+from mip_barf import MipBARF, CameraExtrinsics
 
 
 if __name__ == "__main__":
-    # Parse arguments
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--use_fourier', type=bool, default=True, help='Whether to use Fourier features or not')
-    parser.add_argument('--use_proposal', type=bool, default=True, help='Whether to have a proposal network or not')
-    parser.add_argument('--delayed_direction', type=bool, default=True, help='When the directional input is feed to the network')
-    parser.add_argument('--delayed_density', type=bool, default=True, help='When the network outputs the density')
-    parser.add_argument('--n_segments', type=int, default=2, help='Number of times the positional data is feed to the network')
-    parser.add_argument('--n_hidden', type=int, default=4, help='Number of hidden layers')
-    parser.add_argument('--mip_distribute_variance', type=bool, default=True, help='Whether to distribute the variance in the MIP model or not')
-    parser.add_argument('--experiment_name', type=str, default=f"Unnamed experiment at '{os.path.basename(os.path.dirname(__file__))}'")
-    parser.add_argument('--use_seperate_coarse_fine', type=bool, default=False, help='Whether to use seperate coarse and fine models or one model for both')
-    args = parser.parse_args()
-
-    print("Using arguments:")
-    print(args)
-
     # Set seeds
     pl.seed_everything(1337)
 
@@ -39,7 +23,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name=args.experiment_name
+        name="mip_barf"
     )
 
 
@@ -47,8 +31,8 @@ if __name__ == "__main__":
     BATCH_SIZE = 1024*2
     
     dm = ImagePoseDataModule(
-        image_width=800,
-        image_height=800,
+        image_width=40,
+        image_height=40,
         scene_path="../data/lego",
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
@@ -92,20 +76,29 @@ if __name__ == "__main__":
         ]
     )
 
+    R = th.matrix_exp(th.tensor([[0.,-1,20],
+                                [1,0, -7],
+                                [-20,7,0]
+                                ]))
+    
+    t = th.tensor([[2,4,10]])
+
+    camera_extrinsics = CameraExtrinsics(0.0, 0.1, 100, None)#, R, t)
 
     # Set up model
-    model = MipNerf(
+    model = MipBARF(
         near_sphere_normalized=1/10,
         far_sphere_normalized=1/3,
         samples_per_ray=64 + 192,
-        n_hidden=args.n_hidden,
-        fourier=(args.use_fourier, 10, 4),
-        proposal=(args.use_proposal, 64),
-        n_segments=args.n_segments,
+        n_hidden=4,
+        fourier=(True, 10, 4),
+        proposal=(True, 64),
+        n_segments=2,
         learning_rate=5e-4,
         learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
         weight_decay=0,
-        distribute_variance=args.mip_distribute_variance,
+        distribute_variance=False,
+        camera_extrinsics=camera_extrinsics,
     )
 
 

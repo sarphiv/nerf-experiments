@@ -12,7 +12,7 @@ from PIL import Image, ImageFilter
 from torch.utils.data import DataLoader, Dataset, Subset
 
 
-DatasetOutput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]
+DatasetOutput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor, th.Tensor, th.Tensor]
 
 
 class ImagePoseDataset(Dataset[DatasetOutput]):
@@ -190,12 +190,20 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
 
 
     def __getitem__(self, index: int) -> DatasetOutput:
+
+        camera_index = index // self.image_batch_size
         # Get dataset via image index
         P, o, d, c = self.dataset[index // self.image_batch_size]
         # Get pixel index
         i = index % self.image_batch_size
 
-        return o.view(-1, 3)[i], d.view(-1, 3)[i], c.view(-1, 3, len(self.gaussian_smoothing_sigmas))[i], th.tensor(self.pixel_width, dtype=o.dtype)
+        return (P,
+                o.view(-1, 3)[i],
+                d.view(-1, 3)[i], 
+                c.view(-1, 3, len(self.gaussian_smoothing_sigmas))[i], 
+                th.tensor(self.pixel_width, dtype=o.dtype),
+                th.tensor(camera_index, dtype=th.int32),
+                )
 
     def __len__(self) -> int:
         return len(self.dataset) * self.image_batch_size
@@ -371,3 +379,16 @@ class ImagePoseDataModule(pl.LightningDataModule):
             *args,
             **kwargs
         )
+
+if __name__ == "__main__":
+    dm = ImagePoseDataModule(
+        image_width=800,
+        image_height=800,
+        scene_path="../data/lego",
+        validation_fraction=0.05,
+        validation_fraction_shuffle=1234,
+        batch_size=10,
+        num_workers=4,
+        shuffle=True,
+    )
+    print("hej")

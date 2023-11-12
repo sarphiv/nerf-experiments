@@ -1,5 +1,6 @@
 import torch as th
 import pytorch_lightning as pl
+from torch import nn
 
 from typing import cast, Optional, Tuple
 
@@ -17,6 +18,7 @@ class IntegratedFourierFeatures(FourierFeatures):
     ):
         super().__init__(levels, scale)
         self.distribute_variance = distribute_variance
+        self.output_dim += 3
 
     def forward(self,
                 pos: th.Tensor,
@@ -72,7 +74,7 @@ class IntegratedFourierFeatures(FourierFeatures):
 
         ipe = pe*weight.repeat(1,2)
 
-        return ipe
+        return th.cat((pos, ipe), dim=1)
         
 
 
@@ -84,20 +86,64 @@ class MipNerfModel(NerfModel):
         n_segments: int,
         distribute_variance: Optional[bool] = False,
     ):
-        super().__init__(
-            n_hidden,
-            hidden_dim,
-            fourier,
-            delayed_direction=True,
-            delayed_density=False,
-            n_segments=n_segments,
-                )
+        # super().__init__(
+        #     n_hidden,
+        #     hidden_dim,
+        #     fourier,
+        #     delayed_direction=True,
+        #     delayed_density=False,
+        #     n_segments=n_segments,
+        #         )
 
+        # if self.fourier:
+        #     fourier_levels_pos = self.position_encoder.levels
+        #     self.position_encoder = IntegratedFourierFeatures(fourier_levels_pos, 2*th.pi, distribute_variance)
+
+        super(NerfModel, self).__init__()
+        self.n_hidden = n_hidden
+        self.hidden_dim = hidden_dim
+        self.delayed_direction = True
+        self.delayed_density = False
+        self.n_segments = n_segments
+        self.fourier, fourier_levels_pos, fourier_levels_dir = fourier
+        
+        # If there is a positional encoding define it here
         if self.fourier:
-            fourier_levels_pos = self.position_encoder.levels
             self.position_encoder = IntegratedFourierFeatures(fourier_levels_pos, 2*th.pi, distribute_variance)
+            self.direction_encoder = FourierFeatures(fourier_levels_dir, 1.0)
 
-    def forward(self, pos, dir, t_start, t_end, pixel_width):
+            # Dimensionality of the input to the network 
+            positional_dim = self.position_encoder.output_dim
+            directional_dim = self.direction_encoder.output_dim
+        else: 
+            positional_dim = 3
+            directional_dim = 3 
+        
+        # Create list of model segments
+        self.model_segments = nn.ModuleList()
+        for i in range(self.n_segments):
+            # Create the model segment
+            input_size = positional_dim + (not self.delayed_direction)*directional_dim + (i>0)*self.hidden_dim
+            model_segment = self.contruct_model_density(input_size,
+                                                        self.hidden_dim,
+                                                        self.hidden_dim + (not self.delayed_density)*(i == self.n_segments-1))
+            
+            # Add the model segment to the list of model segments
+            self.model_segments.append(model_segment)
+        
+        # Creates the final layer of the model that outputs the color
+        self.model_color = nn.Sequential(
+            nn.Linear(self.hidden_dim + self.delayed_direction*directional_dim, self.hidden_dim//2),
+            nn.ReLU(inplace=True),
+            nn.Linear(self.hidden_dim//2, 3 + self.delayed_density)
+        )
+        self.relu = nn.ReLU(inplace=True)
+        self.softplus = nn.Softplus(threshold=8)
+        self.sigmoid = nn.Sigmoid()
+
+
+    def forward(self, pos: th.Tensor, dir: th.Tensor, t_start: th.Tensor, t_end: th.Tensor, pixel_width: th.Tensor, cam_idx: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+    # def forward(self, pos, dir, t_start, t_end, pixel_width):
         if self.fourier:
             pos = self.position_encoder(pos, dir, t_start, t_end, pixel_width)
             dir = self.direction_encoder(dir)
@@ -119,7 +165,6 @@ class MipNerf(NerfInterpolation):#, pl.LightningModule):
         learning_rate_decay: float = 0.5,
         weight_decay: float = 0.0,
         distribute_variance: Optional[bool] = False,
-        seperate_coarse_fine: Optional[bool] = False,
     ): 
         
         # super(pl.LightningModule, self).__init__()
@@ -155,13 +200,4 @@ class MipNerf(NerfInterpolation):#, pl.LightningModule):
             distribute_variance=distribute_variance,
         )
 
-        if seperate_coarse_fine:
-            self.model_coarse = MipNerfModel(
-                n_hidden,
-                hidden_dim=256,
-                fourier=fourier,
-                n_segments=n_segments,
-                distribute_variance=distribute_variance,
-            )
-        else:
-            self.model_coarse = self.model_fine
+        self.model_coarse = self.model_fine

@@ -236,7 +236,8 @@ class NerfInterpolation(pl.LightningModule):
                             ray_dirs: th.Tensor,
                             batch_size: int,
                             samples_per_ray: int,
-                            pixel_width: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
+                            pixel_width: th.Tensor,
+                            camera_index: th.Tensor | None) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
         
         """
         A helper function to compute the color for given model, t values, ray origins and ray directions.
@@ -267,11 +268,12 @@ class NerfInterpolation(pl.LightningModule):
         sample_pos = sample_pos.view(batch_size * samples_per_ray, 3)
         sample_dir = sample_dir.view(batch_size * samples_per_ray, 3)
         sample_pixel_width = pixel_width.view(batch_size, 1).repeat(samples_per_ray, 1)
+        sample_camera_index = camera_index.view(batch_size, 1).repeat(samples_per_ray, 1) if not (camera_index is None) else None
         sample_t_start = t_start.view(batch_size * samples_per_ray, 1)
         sample_t_end = t_end.view(batch_size * samples_per_ray, 1)
         
         # Evaluate density and color at sample positions
-        sample_density, sample_color = model(sample_pos, sample_dir, sample_t_start, sample_t_end, sample_pixel_width)
+        sample_density, sample_color = model.forward(sample_pos, sample_dir, sample_t_start, sample_t_end, sample_pixel_width, sample_camera_index)
         
         # Group samples by ray
         sample_density = sample_density.view(batch_size, samples_per_ray)
@@ -283,7 +285,7 @@ class NerfInterpolation(pl.LightningModule):
         return rgb, weights, sample_dist
 
 
-    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor, pixel_width: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor, pixel_width: th.Tensor, camera_index: th.Tensor | None) -> tuple[th.Tensor, th.Tensor]:
         """
         Forward pass of the model.
         Given the ray origins and directions, compute the rgb values for the given rays.
@@ -315,7 +317,8 @@ class NerfInterpolation(pl.LightningModule):
                                                 ray_dirs,
                                                 batch_size,
                                                 self.samples_per_ray_coarse,
-                                                pixel_width)
+                                                pixel_width,
+                                                camera_index)
         
         if self.proposal:
             ### Fine sampling
@@ -329,7 +332,8 @@ class NerfInterpolation(pl.LightningModule):
                                                     ray_dirs,
                                                     batch_size,
                                                     self.samples_per_ray_coarse + self.samples_per_ray_fine,
-                                                    pixel_width)
+                                                    pixel_width,
+                                                    camera_index)
         else: 
             rgb_fine = rgb_coarse
             rgb_coarse = th.zeros_like(rgb_coarse)
@@ -344,13 +348,13 @@ class NerfInterpolation(pl.LightningModule):
         """
         general function for training and validation step
         """
-        ray_origs, ray_dirs, ray_colors, pixel_width = batch
+        cam_to_world, ray_origs, ray_dirs, ray_colors, pixel_width, camera_index = batch
 
         # TODO: Add schedular here that changes which gaussian to use
         ray_colors = ray_colors[:, :, 0]
         
         # Compute the rgb values for the given rays for both models
-        ray_colors_pred_fine, ray_colors_pred_coarse = self(ray_origs, ray_dirs, pixel_width)
+        ray_colors_pred_fine, ray_colors_pred_coarse = self.forward(ray_origs, ray_dirs, pixel_width, camera_index)
 
         # Compute the individual losses
         proposal_loss = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors)

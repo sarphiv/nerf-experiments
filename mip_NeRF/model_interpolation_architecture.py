@@ -11,6 +11,7 @@ class FourierFeatures(nn.Module):
 
         self.levels = levels
         self.scale = scale
+        self.output_dim = 2*3*levels
 
 
     def forward(self, x: th.Tensor) -> th.Tensor:
@@ -57,8 +58,8 @@ class NerfModel(nn.Module):
             self.direction_encoder = FourierFeatures(fourier_levels_dir, 1.0)
 
             # Dimensionality of the input to the network 
-            positional_dim = fourier_levels_pos*2*3
-            directional_dim = fourier_levels_dir*2*3
+            positional_dim = self.position_encoder.output_dim
+            directional_dim = self.direction_encoder.output_dim
         else: 
             positional_dim = 3
             directional_dim = 3 
@@ -86,7 +87,7 @@ class NerfModel(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
 
-    def forward(self, pos: th.Tensor, dir: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+    def forward(self, pos: th.Tensor, dir: th.Tensor, t_start: th.Tensor, t_end: th.Tensor, pixel_width: th.Tensor, cam_idx: th.Tensor | None) -> tuple[th.Tensor, th.Tensor]:
         # Apply positional encoding
         if self.fourier:
             pos = self.position_encoder(pos)
