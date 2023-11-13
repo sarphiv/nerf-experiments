@@ -311,6 +311,7 @@ class CameraCalibrationModel(NerfInterpolation):
         Returns:
             th.Tensor: Loss
         """
+
         # Transform batch to model prediction space
         batch = self.training_transform(batch)
 
@@ -388,5 +389,7 @@ class CameraCalibrationModel(NerfInterpolation):
             optimizers + [self._camera_optimizer],
             schedulers + [self._camera_learning_rate_scheduler]
         )
+
+
 
 
