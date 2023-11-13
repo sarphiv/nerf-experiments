@@ -228,7 +228,11 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         )
 
 
-    def _get_raw_rays(self, camera_to_world: dict[str, th.Tensor], image_width: int, image_height: int, focal_length: float) -> tuple[dict[str, th.Tensor], dict[str, th.Tensor]]:
+    def _get_raw_rays(self,
+                      camera_to_world: dict[str, th.Tensor],
+                      image_width: int,
+                      image_height: int,
+                      focal_length: float) -> tuple[dict[str, th.Tensor], dict[str, th.Tensor]]:
         # Create unit directions (H, W, 3) in camera space
         # NOTE: Initially normalized such that z=-1 via the focal length.
         #  Camera is looking in the negative z direction.
@@ -264,7 +268,13 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         )
 
 
-    def _get_noisy_rays(self, origins: dict[str, th.Tensor], directions: dict[str, th.Tensor], rotation_noise_sigma: Optional[float], translation_noise_sigma: Optional[float], noise_seed: Optional[int]) -> tuple[dict[str, th.Tensor], dict[str, th.Tensor]]:
+    def _get_noisy_rays(self, 
+                        origins: dict[str, th.Tensor], 
+                        directions: dict[str, th.Tensor], 
+                        rotation_noise_sigma: Optional[float], 
+                        translation_noise_sigma: Optional[float], 
+                        noise_seed: Optional[int]
+                        ) -> tuple[dict[str, th.Tensor], dict[str, th.Tensor]]:
         # Get amount of cameras
         n_cameras = len(origins)
         
@@ -423,7 +433,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             c_r,
             c_b, 
             th.tensor(self.gaussian_blur_relative_sigma_current), 
-            th.tensor(img_idx)
+            th.tensor(img_idx, dtype = th.int32)
         )
 
 

@@ -40,7 +40,12 @@ class NerfModel(nn.Module):
         -----------
             n_hidden: int - the number of hidden layers in the model
             hidden_dim: int - the dimensionality of the hidden layers
-            fourier: tuple[bool, int, int, bool] - whether to use fourier encoding and the number of levels for position and direction. The last bool is to determine if the barf weighting scheme is to be applied
+            fourier: tuple[bool, int, int, bool, float, float] - whether to use fourier encoding and barf mask
+                1: use positional encoding or not
+                2,3:  number of levels for position and direction.
+                4: The last bool is to determine if the barf weighting scheme is to be applied
+                5: how many frequency levels to include for each epoch
+                6: how many frequency levels to include initially.
             delayed_direction: bool - if true then the direction is only feed to the network at the last layers
             n_segments: int - the number of segments of the network where the position is feed into it
         """
@@ -108,6 +113,7 @@ class NerfModel(nn.Module):
             z = model_segment(th.cat((z, pos), dim=1))
             if i < self.n_segments-1:
                 z = self.relu(z)
+
 
         # If the density is delayed then the last value is the density and should not be used
         length = z.shape[1] 
