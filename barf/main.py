@@ -6,7 +6,7 @@ import torch as th
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger  # type: ignore
 
-from data_module import ImagePoseDataModule
+from data_module_old import ImagePoseDataModule
 from image_logger import Log2dImageReconstruction
 from point_logger import LogCameraExtrinsics
 from epoch_fraction_logger import LogEpochFraction
@@ -35,7 +35,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="point-cloud-test"
+        name="lauge testing barf"
     )
 
 
@@ -47,21 +47,36 @@ if __name__ == "__main__":
         image_width=80,
         image_height=80,
         scene_path="../data/lego",
-        space_transform_scale=None,
-        space_transform_translate=None,
-        rotation_noise_sigma=float(args.rotation_noise),
-        translation_noise_sigma=float(args.translation_noise),
-        camera_noise_seed=13571113,
-        gaussian_blur_kernel_size=81,
-        gaussian_blur_relative_sigma_start=0.,
-        gaussian_blur_relative_sigma_decay=0.99,
         validation_fraction=0.05,
         validation_fraction_shuffle=1234,
+        rotation_noise_sigma = 0.0,
+        translation_noise_sigma = 0.0,
         batch_size=BATCH_SIZE,
         num_workers=NUM_WORKERS,
         shuffle=True,
         pin_memory=True
     )
+    
+    # dm = ImagePoseDataModule(
+    #     image_width=80,
+    #     image_height=80,
+    #     scene_path="../data/lego",
+    #     space_transform_scale=None,
+    #     space_transform_translate=None,
+    #     rotation_noise_sigma=float(args.rotation_noise),
+    #     translation_noise_sigma=float(args.translation_noise),
+    #     camera_noise_seed=13571113,
+    #     gaussian_blur_kernel_size=81,
+    #     gaussian_blur_relative_sigma_start=0.,
+    #     gaussian_blur_relative_sigma_decay=0.99,
+    #     validation_fraction=0.05,
+    #     validation_fraction_shuffle=1234,
+    #     batch_size=BATCH_SIZE,
+    #     num_workers=NUM_WORKERS,
+    #     shuffle=True,
+    #     pin_memory=True
+    # )
+
 
     dm.setup("fit")
 
@@ -82,25 +97,25 @@ if __name__ == "__main__":
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
                 logging_start=0.002,
-                delay_start=1/200,
-                delay_end=1/16,
+                delay_start=1/4,
+                delay_end=1.,
                 delay_taper=4.0,
                 validation_image_names=["r_2", "r_84"],
                 reconstruction_batch_size=BATCH_SIZE,
                 reconstruction_num_workers=NUM_WORKERS,
                 metric_name="val_img",
             ),
-            LogCameraExtrinsics(
-                wandb_logger=wandb_logger,
-                logging_start=0.002,
-                delay_start=1/200,
-                delay_end=1/16,
-                delay_taper=4.0,
-                batch_size=BATCH_SIZE,
-                num_workers=NUM_WORKERS,
-                ray_direction_length=1/10,
-                metric_name="train_point",
-            ),
+            # LogCameraExtrinsics(
+            #     wandb_logger=wandb_logger,
+            #     logging_start=0.002,
+            #     delay_start=1/200,
+            #     delay_end=1/16,
+            #     delay_taper=4.0,
+            #     batch_size=BATCH_SIZE,
+            #     num_workers=NUM_WORKERS,
+            #     ray_direction_length=1/10,
+            #     metric_name="train_point",
+            # ),
             LearningRateMonitor(
                 logging_interval="step"
             ),
@@ -109,14 +124,14 @@ if __name__ == "__main__":
                 every_n_epochs=2,
                 save_top_k=-1,
             ),
-            dm.get_dataset_blur_scheduler_callback(
-                epoch_fraction_period=0.02,
-                dataset_name="train"
-            ),
-            dm.get_dataset_blur_scheduler_callback(
-                epoch_fraction_period=0.02,
-                dataset_name="val"
-            )
+            # dm.get_dataset_blur_scheduler_callback(
+            #     epoch_fraction_period=0.02,
+            #     dataset_name="train"
+            # ),
+            # dm.get_dataset_blur_scheduler_callback(
+            #     epoch_fraction_period=0.02,
+            #     dataset_name="val"
+            # )
         ]
     )
 
@@ -134,7 +149,7 @@ if __name__ == "__main__":
         samples_per_ray=64 + 192,
         n_hidden=args.n_hidden,
         # fourier=(args.use_fourier, 10, 4),
-        fourier = (True, 10, 4, True, 0.5, 1),
+        fourier = (True, 10, 4, False, 0.5, 1),
         proposal=(args.use_proposal, 64),
         delayed_direction=args.delayed_direction,
         delayed_density=args.delayed_density,

@@ -1,0 +1,100 @@
+dataset.py:
+
+    _transform_camera_to_world:
+        handle cam to world matrices with scale != 1
+    
+    _get_noisy_rays:
+        "This is a random point on the unit sphere"
+            No its not?
+
+    _get_noisy_rays/_get_raw_rays:
+        rewrite to be one function that takes in
+        a camera to world matrix, and then outputs rays
+
+        makes sure that two functions with slightly different
+        names only have a sligt difference in functionality
+
+        also avoids duplicate code and dependencies between functions
+         - makes functions more self contained.
+
+    the gaussian stuff:
+        rewrite to be preprocessed etc.
+        And why not just use PIL?
+
+data_moduel.py:
+
+    all those center rays:
+        rewrite to one function
+        that just takes in stage?
+         - ("train", "val", "test")
+
+    gaussian blur:
+        rewrite to be linear interpolation
+
+
+model_camera_extrinsics.py:    
+    forward_origins():
+        why no -1 in t.squeeze()?
+    
+model_camera_calibration.py:
+
+    I think the stepping is quite ugly. 
+    Here is an idea for improvement;
+
+        collect all losses in one value
+            (loss = proposal_loss + radiance_loss + camera_loss + ... whatever many are needed)
+        loss.manual_backward()
+
+        for opt in optimizers;
+            opt.zero_grad()
+            opt.step()
+        
+    this way we make sure that the backward pass is only done once
+    and the functionality that backpropagates and steps are detached.
+
+    And also, we avoid the mess of
+    functions altering values invisibly without 
+    returning them (the computation graph);
+        training_step: calls 
+            _proposal_optimizer_step(proposal_loss)
+            _radiance_optimizer_step(radiance_loss)
+            _camera_optimizer_step()
+    
+
+    There is a note in _camera_optimizer_step;
+            # NOTE: Assuming camera loss is calculated right after radiance loss.
+            #  This saves a backwards pass by using the same graph.
+            #  If this is not the case, then the step function should be altered
+        but manual_backward is called. Does this function recognize 
+        that the loss has already been calculated?? 
+         - Nope. So there is a bug.
+
+    training_step:
+        what is the purpose of 
+        camera_loss???
+
+        ok so in this case
+        camera_loss = radiance_loss_blur
+
+
+    
+    _camera_optimizer_step:
+        soo the camera extrinsics module
+        is stepped?
+        but why?
+
+
+
+translation noise sigma. This is the standard deviation in each direction
+this means that the interpretation is that it moves the center sqrt(3*sigma**2) = sqrt(3)*sigma
+
+
+Tomorrow:
+
+Include barf mask weight + identity in PE
+    - make the mask fast
+
+play with adding the other components:
+    - validation transform
+    - train transform (camera extrinsics)
+

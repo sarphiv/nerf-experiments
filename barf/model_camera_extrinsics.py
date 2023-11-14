@@ -26,12 +26,12 @@ class CameraExtrinsics(nn.Module):
         """
         return th.matrix_exp(th.cross(
             -th.eye(3, device=self.rotation.device).view(1, 3, 3), 
-            self.rotation[img_idx].view(-1, 3, 1),
+            self.rotation.view(-1, 3, 1),
             dim=1
-        ))
+        ))[img_idx]
 
 
-    def forward_origins(self, i: th.Tensor, o: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
+    def forward_origins(self, i: th.Tensor, o: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
         Forwards pass: Gets the origins in the predicted camera space
         """
@@ -39,19 +39,20 @@ class CameraExtrinsics(nn.Module):
         t = self.translation[i]
          
         # Create the rotation matrix
-        R = self.get_rotations(i)
+        
 
         # Get the new rotation and translation
-        new_o = th.matmul(R, o.unsqueeze(-1)).squeeze(-1) + t.squeeze()
+        new_o = o + t
 
-        return new_o, R, t
+        return new_o, t
 
 
     def forward(self, i: th.Tensor, o: th.Tensor, d: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]:
         """
         Forwards pass: Gets the origins and directions in the predicted camera space
         """
-        new_o, R, t = self.forward_origins(i, o)
+        new_o, t = self.forward_origins(i, o)
+        R = self.get_rotations(i)
         new_d = th.matmul(R, d.unsqueeze(-1)).squeeze(-1)
 
         return new_o, new_d, R, t

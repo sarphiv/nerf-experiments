@@ -8,7 +8,7 @@ from pytorch_lightning.callbacks import Callback
 from pytorch_lightning.loggers import WandbLogger #type: ignore
 from tqdm import tqdm
 
-from data_module import ImagePoseDataset
+from data_module_old import ImagePoseDataset
 from model_camera_calibration import CameraCalibrationModel
 
 
@@ -129,11 +129,13 @@ class Log2dImageReconstruction(Callback):
         images = []
 
 
+        transform_params = None
+        
         # Reconstruct each image
         for name in tqdm(self.validation_image_names, desc="Reconstructing images", leave=False):
             # Get rays for image
-            origins = dataset.origins_raw[name].view(-1, 3)
-            directions = dataset.directions_raw[name].view(-1, 3)
+            origins = dataset.origins[name].view(-1, 3)
+            directions = dataset.directions[name].view(-1, 3)
 
             # Set up data loader for validation image
             data_loader = DataLoader(
@@ -149,7 +151,6 @@ class Log2dImageReconstruction(Callback):
 
             # Iterate over batches of rays to get RGB values
             rgb = th.empty((dataset.image_batch_size, 3), dtype=cast(th.dtype, model.dtype))
-            transform_params = None
             i = 0
             
             for ray_origs, ray_dirs in tqdm(data_loader, desc="Predicting RGB values", leave=False):

@@ -100,12 +100,12 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         )
 
 
-        # Get gaussian blur kernel
-        self.gaussian_blur_kernel = self._get_gaussian_blur_kernel(
-            self.gaussian_blur_kernel_size,
-            self.gaussian_blur_relative_sigma_current,
-            max(self.image_height, self.image_width)
-        )
+        # # Get gaussian blur kernel
+        # self.gaussian_blur_kernel = self._get_gaussian_blur_kernel(
+        #     self.gaussian_blur_kernel_size,
+        #     self.gaussian_blur_relative_sigma_current,
+        #     max(self.image_height, self.image_width)
+        # )
 
 
         # Get raw rays for each pixel in each image
@@ -331,73 +331,73 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
 
 
 
-    def _get_gaussian_blur_kernel(self, kernel_size: int, relative_sigma: float, max_side_length: int) -> th.Tensor:
-        # If sigma is 0, return a Dirac delta kernel
-        if relative_sigma <= sys.float_info.epsilon:
-            kernel = th.zeros(kernel_size)
-            kernel[kernel_size//2] = 1
-        # Else, create 1D Gaussian kernel
-        # NOTE: Gaussian blur is separable, so 1D kernel can simply be applied twice
-        else:
-            kernel = th.linspace(-kernel_size/2, kernel_size/2, kernel_size)
-            # Calculate inplace exp(-x^2 / (2 * (relative_sigma*max_side_length)^2))
-            kernel.square_().divide_(-2 * (relative_sigma * max_side_length)**2).exp_()
-            # Normalize the kernel
-            kernel.divide_(kernel.sum())
+    # def _get_gaussian_blur_kernel(self, kernel_size: int, relative_sigma: float, max_side_length: int) -> th.Tensor:
+    #     # If sigma is 0, return a Dirac delta kernel
+    #     if relative_sigma <= sys.float_info.epsilon:
+    #         kernel = th.zeros(kernel_size)
+    #         kernel[kernel_size//2] = 1
+    #     # Else, create 1D Gaussian kernel
+    #     # NOTE: Gaussian blur is separable, so 1D kernel can simply be applied twice
+    #     else:
+    #         kernel = th.linspace(-kernel_size/2, kernel_size/2, kernel_size)
+    #         # Calculate inplace exp(-x^2 / (2 * (relative_sigma*max_side_length)^2))
+    #         kernel.square_().divide_(-2 * (relative_sigma * max_side_length)**2).exp_()
+    #         # Normalize the kernel
+    #         kernel.divide_(kernel.sum())
 
 
-        return kernel
+    #     return kernel
 
 
-    def _get_blurred_pixel(self, img: th.Tensor, x: int, y: int, gaussian_blur_kernel: th.Tensor):
-        # NOTE: Assuming x and y are within bounds of img
+    # def _get_blurred_pixel(self, img: th.Tensor, x: int, y: int, gaussian_blur_kernel: th.Tensor):
+    #     # NOTE: Assuming x and y are within bounds of img
 
-        # Retrive kernel dimensions
-        kernel_size = gaussian_blur_kernel.shape[0]
-        kernel_half = kernel_size//2
+    #     # Retrive kernel dimensions
+    #     kernel_size = gaussian_blur_kernel.shape[0]
+    #     kernel_half = kernel_size//2
 
-        # Retrieve image dimensions
-        img_height, img_width = img.shape[:2]
+    #     # Retrieve image dimensions
+    #     img_height, img_width = img.shape[:2]
 
-        # Calculate padding
-        left = max(kernel_half - x, 0)
-        top = max(kernel_half - y, 0)
-        right = max(kernel_half + x - (img_width-1), 0)
-        bottom = max(kernel_half + y - (img_height-1), 0)
+    #     # Calculate padding
+    #     left = max(kernel_half - x, 0)
+    #     top = max(kernel_half - y, 0)
+    #     right = max(kernel_half + x - (img_width-1), 0)
+    #     bottom = max(kernel_half + y - (img_height-1), 0)
 
-        pad = tv.transforms.Pad(
-            padding=(left, top, right, bottom), 
-            padding_mode="reflect"
-        )
+    #     pad = tv.transforms.Pad(
+    #         padding=(left, top, right, bottom), 
+    #         padding_mode="reflect"
+    #     )
 
-        # Pad image and retrieve pixel and neighbors
-        neighborhood: th.Tensor = pad(img.permute(2, 0, 1))[
-            :,
-            (top+y-kernel_half):(top+y+kernel_half)+1, 
-            (left+x-kernel_half):(left+x+kernel_half)+1,
-        ].permute(1, 2, 0)
-
-
-        # Blur y-direction and store y-column of pixel
-        # (H, W, C) -> (W, C)
-        blurred_y = (neighborhood * gaussian_blur_kernel.view(-1, 1, 1)).sum(dim=0)
-        # Blur x-direction and store pixel
-        # (W, C) -> (C)
-        blurred_pixel = (blurred_y * gaussian_blur_kernel.view(-1, 1)).sum(dim=0)
-
-        # Return blurred pixel
-        return blurred_pixel
+    #     # Pad image and retrieve pixel and neighbors
+    #     neighborhood: th.Tensor = pad(img.permute(2, 0, 1))[
+    #         :,
+    #         (top+y-kernel_half):(top+y+kernel_half)+1, 
+    #         (left+x-kernel_half):(left+x+kernel_half)+1,
+    #     ].permute(1, 2, 0)
 
 
-    def gaussian_blur_step(self) -> None:
-        # Update current variance
-        self.gaussian_blur_relative_sigma_current *= self.gaussian_blur_relative_sigma_decay
-        # Get new kernel
-        self.gaussian_blur_kernel = self._get_gaussian_blur_kernel(
-            self.gaussian_blur_kernel_size,
-            self.gaussian_blur_relative_sigma_current,
-            max(self.image_height, self.image_width)
-        )
+    #     # Blur y-direction and store y-column of pixel
+    #     # (H, W, C) -> (W, C)
+    #     blurred_y = (neighborhood * gaussian_blur_kernel.view(-1, 1, 1)).sum(dim=0)
+    #     # Blur x-direction and store pixel
+    #     # (W, C) -> (C)
+    #     blurred_pixel = (blurred_y * gaussian_blur_kernel.view(-1, 1)).sum(dim=0)
+
+    #     # Return blurred pixel
+    #     return blurred_pixel
+
+
+    # def gaussian_blur_step(self) -> None:
+    #     # Update current variance
+    #     self.gaussian_blur_relative_sigma_current *= self.gaussian_blur_relative_sigma_decay
+    #     # Get new kernel
+    #     self.gaussian_blur_kernel = self._get_gaussian_blur_kernel(
+    #         self.gaussian_blur_kernel_size,
+    #         self.gaussian_blur_relative_sigma_current,
+    #         max(self.image_height, self.image_width)
+    #     )
 
 
     def __getitem__(self, index: int) -> DatasetOutput:
@@ -413,16 +413,17 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         c_r = img.view(-1, 3)[i]
 
         # If no blur, set color to current pixel
-        if self.gaussian_blur_relative_sigma_current <= sys.float_info.epsilon:
-            c_b = c_r
-        # Else, calculate color via gaussian blur
-        else:
-            c_b = self._get_blurred_pixel(
-                img, 
-                i % self.image_width, 
-                i // self.image_width, 
-                self.gaussian_blur_kernel
-            )
+        # if self.gaussian_blur_relative_sigma_current <= sys.float_info.epsilon:
+        #     c_b = c_r
+        # # Else, calculate color via gaussian blur
+        # else:
+        #     c_b = self._get_blurred_pixel(
+        #         img, 
+        #         i % self.image_width, 
+        #         i // self.image_width, 
+        #         self.gaussian_blur_kernel
+        #     )
+        c_b = c_r
 
 
         return (
