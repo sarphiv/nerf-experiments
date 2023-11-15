@@ -11,6 +11,8 @@ from image_logger import Log2dImageReconstruction
 from point_logger import LogCameraExtrinsics
 from epoch_fraction_logger import LogEpochFraction
 from model_camera_calibration import CameraCalibrationModel
+from model_interpolation_architecture import BarfPositionalEncoding
+
 
 
 
@@ -148,8 +150,17 @@ if __name__ == "__main__":
         far_sphere_normalized=1/3,
         samples_per_ray=64 + 192,
         n_hidden=args.n_hidden,
-        # fourier=(args.use_fourier, 10, 4),
-        fourier = (True, 10, 4, False, 0.5, 1),
+        position_encoder = BarfPositionalEncoding(levels=10,
+                                                  alpha_start=0,
+                                                  alpha_increase_start_epoch=3.,
+                                                #   alpha_increase_start_epoch=1.28,
+                                                  alpha_increase_end_epoch=10.,
+                                                  include_identity=True),
+        direction_encoder = BarfPositionalEncoding(levels=4,
+                                                     alpha_start=4,
+                                                     alpha_increase_start_epoch=1.28,
+                                                     alpha_increase_end_epoch=6.4,
+                                                     include_identity=True),
         proposal=(args.use_proposal, 64),
         delayed_direction=args.delayed_direction,
         delayed_density=args.delayed_density,
@@ -161,6 +172,8 @@ if __name__ == "__main__":
         weight_decay=0
     )
 
+
+    wandb_logger.watch(model, log="all")
 
     # Start training, resume from checkpoint
     trainer.fit(model, dm)

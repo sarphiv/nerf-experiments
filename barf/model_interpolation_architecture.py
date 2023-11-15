@@ -2,8 +2,29 @@ import torch as th
 import torch.nn as nn
 
 
-class FourierFeatures(nn.Module):
-    def __init__(self, levels: int, scale: float = 2*th.pi): 
+class PositionalEncoding(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.output_dim = None
+        self.space_dimensions = None
+    
+    def forward(self, x: th.Tensor) -> th.Tensor:
+        raise NotImplementedError()
+
+
+class IdentityPositionalEncoding(PositionalEncoding):
+    def __init__(self, space_dimensions: int = 3):
+        super().__init__()
+        self.output_dim = space_dimensions
+        self.space_dimensions = space_dimensions
+
+    def forward(self, x: th.Tensor) -> th.Tensor:
+        assert x.shape[1] == self.space_dimensions, f"Input shape {x.shape} does not match space dimensionality {self.space_dimensions}"
+
+
+
+class FourierFeatures(PositionalEncoding):
+    def __init__(self, levels: int, scale: float = 2*th.pi, space_dimensions: int = 3): 
         """
         Positional encoding using Fourier features of "levels" periods. 
         
@@ -12,27 +33,129 @@ class FourierFeatures(nn.Module):
 
         self.levels = levels
         self.scale = scale
+        self.space_dimensions = space_dimensions
+        self.output_dim = levels*2*space_dimensions
 
 
     def forward(self, x: th.Tensor) -> th.Tensor:
         """
         Gets the positional encoding of x for each channel.
-        x_i in [-0.5, 0.5] -> function(x_i * pi * 2^j) for function in (cos, sin) for j in [0, levels-1]
+        x_i in [-0.5, 0.5] -> function(x_i * pi * 2^j) for function in (cos, sin) for i in [0, levels-1]
+
+        returns:
+            [cos(x), cos(2x), cos(4x) ... , cos(y), cos(2y), cos(4y) ... , cos(z), cos(2z), cos(4z) ...,
+             sin(x), sin(2x), sin(4x) ... , sin(y), sin(2y), sin(4y) ... , sin(z), sin(2z), sin(4z) ...]
         """
+
+        assert x.shape[1] == self.space_dimensions, f"Input shape {x.shape} does not match space dimensionality {self.space_dimensions}"
+
         scale = self.scale*(2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
         args = x.repeat_interleave(self.levels, dim=1) * scale
 
         return th.hstack((th.cos(args), th.sin(args)))
 
 
+
+class BarfPositionalEncoding(PositionalEncoding):
+    def __init__(self,
+                 levels: int,
+                 alpha_start: float,
+                 alpha_increase_start_epoch: float,
+                 alpha_increase_end_epoch: float,
+                 include_identity: bool = True,
+                 scale: float = 2*th.pi,
+                 space_dimensions: int = 3):
+        """
+        Positional encoding using the mask from the barf paper. 
+        """
+        super().__init__()
+        self.levels = levels
+        self.alpha_start = alpha_start
+        self.output_dim = (levels*2 + include_identity)*space_dimensions
+        self.alpha_increase_start_epoch = alpha_increase_start_epoch
+        self.alpha_increase_end_epoch = alpha_increase_end_epoch
+        self.include_identity = include_identity
+        self.scale = scale
+        self.space_dimensions = space_dimensions
+        self.register_buffer("alpha", th.tensor(float(alpha_start)))
+
+    def update_alpha(self, epoch: float) -> None:
+        """
+        Updates the alpha value of the positional encoding. 
+        """
+
+        if epoch < self.alpha_increase_start_epoch:
+            alpha = self.alpha_start
+
+        elif self.alpha_increase_start_epoch <= epoch <= self.alpha_increase_end_epoch:
+            alpha = (
+                self.alpha_start
+                + (epoch - self.alpha_increase_start_epoch)
+                * (self.levels - self.alpha_start)
+                / (self.alpha_increase_end_epoch - self.alpha_increase_start_epoch)
+            )
+
+        else:
+            alpha = float(self.levels)
+        
+        self.alpha = th.tensor(alpha, device=self.alpha.device)
+    
+
+    def compute_mask(self, alpha: th.Tensor) -> th.Tensor:
+        # init zero mask
+        mask = th.zeros((self.levels), device=alpha.device)
+
+        # identify the turning point, k where 1 > alpha - k > 0 mask 
+        idx_ramp = int(alpha)
+
+        # set ones
+        mask[:idx_ramp] = 1.
+
+        # the turning point is a cosine interpolation
+        if idx_ramp < self.levels:
+            mask[idx_ramp] = (1 - th.cos((alpha - idx_ramp) * th.pi)) / 2
+
+        # repeat for sin and for each channel
+        mask = mask.repeat(self.space_dimensions)
+    
+        return mask.view(1, -1)
+
+
+    def forward(self, x: th.Tensor) -> th.Tensor:
+        """
+        Gets the positional encoding of x for each channel.
+        x_i in [-0.5, 0.5] -> function(x_i * pi * 2^j) for function in (cos, sin) for i in [0, levels-1]
+
+        returns:
+            [cos(x), cos(2x), cos(4x) ... , cos(y), cos(2y), cos(4y) ... , cos(z), cos(2z), cos(4z) ...,
+             sin(x), sin(2x), sin(4x) ... , sin(y), sin(2y), sin(4y) ... , sin(z), sin(2z), sin(4z) ...]
+
+            if include_identity:
+                [x,y,z] is prepended to the output
+        """
+
+        assert x.shape[1] == self.space_dimensions, f"Input shape {x.shape} does not match space dimensionality {self.space_dimensions}"
+
+        scale = self.scale*(2**th.arange(self.levels, device=x.device)).repeat(self.space_dimensions)
+        args = x.repeat_interleave(self.levels, dim=1) * scale
+
+        mask = self.compute_mask(self.alpha)
+
+        if self.include_identity:
+            return th.hstack((x, mask*th.cos(args), mask*th.sin(args)))
+        else:
+            return th.hstack((mask*th.cos(args), mask*th.sin(args)))
+        
+
 class NerfModel(nn.Module):
     def __init__(self, 
         n_hidden: int,
         hidden_dim: int,
-        fourier: tuple[bool, int, int, bool, float, float],
         delayed_direction: bool, 
         delayed_density: bool, 
-        n_segments: int
+        n_segments: int,
+        position_encoder: PositionalEncoding,
+        direction_encoder: PositionalEncoding,
     ):
         """
         This is an interpolation between the original NeRF vanilla model and a naive version
@@ -40,12 +163,6 @@ class NerfModel(nn.Module):
         -----------
             n_hidden: int - the number of hidden layers in the model
             hidden_dim: int - the dimensionality of the hidden layers
-            fourier: tuple[bool, int, int, bool, float, float] - whether to use fourier encoding and barf mask
-                1: use positional encoding or not
-                2,3:  number of levels for position and direction.
-                4: The last bool is to determine if the barf weighting scheme is to be applied
-                5: how many frequency levels to include for each epoch
-                6: how many frequency levels to include initially.
             delayed_direction: bool - if true then the direction is only feed to the network at the last layers
             n_segments: int - the number of segments of the network where the position is feed into it
         """
@@ -55,21 +172,13 @@ class NerfModel(nn.Module):
         self.delayed_direction = delayed_direction
         self.delayed_density = delayed_density
         self.n_segments = n_segments
-        self.fourier, self.fourier_levels_pos, self.fourier_levels_dir, self.barf_weight, self.fourier_levels_per_epoch, self.fourier_levels_start = fourier
-        
-        # If there is a positional encoding define it here
-        if self.fourier:
-            self.position_encoder = FourierFeatures(self.fourier_levels_pos, 2*th.pi)
-            self.direction_encoder = FourierFeatures(self.fourier_levels_dir, 1.0)
-            self.alpha = self.fourier_levels_start
+        self.position_encoder = position_encoder
+        self.direction_encoder = direction_encoder
 
-            # Dimensionality of the input to the network 
-            positional_dim = self.fourier_levels_pos*2*3
-            directional_dim = self.fourier_levels_dir*2*3
-        else: 
-            positional_dim = 3
-            directional_dim = 3 
-        
+        # Dimensionality of the input to the network 
+        positional_dim = self.position_encoder.output_dim
+        directional_dim = self.direction_encoder.output_dim
+
         # Create list of model segments
         self.model_segments = nn.ModuleList()
         for i in range(self.n_segments):
@@ -92,18 +201,14 @@ class NerfModel(nn.Module):
         self.softplus = nn.Softplus(threshold=8)
         self.sigmoid = nn.Sigmoid()
 
-    def forward(self, pos: th.Tensor, dir: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
-        # Apply positional encoding
-        if self.fourier:
-            # Apply fourier encoding and weight 
-            pos = self.position_encoder(pos)
-            dir = self.direction_encoder(dir)
+    def forward(self,
+                pos: th.Tensor,
+                dir: th.Tensor, 
+                ) -> tuple[th.Tensor, th.Tensor]:
 
-            # If activated the barf mask for weighing positional encodings is applied 
-            if self.barf_weight:
-                pos *= self._get_mask(self.fourier_levels_pos, device=pos.device).unsqueeze(0) #type: ignore
-                dir *= self._get_mask(self.fourier_levels_dir, device=dir.device).unsqueeze(0) #type: ignore
-        
+        pos = self.position_encoder(pos)
+        dir = self.direction_encoder(dir)
+
         # Apply the model segments with relu activation between segments 
         z = th.zeros((pos.shape[0], 0), device=pos.device)
         for i, model_segment in enumerate(self.model_segments):
@@ -160,44 +265,47 @@ class NerfModel(nn.Module):
             # Concatenate the layers into one sequential
             return nn.Sequential(layer1, *intermediate_layers, nn.ReLU(True), layer2)
 
-    def _get_mask(self, levels: int, device: str) -> th.Tensor:
-        """
-        Get the mask from the barf paper that fits the positional encodings
-        """
-        def get_mask(alpha: th.Tensor, k: th.Tensor) -> th.Tensor:
-            """
-            Calculates the mask from the barf paper given alpha and k. 
+    # def _get_mask(self, levels: int, alpha: float, device: str) -> th.Tensor:
+    #     mask = th.zeros((levels), device=device)
 
-            Args:
-                alpha (float): value that is proporitional to the batch
-                k (float):     the level of the positional encoding
+    # def _get_mask_old(self, levels: int, device: str) -> th.Tensor:
+    #     """
+    #     Get the mask from the barf paper that fits the positional encodings
+    #     """
+    #     def get_mask(alpha: th.Tensor, k: th.Tensor) -> th.Tensor:
+    #         """
+    #         Calculates the mask from the barf paper given alpha and k. 
+
+    #         Args:
+    #             alpha (float): value that is proporitional to the batch
+    #             k (float):     the level of the positional encoding
             
-            Returns:
-                float: 0 if alpha < k, 1 if alpha - k >= 1 and a cosine interpolation otherwise
-            """
-            result = th.zeros_like(alpha)
+    #         Returns:
+    #             float: 0 if alpha < k, 1 if alpha - k >= 1 and a cosine interpolation otherwise
+    #         """
+    #         result = th.zeros_like(alpha)
             
-            condition1 = alpha - k < 0
-            condition2 = (0 <= alpha - k) & (alpha - k < 1)
+    #         condition1 = alpha - k < 0
+    #         condition2 = (0 <= alpha - k) & (alpha - k < 1)
             
-            result[condition1] = 0
-            result[condition2] = (1 - th.cos((alpha[condition2] - k[condition2]) * th.pi)) / 2
-            result[~(condition1 | condition2)] = 1
+    #         result[condition1] = 0
+    #         result[condition2] = (1 - th.cos((alpha[condition2] - k[condition2]) * th.pi)) / 2
+    #         result[~(condition1 | condition2)] = 1
             
-            return result
+    #         return result
         
-        # Create a vector of alpha values
-        alpha = th.ones((levels), device=device) * self.alpha
-        k = th.arange(levels, device=device)
+    #     # Create a vector of alpha values
+    #     alpha = th.ones((levels), device=device) * self.alpha
+    #     k = th.arange(levels, device=device)
 
-        # Get the mask vector 
-        mask = get_mask(alpha, k)
+    #     # Get the mask vector 
+    #     mask = get_mask(alpha, k)
 
-        # Reshape mask to take in (x,y,z) and repeat an extra time for sin/cos 
-        mask = mask.repeat_interleave(3)
-        mask = mask.repeat(2) 
+    #     # Reshape mask to take in (x,y,z) and repeat an extra time for sin/cos 
+    #     mask = mask.repeat_interleave(3)
+    #     mask = mask.repeat(2) 
 
-        return mask
+    #     return mask
 
 
     def list_segments(self):

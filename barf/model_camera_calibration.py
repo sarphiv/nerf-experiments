@@ -8,6 +8,7 @@ from dataset import DatasetOutput
 from data_module_old import ImagePoseDataModule
 from model_camera_extrinsics import CameraExtrinsics
 from model_interpolation import InnerModelBatchInput, NerfInterpolation
+from model_interpolation_architecture import BarfPositionalEncoding
 
 
 
@@ -24,6 +25,11 @@ class CameraCalibrationModel(NerfInterpolation):
         **inner_model_kwargs,
     ):  
         super().__init__(*inner_model_args, **inner_model_kwargs)
+
+        self.automatic_optimization = False
+
+        self.position_encoder = cast(BarfPositionalEncoding, self.position_encoder)
+        self.direction_encoder = cast(BarfPositionalEncoding, self.direction_encoder)
 
         # Create camera calibration model
         self.camera_extrinsics = CameraExtrinsics(n_training_images)
@@ -224,24 +230,32 @@ class CameraCalibrationModel(NerfInterpolation):
             translations: th.Tensor - the translation vectors
             rotations: th.Tensor - the rotation matrices
         """
-        return origs_val, dirs_val, None
+        # return origs_val, dirs_val, None
         # If not supplied, get the rotation matrix and the translation vector 
-        # if post_transform_params is None:
-        #     post_transform_params = self.compute_post_transform_params()
+        if post_transform_params is None:
+            post_transform_params = self.compute_post_transform_params()
 
-        # # Deconstruct post-transform parameters
-        # R, t, c = post_transform_params
+        # Deconstruct post-transform parameters
+        R, t, c = post_transform_params
 
-        # # Transform the validation image to this space 
-        # origs_model = th.matmul(R, origs_val.unsqueeze(-1)).squeeze(-1)*c + t
-        # dirs_model = th.matmul(R, dirs_val.unsqueeze(-1)).squeeze(-1)
+        # Transform the validation image to this space 
+        origs_model = th.matmul(R, origs_val.unsqueeze(-1)).squeeze(-1)*c + t
+        dirs_model = th.matmul(R, dirs_val.unsqueeze(-1)).squeeze(-1)
 
-        # return origs_model, dirs_model, post_transform_params   
+        return origs_model, dirs_model, post_transform_params   
 
 
     def training_step(self, batch, batch_idx):
+
+        n_batches = len(self.trainer.train_dataloader)
+        epoch = self.trainer.current_epoch + batch_idx/n_batches
+
+        self.position_encoder.update_alpha(epoch)
+        self.direction_encoder.update_alpha(epoch)
+
         return self._step_helper(batch, batch_idx, "train")
-    
+
+
     def validation_step(self, batch, batch_idx):
         return self._step_helper(batch, batch_idx, "val")
 
@@ -250,8 +264,8 @@ class CameraCalibrationModel(NerfInterpolation):
         for value in batch:
             assert not th.isnan(value).any(), "NaN values in raw batch"
         # Transform batch to model prediction space
-        # if purpose == "train": batch = self.training_transform(batch)
-        # elif purpose == "val": batch = self.validation_transform(batch)
+        if purpose == "train": batch = self.training_transform(batch)
+        elif purpose == "val": batch = self.validation_transform(batch)
 
         for value in batch:
             assert not th.isnan(value).any(), "NaN values in transformed batch"
@@ -270,6 +284,9 @@ class CameraCalibrationModel(NerfInterpolation):
 
         # Forward pass
         ray_colors_pred_fine, ray_colors_pred_coarse = self(ray_origs_noisy, ray_dirs_noisy)
+
+        assert not th.isnan(ray_colors_pred_fine).any(), "NaN values in ray_colors_pred_fine"
+        assert not th.isnan(ray_colors_pred_coarse).any(), "NaN values in ray_colors_pred_coarse"
 
         # compute the loss
         loss_fine = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw)

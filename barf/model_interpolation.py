@@ -5,7 +5,7 @@ import torch as th
 import torch.nn as nn
 import pytorch_lightning as pl
 
-from model_interpolation_architecture import NerfModel
+from model_interpolation_architecture import NerfModel, PositionalEncoding
 
 # Type alias for inner model batch input
 #  (origin, direction, pixel_color, pixel_relative_blur)
@@ -21,7 +21,8 @@ class NerfInterpolation(pl.LightningModule):
         samples_per_ray: int,
         n_hidden: int,
         proposal: tuple[bool, int],
-        fourier: tuple[bool, int, int, bool, float, float],
+        position_encoder: PositionalEncoding,
+        direction_encoder: PositionalEncoding,
         delayed_direction: bool, 
         delayed_density: bool, 
         n_segments: int,
@@ -31,7 +32,15 @@ class NerfInterpolation(pl.LightningModule):
         learning_rate_period: float = 0.4,
         weight_decay: float = 0.0
     ):  
-        
+        """
+        barf: tuple[bool, float, float, float] - whether to use barf weighting scheme and the parameters for it
+            1: use barf weighting scheme or not
+            2: the initial value of alpha
+            3: the final value of alpha
+            4: the decay start epoch
+            5: the decay end epoch
+        """
+
         super().__init__()
         self.save_hyperparameters()
 
@@ -47,14 +56,19 @@ class NerfInterpolation(pl.LightningModule):
         self.near_sphere_normalized = near_sphere_normalized
         self.far_sphere_normalized = far_sphere_normalized
 
+        # the encoders
+        self.position_encoder = position_encoder
+        self.direction_encoder = direction_encoder
+
         # Coarse model -> proposal network, but when there is no proposal network it is the actual prediction
         self.model_coarse = NerfModel(
             n_hidden=n_hidden,
             hidden_dim=256,
-            fourier=fourier,
             delayed_direction=delayed_direction,
             delayed_density=delayed_density,
-            n_segments=n_segments)
+            n_segments=n_segments,
+            position_encoder=position_encoder,
+            direction_encoder=direction_encoder)
         
 
         # If there is a proposal network separate the samples into coarse and fine sampling
@@ -67,10 +81,11 @@ class NerfInterpolation(pl.LightningModule):
             self.model_fine = NerfModel(
                 n_hidden=n_hidden,
                 hidden_dim=256,
-                fourier=fourier,
                 delayed_direction=delayed_direction,
                 delayed_density=delayed_density,
-                n_segments=n_segments)
+                n_segments=n_segments,
+                position_encoder=position_encoder,
+                direction_encoder=direction_encoder)
             
             # Define the prediction network 
             self.model_prediction = self.model_fine
