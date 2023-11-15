@@ -6,7 +6,7 @@ import torch as th
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger  # type: ignore
 
-from data_module_old import ImagePoseDataModule
+from data_module import ImagePoseDataModule
 from image_logger import Log2dImageReconstruction
 from point_logger import LogCameraExtrinsics
 from epoch_fraction_logger import LogEpochFraction
@@ -43,13 +43,13 @@ if __name__ == "__main__":
 
     # Set up data module
     BATCH_SIZE = 1024*2
-    NUM_WORKERS = 8
+    NUM_WORKERS = 1
     
     dm = ImagePoseDataModule(
         image_width=80,
         image_height=80,
         scene_path="../data/lego",
-        validation_fraction=0.05,
+        validation_fraction=0.06,
         validation_fraction_shuffle=1234,
         rotation_noise_sigma = 0.0,
         translation_noise_sigma = 0.0,

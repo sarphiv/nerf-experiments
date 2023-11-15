@@ -8,7 +8,7 @@ from pytorch_lightning.callbacks import Callback
 from pytorch_lightning.loggers import WandbLogger #type: ignore
 from tqdm import tqdm
 
-from data_module_old import ImagePoseDataset
+from data_module import ImagePoseDataset
 from model_camera_calibration import CameraCalibrationModel
 
 
@@ -134,8 +134,8 @@ class Log2dImageReconstruction(Callback):
         # Reconstruct each image
         for name in tqdm(self.validation_image_names, desc="Reconstructing images", leave=False):
             # Get rays for image
-            origins = dataset.origins[name].view(-1, 3)
-            directions = dataset.directions[name].view(-1, 3)
+            origins = dataset.ray_origins[dataset.image_name_to_index[name]].view(-1, 3)
+            directions = dataset.ray_directions[dataset.image_name_to_index[name]].view(-1, 3)
 
             # Set up data loader for validation image
             data_loader = DataLoader(

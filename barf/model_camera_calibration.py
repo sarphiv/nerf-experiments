@@ -5,7 +5,7 @@ import torch.nn as nn
 import pytorch_lightning as pl
 
 from dataset import DatasetOutput
-from data_module_old import ImagePoseDataModule
+from data_module import ImagePoseDataModule
 from model_camera_extrinsics import CameraExtrinsics
 from model_interpolation import InnerModelBatchInput, NerfInterpolation
 from model_interpolation_architecture import BarfPositionalEncoding
@@ -26,7 +26,7 @@ class CameraCalibrationModel(NerfInterpolation):
     ):  
         super().__init__(*inner_model_args, **inner_model_kwargs)
 
-        self.automatic_optimization = False
+        # self.automatic_optimization = False
 
         self.position_encoder = cast(BarfPositionalEncoding, self.position_encoder)
         self.direction_encoder = cast(BarfPositionalEncoding, self.direction_encoder)
@@ -80,11 +80,16 @@ class CameraCalibrationModel(NerfInterpolation):
         mean_from = th.mean(point_cloud_from, dim=0, keepdim=True)
         mean_to = th.mean(point_cloud_to, dim=0, keepdim=True)
 
+        # Get the centered point clouds 
+        point_cloud_centered_from = point_cloud_from - mean_from
+        point_cloud_centered_to = point_cloud_to - mean_to
+
         # get scaling
-        c = th.sqrt(th.sum((point_cloud_to - mean_to)**2) / th.sum((point_cloud_from - mean_from)**2))
+        c = th.sqrt(th.sum(point_cloud_centered_to**2)) / th.sqrt(th.sum(point_cloud_centered_from**2))
+        # c = th.mean(th.linalg.norm(point_cloud_centered_to, dim=1)) / th.mean(th.linalg.norm(point_cloud_centered_from, dim=1))
 
         # Find the rotation matrix such that ||(C1 - m1) - (C2 - m2)@R||^2 is minimized
-        R = align_rotation(point_cloud_to - mean_to, point_cloud_from - mean_from)
+        R = align_rotation(point_cloud_centered_to, point_cloud_centered_from)
 
         # The translation vector is now 
         # t = mean_to - mean_from@R
@@ -115,8 +120,6 @@ class CameraCalibrationModel(NerfInterpolation):
             ray_dirs_raw, 
             ray_dirs_noisy, 
             ray_colors_raw, 
-            ray_colors_blur, 
-            ray_scales, 
             img_idx
         ) = batch
 
@@ -134,8 +137,6 @@ class CameraCalibrationModel(NerfInterpolation):
             ray_dirs_raw, 
             ray_dirs_noisy, 
             ray_colors_raw, 
-            ray_colors_blur, 
-            ray_scales, 
             img_idx
         )
 
@@ -159,8 +160,6 @@ class CameraCalibrationModel(NerfInterpolation):
             ray_dirs_raw, 
             ray_dirs_noisy, 
             ray_colors_raw, 
-            ray_colors_blur, 
-            ray_scales, 
             img_idx
         ) = batch
 
@@ -177,8 +176,6 @@ class CameraCalibrationModel(NerfInterpolation):
             ray_dirs_raw, 
             ray_dirs_noisy, 
             ray_colors_raw, 
-            ray_colors_blur, 
-            ray_scales, 
             img_idx
         )
 
@@ -239,8 +236,8 @@ class CameraCalibrationModel(NerfInterpolation):
         R, t, c = post_transform_params
 
         # Transform the validation image to this space 
-        origs_model = th.matmul(R, origs_val.unsqueeze(-1)).squeeze(-1)*c + t
-        dirs_model = th.matmul(R, dirs_val.unsqueeze(-1)).squeeze(-1)
+        origs_model = th.matmul(R.T, origs_val.unsqueeze(-1)).squeeze(-1)*c + t # TODO: double check that this transpose is not wrong
+        dirs_model = th.matmul(R.T, dirs_val.unsqueeze(-1)).squeeze(-1)
 
         return origs_model, dirs_model, post_transform_params   
 
@@ -277,8 +274,6 @@ class CameraCalibrationModel(NerfInterpolation):
             ray_dirs_raw, 
             ray_dirs_noisy, 
             ray_colors_raw, 
-            ray_colors_blur, 
-            ray_scales, 
             img_idx
         ) = batch
 
@@ -371,8 +366,8 @@ class CameraCalibrationModel(NerfInterpolation):
     #         ray_dirs_raw, 
     #         ray_dirs_noisy, 
     #         ray_colors_raw, 
-    #         ray_colors_blur, 
-    #         ray_scales, 
+    #     
+    #   , 
     #         img_idx
     #     ) = batch
 
@@ -380,8 +375,8 @@ class CameraCalibrationModel(NerfInterpolation):
     #     ray_colors_pred, (proposal_loss_blur, radiance_loss_blur) = super()._forward_loss((
     #         ray_origs_noisy, 
     #         ray_dirs_noisy, 
-    #         ray_colors_blur, 
-    #         ray_scales
+    #     
+    #   
     #     ))
 
 

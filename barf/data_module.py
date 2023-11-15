@@ -124,7 +124,8 @@ class ImagePoseDataModule(pl.LightningDataModule):
         match stage:
             case "fit":
                 self.dataset_val = self._get_dataset("val")
-
+                
+                # TODO: What is this? 
                 # Prepare cache of validation data
                 self._dataset_val_cache = None
                 self._dataset_val_cache_settings = None
@@ -204,7 +205,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         else:
             # Get length of validation dataset fraction
             # NOTE: Doing it on a image basis, not a ray basis
-            validation_size = int(len(self.dataset_val.dataset) * self.validation_fraction)
+            validation_size = int(self.dataset_val.n_images * self.validation_fraction)
 
             # If validation fraction shuffle is disabled, 
             #  take the first validation fraction of the dataset
@@ -221,19 +222,16 @@ class ImagePoseDataModule(pl.LightningDataModule):
 
                 # Shuffle dataset and split dataset, throwing away the second half
                 indices = th.randperm(
-                    n=len(self.dataset_val.dataset), 
+                    n=self.dataset_val.n_images, 
                     generator=rng
                 )[:validation_size].tolist()
-
+            
 
             # Get subset of validation dataset
             # NOTE: Shallow copy of dataset
             #  so that the rest of the data is still available
-            dataset = copy(self.dataset_val)
-
             # Retrieve subset of dataset
-            dataset.dataset = [dataset.dataset[i] for i in indices]
-
+            dataset = self.dataset_val.subset_dataset(indices) 
 
             # Store processed dataset in cache
             self._dataset_val_cache = dataset
@@ -257,77 +255,77 @@ class ImagePoseDataModule(pl.LightningDataModule):
 
 
 
-    def _get_camera_center_rays(self, dataset: ImagePoseDataset, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
-        """Get camera center rays from dataset. Rays are ordered by camera index.
+    # def _get_camera_center_rays(self, dataset: ImagePoseDataset, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
+    #     """Get camera center rays from dataset. Rays are ordered by camera index.
         
-        Args:
-            dataset (ImagePoseDataset): Dataset to get camera center rays from.
-            device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
+    #     Args:
+    #         dataset (ImagePoseDataset): Dataset to get camera center rays from.
+    #         device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
 
-        Returns:
-            tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]: Raw and noisy camera center rays (origins, directions).
-        """
-        # Get indices to access corners of image
-        corner_idx = list(zip(*product((0, dataset.image_height-1), range(dataset.image_width))))
+    #     Returns:
+    #         tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]: Raw and noisy camera center rays (origins, directions).
+    #     """
+    #     # Get indices to access corners of image
+    #     corner_idx = list(zip(*product((0, dataset.image_height-1), range(dataset.image_width))))
 
-        def get_center_ray(
-            origins_store: dict[str, th.Tensor], 
-            directions_store: dict[str, th.Tensor]
-        ) -> tuple[th.Tensor, th.Tensor]:
-            # Retrieve camera focal point
-            origins = th.vstack([origin[0, 0] for origin in origins_store.values()])
-            origins.to()
+    #     def get_center_ray(
+    #         origins_store: dict[str, th.Tensor], 
+    #         directions_store: dict[str, th.Tensor]
+    #     ) -> tuple[th.Tensor, th.Tensor]:
+    #         # Retrieve camera focal point
+    #         origins = th.vstack([origin[0, 0] for origin in origins_store.values()])
+    #         origins.to()
 
-            # Retrieve image corners and take their mean to get optical center ray (normalized)
-            directions = th.stack([direction[corner_idx] for direction in directions_store.values()])
-            directions = directions.mean(dim=1)
-            directions = directions / th.norm(directions, dim=1, keepdim=True)
+    #         # Retrieve image corners and take their mean to get optical center ray (normalized)
+    #         directions = th.stack([direction[corner_idx] for direction in directions_store.values()])
+    #         directions = directions.mean(dim=1)
+    #         directions = directions / th.norm(directions, dim=1, keepdim=True)
 
-            # If device given, move to device
-            if device is not None:
-                origins = origins.to(device)
-                directions = directions.to(device)
+    #         # If device given, move to device
+    #         if device is not None:
+    #             origins = origins.to(device)
+    #             directions = directions.to(device)
 
-            # Return center rays for each image
-            return origins, directions
-
-
-        # Return raw and noisy camera center rays
-        return (
-            get_center_ray(dataset.origins_raw, dataset.directions_raw), 
-            get_center_ray(dataset.origins_noisy, dataset.directions_noisy)
-        )
+    #         # Return center rays for each image
+    #         return origins, directions
 
 
-    def train_camera_center_rays(self, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
-        """Get camera center rays from training dataset. Rays are ordered by camera index.
+    #     # Return raw and noisy camera center rays
+    #     return (
+    #         get_center_ray(dataset.origins_raw, dataset.directions_raw), 
+    #         get_center_ray(dataset.origins_noisy, dataset.directions_noisy)
+    #     )
 
-        Args:
-            device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
 
-        Returns:
-            tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]: Raw and noisy camera center rays (origins, directions).
-        """
-        return self._get_camera_center_rays(self.dataset_train, device)
+    # def train_camera_center_rays(self, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
+    #     """Get camera center rays from training dataset. Rays are ordered by camera index.
 
-    def val_camera_center_rays(self, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
-        """Get camera center rays from training dataset. Rays are ordered by camera index.
+    #     Args:
+    #         device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
 
-        Args:
-            device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
+    #     Returns:
+    #         tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]: Raw and noisy camera center rays (origins, directions).
+    #     """
+    #     return self._get_camera_center_rays(self.dataset_train, device)
 
-        Returns:
-            tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]: Raw and noisy camera center rays (origins, directions).
-        """
-        return self._get_camera_center_rays(self.dataset_val, device)
+    # def val_camera_center_rays(self, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
+    #     """Get camera center rays from training dataset. Rays are ordered by camera index.
 
-    def test_camera_center_rays(self, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
-        """Get camera center rays from training dataset. Rays are ordered by camera index.
+    #     Args:
+    #         device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
 
-        Args:
-            device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
+    #     Returns:
+    #         tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]: Raw and noisy camera center rays (origins, directions).
+    #     """
+    #     return self._get_camera_center_rays(self.dataset_val, device)
 
-        Returns:
-            tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]: Raw and noisy camera center rays (origins, directions).
-        """
-        return self._get_camera_center_rays(self.dataset_test, device)
+    # def test_camera_center_rays(self, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
+    #     """Get camera center rays from training dataset. Rays are ordered by camera index.
+
+    #     Args:
+    #         device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
+
+    #     Returns:
+    #         tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]: Raw and noisy camera center rays (origins, directions).
+    #     """
+    #     return self._get_camera_center_rays(self.dataset_test, device)
