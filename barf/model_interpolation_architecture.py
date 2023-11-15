@@ -29,7 +29,7 @@ class NerfModel(nn.Module):
     def __init__(self, 
         n_hidden: int,
         hidden_dim: int,
-        fourier: tuple[bool, int, int, bool, float, float],
+        fourier: tuple[bool, bool, int, int, bool, float, float],
         delayed_direction: bool, 
         delayed_density: bool, 
         n_segments: int
@@ -50,7 +50,7 @@ class NerfModel(nn.Module):
         self.delayed_direction = delayed_direction
         self.delayed_density = delayed_density
         self.n_segments = n_segments
-        self.fourier, self.fourier_levels_pos, self.fourier_levels_dir, self.barf_weight, self.fourier_levels_per_epoch, self.fourier_levels_start = fourier
+        self.fourier, self.use_position, self.fourier_levels_pos, self.fourier_levels_dir, self.barf_weight, self.fourier_levels_per_epoch, self.fourier_levels_start = fourier
         
         # If there is a positional encoding define it here
         if self.fourier:
@@ -59,8 +59,8 @@ class NerfModel(nn.Module):
             self.alpha = self.fourier_levels_start
 
             # Dimensionality of the input to the network 
-            positional_dim = self.fourier_levels_pos*2*3
-            directional_dim = self.fourier_levels_dir*2*3
+            positional_dim = self.use_position*3 + self.fourier_levels_pos*2*3
+            directional_dim = self.use_position*3 + self.fourier_levels_dir*2*3
         else: 
             positional_dim = 3
             directional_dim = 3 
@@ -91,13 +91,20 @@ class NerfModel(nn.Module):
         # Apply positional encoding
         if self.fourier:
             # Apply fourier encoding and weight 
-            pos = self.position_encoder(pos)
-            dir = self.direction_encoder(dir)
+            pos_enc = self.position_encoder(pos)
+            dir_enc = self.direction_encoder(dir)
 
             # If activated the barf mask for weighing positional encodings is applied 
             if self.barf_weight:
-                pos = pos*self._get_mask(self.fourier_levels_pos, device=pos.device).unsqueeze(0) #type: ignore
-                dir = dir*self._get_mask(self.fourier_levels_dir, device=dir.device).unsqueeze(0) #type: ignore
+                pos_enc = pos_enc*self._get_mask(self.fourier_levels_pos, device=pos.device).unsqueeze(0) #type: ignore
+                dir_enc = dir_enc*self._get_mask(self.fourier_levels_dir, device=dir.device).unsqueeze(0) #type: ignore
+            
+            if self.use_position:
+                pos = th.hstack((pos, pos_enc))
+                dir = th.hstack((dir, dir_enc))
+            else: 
+                pos = pos_enc
+                dir = dir_enc
         
         # Apply the model segments with relu activation between segments 
         z = th.zeros((pos.shape[0], 0), device=pos.device)

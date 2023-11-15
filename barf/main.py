@@ -35,17 +35,17 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="point-cloud-test"
+        name="point-cloud-test-barf"
     )
 
 
     # Set up data module
     BATCH_SIZE = 1024*2
-    NUM_WORKERS = 8
+    NUM_WORKERS = 1
     
     dm = ImagePoseDataModule(
-        image_width=40,
-        image_height=40,
+        image_width=400,
+        image_height=400,
         scene_path="../data/lego",
         space_transform_scale=None,
         space_transform_translate=None,
@@ -64,7 +64,7 @@ if __name__ == "__main__":
     )
 
     dm.setup("fit")
-
+    
 
     # Set up trainer
     th.set_float32_matmul_precision("medium")
@@ -82,13 +82,15 @@ if __name__ == "__main__":
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
                 logging_start=0.002,
-                delay_start=1/4,
-                delay_end=1/4,
+                delay_start=1/32,
+                delay_end=1/8,
                 delay_taper=4.0,
                 validation_image_names=["r_2", "r_84"],
+                train_image_names=["r_2", "r_3"],
                 reconstruction_batch_size=BATCH_SIZE,
                 reconstruction_num_workers=NUM_WORKERS,
                 metric_name="val_img",
+                metric_name2="train_img",
             ),
             LogCameraExtrinsics(
                 wandb_logger=wandb_logger,
@@ -124,7 +126,7 @@ if __name__ == "__main__":
     # Set up model
     model = CameraCalibrationModel(
         n_training_images=len(dm.dataset_train.images),
-        camera_learning_rate=0,
+        camera_learning_rate=1e-6,
         camera_learning_rate_stop_epoch=8,
         camera_learning_rate_decay=0.999,
         camera_learning_rate_period=0.02,
@@ -134,7 +136,7 @@ if __name__ == "__main__":
         samples_per_ray=64 + 192,
         n_hidden=args.n_hidden,
         # fourier=(args.use_fourier, 10, 4),
-        fourier = (True, 10, 4, True, 2, 2),
+        fourier = (False, True, 10, 4, True, 8, 2),
         proposal=(args.use_proposal, 64),
         delayed_direction=args.delayed_direction,
         delayed_density=args.delayed_density,

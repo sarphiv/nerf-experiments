@@ -318,8 +318,14 @@ class CameraCalibrationModel(NerfInterpolation):
         # Transform batch to model prediction space
         batch = self.training_transform(batch)
 
+        # Set alpha value in the nerf models
+        for model in self.models: 
+            # The fourier_levels_per_epoch is a hyperparameter 
+            model.alpha = model.fourier_levels_start + (self.trainer.current_epoch + batch_idx/self.trainer.num_training_batches)*model.fourier_levels_per_epoch
+
         # Forward pass
         _, (proposal_loss_blur, radiance_loss_blur, radiance_loss_raw, camera_loss) = self._forward_loss(batch)
+
 
         # Backward pass and step through each optimizer
         self._proposal_optimizer_step(proposal_loss_blur+radiance_loss_blur)

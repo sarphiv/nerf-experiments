@@ -128,7 +128,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
                 # Prepare cache of validation data
                 self._dataset_val_cache = None
                 self._dataset_val_cache_settings = None
-                self.val_dataloader()
+                # self.val_dataloader()
 
 
             case "test":

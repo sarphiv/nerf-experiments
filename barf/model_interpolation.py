@@ -21,7 +21,7 @@ class NerfInterpolation(pl.LightningModule):
         samples_per_ray: int,
         n_hidden: int,
         proposal: tuple[bool, int],
-        fourier: tuple[bool, int, int, bool, float, float],
+        fourier: tuple[bool, bool, int, int, bool, float, float],
         delayed_direction: bool, 
         delayed_density: bool, 
         n_segments: int,
@@ -315,7 +315,13 @@ class NerfInterpolation(pl.LightningModule):
     def _radiance_optimizer_step(self, loss: th.Tensor):
         self._optimizer.zero_grad()
         self.manual_backward(loss, retain_graph=True)
+        if True:
+            pi = 3
+            pi*=2
         self._optimizer.step()
+        if True:
+            pi = 3
+            pi*=2
 
 
     def _proposal_scheduler_step(self, batch_idx: int):
@@ -459,6 +465,7 @@ class NerfInterpolation(pl.LightningModule):
         Returns:
             th.Tensor: Loss
         """
+        pass # This method is never called 
         # Set alpha value in the nerf models
         for model in self.models: 
             # TODO instead of using epoch fraction use global step count  
