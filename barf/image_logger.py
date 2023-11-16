@@ -35,8 +35,8 @@ class Log2dImageReconstruction(Callback):
         delay_taper: float | int,
         reconstruction_batch_size: int,
         reconstruction_num_workers: int,
-        metric_name="val_img",
-        metric_name2="train_img"
+        metric_name_val="val_img",
+        metric_name_train="train_img"
     ) -> None:
         """Log a 2D image reconstruction of the validation image.
         
@@ -72,7 +72,7 @@ class Log2dImageReconstruction(Callback):
             raise ValueError(f"reconstruction_batch_size must be positive, but is {reconstruction_batch_size}")
         if reconstruction_num_workers <= 0:
             raise ValueError(f"reconstruction_num_workers must be positive, but is {reconstruction_num_workers}")
-        if len(metric_name) == 0:
+        if len(metric_name_val) == 0:
             raise ValueError(f"metric_name must not be empty")
 
 
@@ -89,8 +89,8 @@ class Log2dImageReconstruction(Callback):
         
         self.batch_size = reconstruction_batch_size
         self.num_workers = reconstruction_num_workers
-        self.metric_name = metric_name
-        self.metric_name2 = metric_name2
+        self.metric_name_val = metric_name_val
+        self.metric_name_train = metric_name_train
 
         # Calculate next reconstruction step
         self.reconstruction_point = self._get_next_delay(0)
@@ -140,7 +140,7 @@ class Log2dImageReconstruction(Callback):
         dataset = cast(ImagePoseDataset, trainer.datamodule.dataset_val) # type: ignore
         
         # Store reconstructed images on CPU
-        images = []
+        val_images = []
 
 
         transform_params = None
@@ -187,7 +187,7 @@ class Log2dImageReconstruction(Callback):
 
             # Store image on CPU
             # NOTE: Cannot pass tensor as channel dimension is in numpy format
-            images.append(rgb.view(dataset.image_height, dataset.image_width, 3).numpy())
+            val_images.append(rgb.view(dataset.image_height, dataset.image_width, 3).numpy())
 
 
         # Reconstruct training images 
@@ -246,6 +246,11 @@ class Log2dImageReconstruction(Callback):
 
         # Log images
         self.logger.log_image(
-            key=self.metric_name2, 
-            images=images
+            key=self.metric_name_train, 
+            images=train_images
+        )
+        
+        self.logger.log_image(
+            key=self.metric_name_val, 
+            images=val_images
         )

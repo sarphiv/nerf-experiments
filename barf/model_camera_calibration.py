@@ -44,8 +44,11 @@ class CameraCalibrationModel(NerfInterpolation):
         self._camera_learning_rate_milestone = camera_learning_rate_period
 
 
+    ##############################################################
+    # Batch transformation helpers
+
     # TODO: make static method.
-    # TODO: change convention, such that output R has shape (1, 3, 3) - makes broadcasting easier?
+    # TODO: maybe change convention, such that output R has shape (1, 3, 3) - makes broadcasting easier?
     def kabsch_algorithm(self, point_cloud_from: th.Tensor, point_cloud_to: th.Tensor): 
         """
         Align "point_cloud_from" to "point_cloud_to" with a matrix R and a vector t.
@@ -110,19 +113,144 @@ class CameraCalibrationModel(NerfInterpolation):
         # Find the rotation matrix such that ||(C1 - m1) - (C2 - m2)@R||^2 is minimized
         R = align_rotation(point_cloud_centered_from, point_cloud_centered_to)
 
-        # The translation vector is now 
-        # t = mean_to - mean_from@R
-
-        # C1_hat = R@(C2 - m2)*c + m1 = R@c*C2 + (m1 - R@c*m2
-
+        # C1_hat = R@(C2 - m2)*c + m1 = R@c*C2 + (m1 - R@c*m2) => t = m1 - R@c*m2
         t = mean_to - (th.matmul(R, mean_from.T)*c).T
 
         return R, t, c
 
+
+    def validation_transform_rays(self,
+                                  origs_val: th.Tensor,
+                                  dirs_val: th.Tensor,
+                                  post_transform_params: Optional[tuple[th.Tensor, th.Tensor]] = None,
+                                  ) -> tuple[th.Tensor, th.Tensor, tuple[th.Tensor, th.Tensor]]:
+        """
+        Takes in validation rays and transforms them to the predicting space 
+        using the post_transform_params computed in compute_post_transform_params()
+
+        Parameters:
+        -----------
+            origs_val: th.Tensor - the origins of the rays
+            dirs_val: th.Tensor - the directions of the rays
+            post_transform_params: Optional[tuple[th.Tensor, th.Tensor]] - the post-transform parameters (R, t) to use. If None, then they are calculated
+
+        Returns:
+        --------
+            origs_model: th.Tensor - the new origins of the rays
+            dirs_model: th.Tensor - the new directions of the rays
+            translations: th.Tensor - the translation vectors
+            rotations: th.Tensor - the rotation matrices
+        """
+        # return origs_val, dirs_val, None
+        # If not supplied, get the rotation matrix and the translation vector 
+        if post_transform_params is None:
+            post_transform_params = self.compute_post_transform_params()
+
+        # Deconstruct post-transform parameters
+        R, t, c = post_transform_params
+
+        # Transform the validation image to this space 
+        origs_model = th.matmul(R, origs_val.unsqueeze(-1)).squeeze(-1)*c + t
+        dirs_model = th.matmul(R, dirs_val.unsqueeze(-1)).squeeze(-1)
+
+        return origs_model, dirs_model, post_transform_params   
+
+
+    def compute_post_transform_params(
+            self,
+            ) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
+        """
+        Computes the transform params (R, t, c) used for transforming
+        the validation rays to the predicting space. 
+
+        It relies on the fact that the ground truth camera origins are known,
+        but essentially (ideally) not used in training.
+
+        Works by using the Kabsch algorithm to transform ground truth origins
+        to the predicted origins (as predicted by the camera_extrinsics model).
+
+        It outputs the rotation matrix R, the translation vector t, and the
+        scaling factor c such that R@origs_true_train*c + t estimates origs_pred_train.
+
+        These can then be used to estimate the origins of the validation rays,
+        (but this is not done in this method).
+
+        Takes no parameters, as it uses the dataset_train of the datamodule, and the camera_extrinsics
+        model to get the raw and predicted train origins.
+
+        Returns:
+        --------
+            R: th.Tensor(3, 3) - the rotation matrix
+            t: th.Tensor(1, 3) - the translation vector
+            c: th.Tensor(1) - the scaling factor
+        """
+
+        # Get the raw and noise origins 
+        # origs raw: the true origins of the rays
+        # origs noisy: the initial guess of the origins of the rays 
+        #               (provided by datamodule and fed to camera extrinsics)
+        dataset = cast(ImagePoseDataModule, self.trainer.datamodule).dataset_train
+        # NOTE (lauge): Get the original indices of the images - to be passed to camera_extrinsics
+        img_idxs = list(dataset.index_to_index.values())
+        img_idxs = th.tensor(img_idxs, device=self.device, dtype=th.int32)
+        origs_raw = dataset.camera_origins.to(self.device)
+        origs_noisy = dataset.camera_origins_noisy.to(self.device)
+        origs_pred, _ = self.camera_extrinsics.forward_origins(img_idxs, origs_noisy)
+
+
+        # Align raw space to predicted model space
+        post_transform_params = self.kabsch_algorithm(origs_raw, origs_pred)
+
+        return post_transform_params
+
+    ##############################################################
+    # Batch transformations
+
+    def validation_transform(self, batch: DatasetOutput) -> DatasetOutput:
+        """
+        Takes in a validation batch and transforms the noisy rays to the predicting space
+        using the validation_transform_rays() method.
+        
+        Parameters:
+        -----------
+            batch: DatasetOutput - the batch of data to transform
+            
+        Returns:
+        --------
+            batch: DatasetOutput - the transformed batch of data
+        """
+        # Deconstruct batch
+        (
+            ray_origs_raw, 
+            ray_origs_noisy, 
+            ray_dirs_raw, 
+            ray_dirs_noisy, 
+            ray_colors_raw, 
+            img_idx
+        ) = batch
+
+        # Transform rays to model prediction space
+        ray_origs_pred, ray_dirs_pred, _ = self.validation_transform_rays(
+            ray_origs_raw,
+            ray_dirs_raw
+        )
+
+        # Reconstruct batch
+        return (
+            ray_origs_raw, 
+            ray_origs_pred, 
+            ray_dirs_raw, 
+            ray_dirs_pred, 
+            ray_colors_raw, 
+            img_idx
+        )
+
     
     def training_transform(self, batch: DatasetOutput) -> DatasetOutput:
         """
-        Takes in a training batch and transforms the noisy rays to the predicting space
+        Takes in a training batch and transforms the noisy rays (which
+        are essentially the initial guesses of the model) to the
+        predicting space using the self.camera_extrinsics model.
         
         Parameters:
         -----------
@@ -160,133 +288,67 @@ class CameraCalibrationModel(NerfInterpolation):
         )
 
 
-    def validation_transform(self, batch: DatasetOutput) -> DatasetOutput:
+    def get_blurred_pixel_colors(self, batch: InnerModelBatchInput) -> th.Tensor:
         """
-        Takes in a validation batch and transforms the noisy rays to the predicting space
+        Compute the interpolation of the blurred pixel colors
+        to get the blurred pixel color used for training, while also
+        outputting the original pixel color.
+
+        Parameters:
+        -----------
+            batch: InnerModelBatchInput - the batch of data to transform
+            one of the elements is ray_colors of shape (N, n_sigmas+1, 3)
         
-        Parameters:
-        -----------
-            batch: DatasetOutput - the batch of data to transform
-            
         Returns:
-        --------
-            batch: DatasetOutput - the transformed batch of data
-        """
-        # Deconstruct batch
-        (
-            ray_origs_raw, 
-            ray_origs_noisy, 
-            ray_dirs_raw, 
-            ray_dirs_noisy, 
-            ray_colors_raw, 
-            img_idx
-        ) = batch
-
-        # Transform rays to model prediction space
-        ray_origs_pred, ray_dirs_pred, _ = self.validation_transform_rays(
-            ray_origs_raw,
-            ray_dirs_raw
-        )
-
-        # Reconstruct batch
-        return (
-            ray_origs_raw, 
-            ray_origs_pred, 
-            ray_dirs_raw, 
-            ray_dirs_pred, 
-            ray_colors_raw, 
-            img_idx
-        )
-
-
-    def compute_post_transform_params(
-            self,
-            ) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
-        """
-        Takes in validation rays and transforms them to the predicting space
-        And predicts the post-transform parameters (R, t, c) to use
-        """
-
-        # Get the raw and noise origins 
-        # origs raw: the true origins of the rays
-        # origs noisy: the intial guess of the origins of the rays 
-        #               (provided by datamodule and fed to camera extrinsics)
-        dataset = cast(ImagePoseDataModule, self.trainer.datamodule).dataset_train
-        # NOTE (lauge): Get the original indices of the images - to be passed to camera_extrinsics
-        img_idxs = list(dataset.index_to_index.values())
-        img_idxs = th.tensor(img_idxs, device=self.device, dtype=th.int32)
-        origs_raw = dataset.camera_origins.to(self.device)
-        origs_noisy = dataset.camera_origins_noisy.to(self.device)
-        origs_pred, _ = self.camera_extrinsics.forward_origins(img_idxs, origs_noisy)
-
-
-        # Align raw space to predicted model space
-        post_transform_params = self.kabsch_algorithm(origs_raw, origs_pred)
-
-        return post_transform_params
-
-
-    def validation_transform_rays(self,
-                                  origs_val: th.Tensor,
-                                  dirs_val: th.Tensor,
-                                  post_transform_params: Optional[tuple[th.Tensor, th.Tensor]] = None,
-                                  ) -> tuple[th.Tensor, th.Tensor, tuple[th.Tensor, th.Tensor]]:
-        """
-        Takes in validation rays and transforms them to the predicting space 
-
-        Parameters:
         -----------
-            origs_val: th.Tensor - the origins of the rays
-            dirs_val: th.Tensor - the directions of the rays
-            post_transform_params: Optional[tuple[th.Tensor, th.Tensor]] - the post-transform parameters (R, t) to use. If None, then they are calculated
+            batch: InnerModelBatchInput - the transformed batch of data
+            now ray_colors is of shape (N, 2, 3)
 
-        Returns:
+        
+        Details:
         --------
-            origs_model: th.Tensor - the new origins of the rays
-            dirs_model: th.Tensor - the new directions of the rays
-            translations: th.Tensor - the translation vectors
-            rotations: th.Tensor - the rotation matrices
+
+        The batch contains 6 different elements.
+        One of the elements contains the ray_colors (this is
+        what it is called in _step_helper() etc.).
+        ray_colors is a Tensor of shape (N, n_sigmas+1, 3), where
+        N is the number of rays in the batch, and n_sigmas is the number
+        of sigmas used for the blurring. (the +1 is for the original
+        pixel color).
+
+        This method only modifies the ray_colors element of the batch.
+        It is modified to have shape (N, 2, 3), where 
+        ray_colors[:, 0, :] are the original pixel colors, and
+        ray_colors[:, 1, :] are the blurred pixel colors.
+
+        
         """
-        # return origs_val, dirs_val, None
-        # If not supplied, get the rotation matrix and the translation vector 
-        if post_transform_params is None:
-            post_transform_params = self.compute_post_transform_params()
+        # TODO implement this method
+        return batch
 
-        # Deconstruct post-transform parameters
-        R, t, c = post_transform_params
-
-        # Transform the validation image to this space 
-        origs_model = th.matmul(R, origs_val.unsqueeze(-1)).squeeze(-1)*c + t
-        dirs_model = th.matmul(R, dirs_val.unsqueeze(-1)).squeeze(-1)
-
-        return origs_model, dirs_model, post_transform_params   
-
-
-    def training_step(self, batch, batch_idx):
-
-        n_batches = len(self.trainer.train_dataloader)
-        epoch = self.trainer.current_epoch + batch_idx/n_batches
-
-        self.position_encoder.update_alpha(epoch)
-        self.direction_encoder.update_alpha(epoch)
-
-        return self._step_helper(batch, batch_idx, "train")
-
-
-    def validation_step(self, batch, batch_idx):
-        return self._step_helper(batch, batch_idx, "val")
+    ##############################################################
+    # helper methods for the lightning module methods
 
     def _step_helper(self, batch, batch_idx, purpose: Literal["train", "val"]):
 
-        for value in batch:
-            assert not th.isnan(value).any(), "NaN values in raw batch"
         # Transform batch to model prediction space
-        if purpose == "train": batch = self.training_transform(batch)
+        if purpose == "train":
+            batch = self.training_transform(batch)
+            
+            # Update alpha (for positional encoding in BARF)
+            n_batches = len(self.trainer.train_dataloader)
+            epoch = self.trainer.current_epoch + batch_idx/n_batches
+
+            self.position_encoder.update_alpha(epoch)
+            self.direction_encoder.update_alpha(epoch)
+            
+
+
         elif purpose == "val": batch = self.validation_transform(batch)
 
-        for value in batch:
-            assert not th.isnan(value).any(), "NaN values in transformed batch"
-        
+        # interpolate the blurred pixel colors
+        batch = self.get_blurred_pixel_colors(batch)
+
         # unpack batch
         (
             ray_origs_raw, 
@@ -305,23 +367,59 @@ class CameraCalibrationModel(NerfInterpolation):
 
         # compute the loss
         loss_fine = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw)
-        loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors_raw)
-
         psnr = -10 * th.log10(loss_fine)
 
-        # Log metrics
-        self.log_dict({f"{purpose}_loss_fine": loss_fine,
-                       f"{purpose}_loss_coarse": loss_coarse,
-                       f"{purpose}_psnr": psnr})
+        if self.proposal:
+            loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors_raw)
+            loss = loss_fine + loss_coarse
+
+            # Log metrics
+            self.log_dict({f"{purpose}_loss_fine": loss_fine,
+                        f"{purpose}_loss_coarse": loss_coarse,
+                        f"{purpose}_psnr": psnr,
+                        "alpha": self.position_encoder.alpha,
+                        "camera_extrinsics_pos_sigma": self.camera_extrinsics.pos_sigma,
+                        })
+        else:
+            loss = loss_fine
+            self.log_dict({f"{purpose}_loss_fine": loss_fine,
+                        f"{purpose}_psnr": psnr,
+                        "alpha": self.position_encoder.alpha,
+                        "camera_extrinsics_pos_sigma": self.camera_extrinsics.pos_sigma,
+                        })
+
         
-        return loss_fine + loss_coarse
+        return loss
+
+
+    ##############################################################
+    # Lightning Module Methods
+
+
+    def training_step(self, batch, batch_idx):
+        return self._step_helper(batch, batch_idx, "train")
+
+
+    def validation_step(self, batch, batch_idx):
+        return self._step_helper(batch, batch_idx, "val")
+
 
     def configure_optimizers(self):
-        optimizer = th.optim.Adam(
-            [
-                {"params": self.model_coarse.parameters(), "lr": self.learning_rate},
-                {"params": self.model_fine.parameters(), "lr": self.learning_rate},
-                {"params": self.camera_extrinsics.parameters(), "lr": self.camera_learning_rate}
-            ]
-        )
+
+        if self.proposal:
+
+            optimizer = th.optim.Adam(
+                [
+                    {"params": self.model_coarse.parameters(), "lr": self.learning_rate},
+                    {"params": self.model_fine.parameters(), "lr": self.learning_rate},
+                    {"params": self.camera_extrinsics.parameters(), "lr": self.camera_learning_rate}
+                ]
+            )
+        else:
+            optimizer = th.optim.Adam(
+                [
+                    {"params": self.model_coarse.parameters(), "lr": self.learning_rate},
+                    {"params": self.camera_extrinsics.parameters(), "lr": self.learning_rate},
+                ]
+            )
         return optimizer

@@ -20,6 +20,7 @@ class NerfInterpolation(pl.LightningModule):
         far_sphere_normalized: float,
         samples_per_ray: int,
         n_hidden: int,
+        hidden_dim: int,
         proposal: tuple[bool, int],
         position_encoder: PositionalEncoding,
         direction_encoder: PositionalEncoding,
@@ -63,7 +64,7 @@ class NerfInterpolation(pl.LightningModule):
         # Coarse model -> proposal network, but when there is no proposal network it is the actual prediction
         self.model_coarse = NerfModel(
             n_hidden=n_hidden,
-            hidden_dim=256,
+            hidden_dim=hidden_dim,
             delayed_direction=delayed_direction,
             delayed_density=delayed_density,
             n_segments=n_segments,

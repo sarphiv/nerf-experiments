@@ -143,11 +143,22 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         # THIS IS ONLY FOR TESTING THE VALIDATION_TRANSFORM FUNCTION IN THE CAMERA CALIBRATION MODEL
         # REMOVE THIS WHEN WE HAVE SEEN THE OTHER THING WORK - ASSS FAAASSST AASSS POOOSSSIIIBBBLLLEEE!!!!
         
-        self._screw_up_original_camera_poses_for_testing_validation_transform_in_CameraCalibrationModel()
+        # self._screw_up_original_camera_poses_for_testing_validation_transform_in_CameraCalibrationModel()
 
 
     # TODO: Change this such that it produces gaussian blurs in discrete steps. 
     def _load_images(self, image_dir_path, image_width, image_height) -> dict[str, th.Tensor]:
+
+        """
+        
+        
+        Returns
+        --------
+        images: Tensor(N, H, W, n_sigmas, 3)
+        
+        """
+        
+        # TODO: remove and relplace with similar PIL functions
         # Transform image to correct format
         transform = cast(
             Callable[[th.Tensor], th.Tensor], 
@@ -169,6 +180,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             ])
         )
         
+        # TODO: load images with the old _open_image function to PIL images
         # Open RGBA image
         read = lambda path: tv.io.read_image(
             os.path.join(image_dir_path, path), 
@@ -497,7 +509,8 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             o_n, 
             d_r.view(-1, 3)[i], 
             d_n.view(-1, 3)[i], 
-            img.view(-1, 3)[i], # TODO the pixel color is now shape = (3,) - should be (N, 3) - where N is the number of gaussian blurred pixel values
+            # img.view(-1, self.n_sigmas, 3)[i], # TODO the pixel color is now shape = (3,) - should be (N, 3) - where N is the number of gaussian blurred pixel values
+            img.view(-1, 3)[i],
             th.tensor(self.index_to_index[img_idx])
         )
 
