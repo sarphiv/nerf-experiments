@@ -37,13 +37,13 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="lauge testing barf"
+        name="lauge testing kabsch algorithm - screw everything up"
     )
 
 
     # Set up data module
     BATCH_SIZE = 1024*2
-    NUM_WORKERS = 1
+    NUM_WORKERS = 8
     
     dm = ImagePoseDataModule(
         image_width=80,
@@ -84,12 +84,12 @@ if __name__ == "__main__":
 
 
     # Set up trainer
-    th.set_float32_matmul_precision("medium")
+    # th.set_float32_matmul_precision("medium")
 
     trainer = pl.Trainer(
         accelerator="auto",
         max_epochs=100,
-        precision="16-mixed",
+        # precision="32-mixed",
         logger=wandb_logger,
         callbacks=[
             LogEpochFraction(
@@ -99,25 +99,26 @@ if __name__ == "__main__":
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
                 logging_start=0.002,
-                delay_start=1/4,
+                delay_start=1/7,
                 delay_end=1.,
-                delay_taper=4.0,
+                delay_taper=5.0,
+                train_image_names=["r_1", "r_23"],
                 validation_image_names=["r_2", "r_84"],
                 reconstruction_batch_size=BATCH_SIZE,
                 reconstruction_num_workers=NUM_WORKERS,
                 metric_name="val_img",
             ),
-            # LogCameraExtrinsics(
-            #     wandb_logger=wandb_logger,
-            #     logging_start=0.002,
-            #     delay_start=1/200,
-            #     delay_end=1/16,
-            #     delay_taper=4.0,
-            #     batch_size=BATCH_SIZE,
-            #     num_workers=NUM_WORKERS,
-            #     ray_direction_length=1/10,
-            #     metric_name="train_point",
-            # ),
+            LogCameraExtrinsics(
+                wandb_logger=wandb_logger,
+                logging_start=0.002,
+                delay_start=1/200,
+                delay_end=1/16,
+                delay_taper=4.0,
+                batch_size=BATCH_SIZE,
+                num_workers=NUM_WORKERS,
+                ray_direction_length=1/10,
+                metric_name="train_point",
+            ),
             LearningRateMonitor(
                 logging_interval="step"
             ),
@@ -141,7 +142,8 @@ if __name__ == "__main__":
     # Set up model
     model = CameraCalibrationModel(
         n_training_images=len(dm.dataset_train.images),
-        camera_learning_rate=5e-4,
+        # camera_learning_rate=5e-4,
+        camera_learning_rate=0.,
         camera_learning_rate_stop_epoch=8,
         camera_learning_rate_decay=0.999,
         camera_learning_rate_period=0.02,
@@ -151,8 +153,8 @@ if __name__ == "__main__":
         samples_per_ray=64 + 192,
         n_hidden=args.n_hidden,
         position_encoder = BarfPositionalEncoding(levels=10,
-                                                  alpha_start=0,
-                                                  alpha_increase_start_epoch=3.,
+                                                  alpha_start=7,
+                                                  alpha_increase_start_epoch=0.,
                                                 #   alpha_increase_start_epoch=1.28,
                                                   alpha_increase_end_epoch=10.,
                                                   include_identity=True),

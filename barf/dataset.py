@@ -10,6 +10,9 @@ import torch as th
 from torch.utils.data import Dataset
 import torchvision as tv
 
+from model_camera_extrinsics import CameraExtrinsics
+
+
 
 # Type alias for dataset output
 #  (origin_raw, origin_noisy, direction_raw, direction_noisy, pixel_color_raw, image_index)
@@ -20,11 +23,12 @@ DatasetOutput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor, th.Tensor, th.
 # sigmas - and then we compute it in discrete steps, and 
 # then it is computed by interpolating (in the model probably)
 
-# TODO: Get item needs to be changed to handle new structure -> run the code
-# TODO: maybe fix image logger
-# TODO: Put in training images in image logger 
+# TODO: Fix image logger - see that file
 # TODO: Point cloud 
-# TODO: Look through data_module -> Why can't we do the same for the validation set as for the training set? TORBEN!!!!
+# TODO: Look through data_module -> Why can't we do the same for
+#       in the val_dataloader(). the validation set as for the training set? TORBEN!!!!
+
+# TODO make functions static if possible
 
 class ImagePoseDataset(Dataset[DatasetOutput]):
     def __init__(
@@ -54,9 +58,9 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             rotation_noise_sigma (float, optional): Sigma parameter for the rotation noise in radians. Defaults to 1.0.
             translation_noise_sigma (float, optional): Sigma parameter for the translation noise. Defaults to 1.0.
             noise_seed (Optional[int], optional): Seed for the noise generator. Defaults to None.
-            gaussian_blur_kernel_size (int, optional): Size of the gaussian blur kernel. Defaults to 5.
-            gaussian_blur_relative_sigma_start (float, optional): Initial sigma parameter for the gaussian blur. Set to 0 to disable. Defaults to 0..
-            gaussian_blur_relative_sigma_decay (float, optional): Decay factor for the gaussian blur sigma. Defaults to 1..
+            [deprecated] gaussian_blur_kernel_size (int, optional): Size of the gaussian blur kernel. Defaults to 5.
+            [deprecated] gaussian_blur_relative_sigma_start (float, optional): Initial sigma parameter for the gaussian blur. Set to 0 to disable. Defaults to 0..
+            [deprecated] gaussian_blur_relative_sigma_decay (float, optional): Decay factor for the gaussian blur sigma. Defaults to 1..
         """
         super().__init__()
 
@@ -84,11 +88,14 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         self.n_images = len(self.images)
 
         # This is used for subsetting the dataset
-        # this is a dict that is used to get the index of an image from its index in the dataset
-        #   Key: image index, i.e. and integer in [0, n_images_in_dataset)
+        # this is a dict that is used to get the original index of an image in the origina dataset
+        # from its index in the current subset of the original dataset:
+        #   Key: image index in current subset of original dataset, i.e. and integer in [0, n_images_in_current_dataset)
         #   Value: the original index of the image, i.e. an integer in [0, n_train_images_originally)
         # The reason for this is that we need to be able to remember the original index of the image
         # when we subset the dataset, so that we can get the correct camera extrinsics
+        # I.e this dict is only strictly necassary for training images.
+        # it is made specifically for the image logger for logging training images.
         self.index_to_index = {i: i for i in range(self.n_images)}
 
         # Load camera info
@@ -131,27 +138,15 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
                                   self.ray_directions,
                                   self.rotation_noise_sigma,
                                   self.translation_noise_sigma)
+
+        # TODO TODO TODO!!!!
+        # THIS IS ONLY FOR TESTING THE VALIDATION_TRANSFORM FUNCTION IN THE CAMERA CALIBRATION MODEL
+        # REMOVE THIS WHEN WE HAVE SEEN THE OTHER THING WORK - ASSS FAAASSST AASSS POOOSSSIIIBBBLLLEEE!!!!
         
+        self._screw_up_original_camera_poses_for_testing_validation_transform_in_CameraCalibrationModel()
 
 
-
-        # Store dataset output
-        # TODO: Store dataset in new way. But maybe not, since now we already have it all as tensors??
-        # self.dataset = [
-        #     (
-        #         camera_to_worlds, 
-        #         self.origins_raw[image_name],
-        #         self.origins_noisy[image_name],
-        #         self.directions_raw[image_name], 
-        #         self.directions_noisy[image_name],
-        #         self.images[image_name]
-        #     ) 
-        #     for image_name, camera_to_worlds in self.camera_to_worlds.items()
-        # ]
-
-
-
-    # TODO: Change this back to original to make gaussian blur 
+    # TODO: Change this such that it produces gaussian blurs in discrete steps. 
     def _load_images(self, image_dir_path, image_width, image_height) -> dict[str, th.Tensor]:
         # Transform image to correct format
         transform = cast(
@@ -300,6 +295,30 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             th.matmul(camera_to_worlds[:, :3, :3].unsqueeze(1), meshgrid.unsqueeze(0).unsqueeze(-1)).squeeze(-1) 
         )
 
+    # TODO TODO TODO!!!!
+    # this functoion is only for testing - should probably be removed when we have seen the other thing work
+    def _screw_up_original_camera_poses_for_testing_validation_transform_in_CameraCalibrationModel(
+            self) -> th.Tensor:
+        # apply some R and t to the camera origins and directions - to test the validation_transform function in CameraCalibrationModel
+        R = CameraExtrinsics.so3_to_SO3(th.tensor([23,11.,31.])).squeeze(0)
+        R_inv = R.T.unsqueeze(0)
+        # gives the rotation matrix:
+        #       [-0.1838, -0.2228,  0.9574]
+        #  R =  [ 0.7764, -0.6302,  0.0024]
+        #       [ 0.6028,  0.7438,  0.2888]
+        t = th.tensor([[7., 2., -11.]])
+        c = th.tensor(3.6)
+
+        # noisy_poses = R@original_poses*c + t
+        # original_poses = R.T @ (noisy_poses - t) / c
+
+        # apply the rotation and translation to the camera origins and directions
+        self.camera_directions = th.matmul(R_inv, self.camera_directions.unsqueeze(-1)).squeeze(-1)
+        self.camera_origins = th.matmul(R_inv, (self.camera_origins - t).unsqueeze(-1)).squeeze(-1) / c
+
+        self.ray_directions = th.matmul(R_inv.unsqueeze(1), self.ray_directions.unsqueeze(-1)).squeeze(-1)
+        self.ray_origins = th.matmul(R_inv.unsqueeze(1), (self.ray_origins - t).unsqueeze(-1)).squeeze(-1) / c
+
     
     def _apply_noise(self,
                      camera_origins: th.Tensor,
@@ -308,18 +327,31 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
                      ray_directions: th.Tensor,
                      rotation_noise_sigma: th.Tensor,
                      translation_noise_sigma: th.Tensor,
+                     noise_seed: Optional[int]=None,
                      ) -> tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]:
         """ 
         Apply noise to the camera origins (a translate) and to the directions (a rotation)
         """
+
+        # Set seed for noise generator
+        noise_generator = th.Generator()
+        if noise_seed is not None:
+            noise_generator.manual_seed(noise_seed)
+
         # Create N random rotation matrices with the given noise level 
-        rotation_noise = th.matrix_exp(th.cross(
-            -th.eye(3).view(1, 3, 3), 
-            th.randn((len(self.images), 3, 1))*rotation_noise_sigma,
-            dim=1
-        ))
+        rotation_noise = CameraExtrinsics.so3_to_SO3(
+            th.randn((len(camera_origins), 3, 1), generator=noise_generator)*rotation_noise_sigma,
+        )
+
+        # NOTE: This is the old code, but I didn't wanna remove it yes
+        # rotation_noise = th.matrix_exp(th.cross(
+        #     -th.eye(3).view(1, 3, 3), 
+        #     th.randn((len(self.images), 3, 1), generator=noise_generator)*rotation_noise_sigma,
+        #     dim=1
+        # ))
+        
         # Create N random translation vectors with the given noise level
-        translation_noise = th.randn((len(self.images), 3))*translation_noise_sigma
+        translation_noise = th.randn((len(camera_origins), 3))*translation_noise_sigma
 
         # Apply translations 
         camera_origins_noisy    = camera_origins    + translation_noise
@@ -332,6 +364,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         # TODO remove this comment when we have seen the other thing work 
         # camera_origins_noisy = camera_origins + th.randn_like(camera_origins)*translation_noise_sigma
         # camera_directions_noisy = th.matmul(camera_directions.unsqueeze(-1).permute(0,2,1), rotation_noise).squeeze(1)
+
         return camera_origins_noisy, camera_directions_noisy, ray_origins_noisy, ray_directions_noisy
 
 
@@ -404,13 +437,27 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
     #     )
 
 
-    def subset_dataset(self, image_indices: th.Tensor):
+    def subset_dataset(self, image_indices: th.Tensor | list[int|str]):
         """
+        Subset data by image indices.
+
+        image_indices can either be image names (str) or image indices (int).
+
         Creates a copy of the dataset and slices each part of the dataset. 
-        This is a shallow copy, however the data is never changed in the dataset. 
+        This is a shallow copy, however the data is never changed in the dataset,
+        So it is completely safe to do this.
         """
         # Create copy 
         output = copy.copy(self)
+
+        if isinstance(image_indices, list):
+            # Convert image names to indices
+            image_indices = [self.image_name_to_index[idx] if isinstance(idx, str) else int(idx) for idx in image_indices]
+        elif isinstance(image_indices, th.Tensor):
+            image_indices = image_indices.tolist()
+        else:
+            raise TypeError(f"image_indices must be either a list or a tensor, but was {type(image_indices)}")
+
         
         # Slice each part of the dataset
         output.camera_to_worlds = self.camera_to_worlds[image_indices]
@@ -444,17 +491,13 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         
         # Get pixel index
         i = index % self.image_batch_size
-    
-        # TODO: get the N gaussian blurred pixel values
-        # Get raw pixel color
-        # c_r = img.view(-1, 3)[i] # ()
 
         return (
             o_r, 
             o_n, 
             d_r.view(-1, 3)[i], 
             d_n.view(-1, 3)[i], 
-            img.view(-1, 3)[i],
+            img.view(-1, 3)[i], # TODO the pixel color is now shape = (3,) - should be (N, 3) - where N is the number of gaussian blurred pixel values
             th.tensor(self.index_to_index[img_idx])
         )
 

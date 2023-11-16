@@ -42,7 +42,7 @@ class NerfInterpolation(pl.LightningModule):
         """
 
         super().__init__()
-        self.save_hyperparameters()
+        # self.save_hyperparameters()
 
         # Hyper parameters for the optimizer 
         self.learning_rate = learning_rate

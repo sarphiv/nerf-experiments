@@ -44,21 +44,41 @@ class CameraCalibrationModel(NerfInterpolation):
         self._camera_learning_rate_milestone = camera_learning_rate_period
 
 
-
+    # TODO: make static method.
+    # TODO: change convention, such that output R has shape (1, 3, 3) - makes broadcasting easier?
     def kabsch_algorithm(self, point_cloud_from: th.Tensor, point_cloud_to: th.Tensor): 
         """
         Align "point_cloud_from" to "point_cloud_to" with a matrix R and a vector t.
-        align_rotation: helper function that optimizes the subproblem ||P - Q@R||^2 using SVD
+        align_rotation: helper function that optimizes the subproblem ||P - R@Q||^2 using SVD
+
+
+        Details:
+        --------
+        The output of this function is the rotation matrix R,
+        the translation vector t, and the scaling factor c such that
+        R@point_cloud_from*c + t estimates point_cloud_to.
+
+        That is, the convention of this algorithm (especially importantly for R)
+        is that we multiply the point cloud from the left, i.e.
+        for R, t and c being the output of this function, and
+        point_cloud_to_hat being the estimated point cloud
+        (point_cloud_from transformed to the space of point_cloud_to)
+        we have:
+
+        point_cloud_to_hat = th.matmul(R.unsqueeze(0), point_cloud_from.unsqueeze(-1)).squeeze(-1)*c + t
+                           = th.matmul(R, point_cloud_from.T).T*c + t
+
         
         Parameters:
         -----------
-            point_cloud_from: th.Tensor - the point cloud where we transform from
-            point_cloud_to: th.Tensor - the point cloud where we transform to
+            point_cloud_from: th.Tensor(N, 3) - the point cloud where we transform from
+            point_cloud_to: th.Tensor(N, 3) - the point cloud where we transform to
 
         Returns:
         --------
-            R: th.Tensor - the rotation matrix
-            t: th.Tensor - the translation vector
+            R: th.Tensor(3, 3) - the rotation matrix
+            t: th.Tensor(1, 3) - the translation vector
+            c: th.Tensor(1) - the scaling factor
         """
         def align_rotation(P: th.Tensor, Q: th.Tensor):
             """
@@ -72,9 +92,8 @@ class CameraCalibrationModel(NerfInterpolation):
             R = V.T@K@U.T
             return R.to(dtype=P.dtype)
 
-        # TODO: Seems like a scaling operation is missing here
-
-
+        assert point_cloud_from.shape == point_cloud_to.shape, "point_cloud_from and point_cloud_to must have the same shape"
+        assert point_cloud_from.shape[1] == 3 and len(point_cloud_from.shape) == 2, "point_cloud_from and point_cloud_to must be of shape (N, 3)"
 
         # Translate both point clouds to the origin 
         mean_from = th.mean(point_cloud_from, dim=0, keepdim=True)
@@ -89,17 +108,17 @@ class CameraCalibrationModel(NerfInterpolation):
         # c = th.mean(th.linalg.norm(point_cloud_centered_to, dim=1)) / th.mean(th.linalg.norm(point_cloud_centered_from, dim=1))
 
         # Find the rotation matrix such that ||(C1 - m1) - (C2 - m2)@R||^2 is minimized
-        R = align_rotation(point_cloud_centered_to, point_cloud_centered_from)
+        R = align_rotation(point_cloud_centered_from, point_cloud_centered_to)
 
         # The translation vector is now 
         # t = mean_to - mean_from@R
 
-        # C1_hat = (C2 - m2)*c@R + m1 = c*C2@R + (m1 - c*m2@R)
+        # C1_hat = R@(C2 - m2)*c + m1 = R@c*C2 + (m1 - R@c*m2
 
-        t = mean_to - mean_from@R*c
+        t = mean_to - (th.matmul(R, mean_from.T)*c).T
 
         return R, t, c
-    
+
     
     def training_transform(self, batch: DatasetOutput) -> DatasetOutput:
         """
@@ -124,7 +143,7 @@ class CameraCalibrationModel(NerfInterpolation):
         ) = batch
 
         # Transform rays to model prediction space
-        ray_origs_noisy, ray_dirs_noisy, _, _ = self.camera_extrinsics(
+        ray_origs_pred, ray_dirs_pred, _, _ = self.camera_extrinsics(
             img_idx, 
             ray_origs_noisy, 
             ray_dirs_noisy
@@ -133,9 +152,9 @@ class CameraCalibrationModel(NerfInterpolation):
         # Reconstruct batch
         return (
             ray_origs_raw, 
-            ray_origs_noisy, 
+            ray_origs_pred, 
             ray_dirs_raw, 
-            ray_dirs_noisy, 
+            ray_dirs_pred, 
             ray_colors_raw, 
             img_idx
         )
@@ -164,17 +183,17 @@ class CameraCalibrationModel(NerfInterpolation):
         ) = batch
 
         # Transform rays to model prediction space
-        ray_origs_noisy, ray_dirs_noisy, _ = self.validation_transform_rays(
-            ray_origs_noisy, 
-            ray_dirs_noisy
+        ray_origs_pred, ray_dirs_pred, _ = self.validation_transform_rays(
+            ray_origs_raw,
+            ray_dirs_raw
         )
 
         # Reconstruct batch
         return (
             ray_origs_raw, 
-            ray_origs_noisy, 
+            ray_origs_pred, 
             ray_dirs_raw, 
-            ray_dirs_noisy, 
+            ray_dirs_pred, 
             ray_colors_raw, 
             img_idx
         )
@@ -193,8 +212,9 @@ class CameraCalibrationModel(NerfInterpolation):
         # origs noisy: the intial guess of the origins of the rays 
         #               (provided by datamodule and fed to camera extrinsics)
         dataset = cast(ImagePoseDataModule, self.trainer.datamodule).dataset_train
-        img_idxs = th.arange(len(dataset.camera_origins), device=self.device).to(dtype=th.int32, device=self.device)
-
+        # NOTE (lauge): Get the original indices of the images - to be passed to camera_extrinsics
+        img_idxs = list(dataset.index_to_index.values())
+        img_idxs = th.tensor(img_idxs, device=self.device, dtype=th.int32)
         origs_raw = dataset.camera_origins.to(self.device)
         origs_noisy = dataset.camera_origins_noisy.to(self.device)
         origs_pred, _ = self.camera_extrinsics.forward_origins(img_idxs, origs_noisy)
@@ -236,8 +256,8 @@ class CameraCalibrationModel(NerfInterpolation):
         R, t, c = post_transform_params
 
         # Transform the validation image to this space 
-        origs_model = th.matmul(R.T, origs_val.unsqueeze(-1)).squeeze(-1)*c + t # TODO: double check that this transpose is not wrong
-        dirs_model = th.matmul(R.T, dirs_val.unsqueeze(-1)).squeeze(-1)
+        origs_model = th.matmul(R, origs_val.unsqueeze(-1)).squeeze(-1)*c + t
+        dirs_model = th.matmul(R, dirs_val.unsqueeze(-1)).squeeze(-1)
 
         return origs_model, dirs_model, post_transform_params   
 
@@ -270,15 +290,15 @@ class CameraCalibrationModel(NerfInterpolation):
         # unpack batch
         (
             ray_origs_raw, 
-            ray_origs_noisy, 
+            ray_origs_pred, 
             ray_dirs_raw, 
-            ray_dirs_noisy, 
+            ray_dirs_pred, 
             ray_colors_raw, 
             img_idx
         ) = batch
 
         # Forward pass
-        ray_colors_pred_fine, ray_colors_pred_coarse = self(ray_origs_noisy, ray_dirs_noisy)
+        ray_colors_pred_fine, ray_colors_pred_coarse = self(ray_origs_pred, ray_dirs_pred)
 
         assert not th.isnan(ray_colors_pred_fine).any(), "NaN values in ray_colors_pred_fine"
         assert not th.isnan(ray_colors_pred_coarse).any(), "NaN values in ray_colors_pred_coarse"
@@ -305,186 +325,3 @@ class CameraCalibrationModel(NerfInterpolation):
             ]
         )
         return optimizer
-
-    # def _camera_optimizer_step(self, loss: th.Tensor):
-    #     # NOTE: Assuming camera loss is calculated right after radiance loss.
-    #     #  This saves a backwards pass by using the same graph.
-    #     #  If this is not the case, then the step function should be altered
-    #     self._camera_optimizer.zero_grad()
-    #     self.manual_backward(loss)
-    #     self._camera_optimizer.step()
-
-
-    # def _camera_scheduler_step(self, batch_idx: int):
-    #     epoch_fraction = self.trainer.current_epoch + batch_idx/self.trainer.num_training_batches
-
-    #     if (
-    #         epoch_fraction >= self._camera_learning_rate_milestone and
-    #         epoch_fraction <= self.camera_learning_rate_stop_epoch
-    #     ):
-    #         self._camera_learning_rate_milestone += self.camera_learning_rate_period
-    #         self._camera_learning_rate_scheduler.step()
-
-
-    # def _get_logging_losses(
-    #     self, 
-    #     stage: Literal["train", "val", "test"], 
-    #     proposal_loss: th.Tensor,
-    #     radiance_loss: th.Tensor, 
-    #     radiance_loss_raw: th.Tensor,
-    #     camera_loss: th.Tensor,
-    #     *args, 
-    #     **kwargs
-    # ) -> dict[str, th.Tensor]:
-    #     losses = super()._get_logging_losses(
-    #         stage,
-    #         proposal_loss,
-    #         radiance_loss,
-    #         *args,
-    #         **kwargs
-    #     )
-
-    #     # Calculate PSNR
-    #     # NOTE: Cannot calculate SSIM because it relies on image patches
-    #     # NOTE: Cannot calculate LPIPS because it relies on image patches
-    #     psnr = -10 * th.log10(radiance_loss_raw)
-
-    #     return {
-    #         **losses,
-    #         f"{stage}_radiance_loss_raw": radiance_loss_raw,
-    #         f"{stage}_psnr_raw": psnr,
-    #     }
-
-
-
-
-    # def _forward_loss(self, batch: DatasetOutput):
-    #     # Decontsruct batch
-    #     (
-    #         ray_origs_raw, 
-    #         ray_origs_noisy, 
-    #         ray_dirs_raw, 
-    #         ray_dirs_noisy, 
-    #         ray_colors_raw, 
-    #     
-    #   , 
-    #         img_idx
-    #     ) = batch
-
-    #     # Forward on model
-    #     ray_colors_pred, (proposal_loss_blur, radiance_loss_blur) = super()._forward_loss((
-    #         ray_origs_noisy, 
-    #         ray_dirs_noisy, 
-    #     
-    #   
-    #     ))
-
-
-    #     # Calculate raw radiance loss based on real color
-    #     radiance_loss_raw = nn.functional.mse_loss(ray_colors_pred, ray_colors_raw)
-
-    #     # Compute the camera loss
-    #     # TODO: Should probably be changed to a different loss function
-    #     camera_loss = nn.functional.mse_loss(ray_colors_pred, ray_colors_blur)
-
-
-    #     # Return color prediction and losses
-    #     return (
-    #         ray_colors_pred,
-    #         (proposal_loss_blur, radiance_loss_blur, radiance_loss_raw, camera_loss)
-    #     )
-
-
-
-    # def training_step(self, batch: DatasetOutput, batch_idx: int):
-    #     """Perform a single training forward pass, optimization step, and logging.
-        
-    #     Args:
-    #         batch (InnerModelBatchInput): Batch of data
-    #         batch_idx (int): Index of the batch
-        
-    #     Returns:
-    #         th.Tensor: Loss
-    #     """
-
-    #     # Transform batch to model prediction space
-    #     batch = self.training_transform(batch)
-
-    #     # Forward pass
-    #     _, (proposal_loss_blur, radiance_loss_blur, radiance_loss_raw, camera_loss) = self._forward_loss(batch)
-
-    #     # Backward pass and step through each optimizer
-    #     self._proposal_optimizer_step(proposal_loss_blur)
-    #     self._radiance_optimizer_step(radiance_loss_blur)
-    #     # NOTE: Assuming camera loss is calculated right after radiance loss.
-    #     #  This saves a backwards pass by using the same graph.
-    #     #  If this is not the case, then the step function should be altered
-    #     self._camera_optimizer_step(camera_loss)
-
-    #     # Step learning rate schedulers
-    #     self._proposal_scheduler_step(batch_idx)
-    #     self._radiance_scheduler_step(batch_idx)
-    #     self._camera_scheduler_step(batch_idx)
-
-    #     # Log metrics
-    #     self.log_dict(self._get_logging_losses(
-    #         "train",
-    #         proposal_loss_blur,
-    #         radiance_loss_blur,
-    #         radiance_loss_raw,
-    #         camera_loss
-    #     ))
-
-
-    #     # Return loss
-    #     return radiance_loss_raw
-
-
-    # def validation_step(self, batch: DatasetOutput, batch_idx: int):
-    #     # Transform to the model prediction space
-    #     # TODO: Cache post-transformation params from Kabsc algorithm
-    #     batch = self.validation_transform(batch)
-
-    #     # Forward pass
-    #     _, (proposal_loss_blur, radiance_loss_blur, radiance_loss_raw, camera_loss) = self._forward_loss(batch)
-
-    #     # Log metrics
-    #     self.log_dict(self._get_logging_losses(
-    #         "val",
-    #         proposal_loss_blur,
-    #         radiance_loss_blur,
-    #         radiance_loss_raw,
-    #         camera_loss
-    #     ))
-
-    #     return radiance_loss_raw
-
-
-
-
-    # def configure_optimizers(self):
-    #     # Configure super optimizers
-    #     optimizers, schedulers = super().configure_optimizers()
-        
-    #     # Set up optimizer and schedulers for camera extrinsics
-    #     self._camera_optimizer = th.optim.Adam(
-    #         self.camera_extrinsics.parameters(), 
-    #         lr=self.camera_learning_rate, 
-    #         weight_decay=self.camera_weight_decay,
-    #     )
-
-    #     self._camera_learning_rate_scheduler = th.optim.lr_scheduler.ExponentialLR(
-    #         self._camera_optimizer, 
-    #         gamma=self.camera_learning_rate_decay
-    #     )
-
-
-    #     # Set optimizers and schedulers
-    #     return (
-    #         optimizers + [self._camera_optimizer],
-    #         schedulers + [self._camera_learning_rate_scheduler]
-    #     )
-
-
-
-
