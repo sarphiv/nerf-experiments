@@ -37,7 +37,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="Lauges hacky idea, noise: 0.05"
+        name="lauge testing kabsch algorithm - screw everything up"
     )
 
 
@@ -46,13 +46,13 @@ if __name__ == "__main__":
     NUM_WORKERS = 8
     
     dm = ImagePoseDataModule(
-        image_width=100,
-        image_height=100,
+        image_width=80,
+        image_height=80,
         scene_path="../data/lego",
         validation_fraction=0.06,
         validation_fraction_shuffle=1234,
-        rotation_noise_sigma = 0.05,
-        translation_noise_sigma = 0.01,
+        rotation_noise_sigma = 0.0,
+        translation_noise_sigma = 0.0,
         batch_size=BATCH_SIZE,
         num_workers=NUM_WORKERS,
         shuffle=True,
@@ -84,12 +84,12 @@ if __name__ == "__main__":
 
 
     # Set up trainer
-    th.set_float32_matmul_precision("high")
+    # th.set_float32_matmul_precision("medium")
 
     trainer = pl.Trainer(
         accelerator="auto",
-        max_epochs=20,
-        # precision="32",
+        max_epochs=100,
+        # precision="32-mixed",
         logger=wandb_logger,
         callbacks=[
             LogEpochFraction(
@@ -99,15 +99,14 @@ if __name__ == "__main__":
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
                 logging_start=0.002,
-                delay_start=1/8,
-                delay_end=1/2.,
-                delay_taper=6.0,
+                delay_start=1/7,
+                delay_end=1.,
+                delay_taper=5.0,
                 train_image_names=["r_1", "r_23"],
                 validation_image_names=["r_2", "r_84"],
-                # reconstruction_batch_size=BATCH_SIZE,
-                reconstruction_batch_size=BATCH_SIZE*4,
+                reconstruction_batch_size=BATCH_SIZE,
                 reconstruction_num_workers=NUM_WORKERS,
-                metric_name_val="val_img",
+                metric_name="val_img",
             ),
             # LogCameraExtrinsics(
             #     wandb_logger=wandb_logger,
@@ -144,31 +143,28 @@ if __name__ == "__main__":
     model = CameraCalibrationModel(
         n_training_images=len(dm.dataset_train.images),
         # camera_learning_rate=5e-4,
-        # camera_learning_rate=0.,
-        camera_learning_rate=5e-4,
+        camera_learning_rate=0.,
         camera_learning_rate_stop_epoch=8,
         camera_learning_rate_decay=0.999,
         camera_learning_rate_period=0.02,
         camera_weight_decay=0.0,
-        # near_sphere_normalized=1/10,
-        near_sphere_normalized=0.0001,
-        far_sphere_normalized=0.5,
+        near_sphere_normalized=1/10,
+        far_sphere_normalized=1/3,
         samples_per_ray=64 + 192,
         n_hidden=args.n_hidden,
         hidden_dim=256,
         position_encoder = BarfPositionalEncoding(levels=10,
-                                                  alpha_start=0,
-                                                  alpha_increase_start_epoch=0.5,
+                                                  alpha_start=7,
+                                                  alpha_increase_start_epoch=0.,
                                                 #   alpha_increase_start_epoch=1.28,
                                                   alpha_increase_end_epoch=10.,
-                                                #   alpha_increase_end_epoch=6.4,
                                                   include_identity=True),
         direction_encoder = BarfPositionalEncoding(levels=4,
                                                      alpha_start=4,
                                                      alpha_increase_start_epoch=1.28,
                                                      alpha_increase_end_epoch=6.4,
                                                      include_identity=True),
-        proposal=(False, 0), # (args.use_proposal, 64),
+        proposal=(args.use_proposal, 64),
         delayed_direction=args.delayed_direction,
         delayed_density=args.delayed_density,
         n_segments=args.n_segments,
