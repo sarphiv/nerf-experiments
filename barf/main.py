@@ -15,6 +15,21 @@ from model_interpolation_architecture import BarfPositionalEncoding
 
 
 
+# High priority 
+# TODO: Exponential sigmas in gaussian blur
+# TODO: Script that generates runs where the plots are used for the paper 
+# TODO: Bug hunting
+# TODO: Write paper 
+
+# Low priority
+# TODO: make functions in dataset.py static if possible
+# TODO: Fix image logger - see that file
+# TODO: Remove all the runs in WANDB
+
+# 
+
+
+
 
 if __name__ == "__main__":
     # Parse arguments

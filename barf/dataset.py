@@ -21,17 +21,6 @@ from model_camera_extrinsics import CameraExtrinsics
 DatasetOutput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor, th.Tensor, th.Tensor]
 
 
-# TODO: gaussian blur: replace all that gaussian with list of
-# sigmas - and then we compute it in discrete steps, and 
-# then it is computed by interpolating (in the model probably)
-
-# TODO: Fix image logger - see that file
-# TODO: Point cloud 
-# TODO: Look through data_module -> Why can't we do the same for
-#       in the val_dataloader(). the validation set as for the training set? TORBEN!!!!
-
-# TODO make functions static if possible
-
 class ImagePoseDataset(Dataset[DatasetOutput]):
     def __init__(
         self,
@@ -147,60 +136,9 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
                                   self.translation_noise_sigma)
         
         print_verbose("Done loading data!")
-
-        # TODO TODO TODO!!!!
-        # THIS IS ONLY FOR TESTING THE VALIDATION_TRANSFORM FUNCTION IN THE CAMERA CALIBRATION MODEL
-        # REMOVE THIS WHEN WE HAVE SEEN THE OTHER THING WORK - ASSS FAAASSST AASSS POOOSSSIIIBBBLLLEEE!!!!
         
+        # NOTE: This is only for bug fixing (to see that validation transform works)
         # self._screw_up_original_camera_poses_for_testing_validation_transform_in_CameraCalibrationModel()
-
-
-    # # TODO: Change this such that it produces gaussian blurs in discrete steps. 
-    # def _load_images(self, image_dir_path, image_width, image_height) -> dict[str, th.Tensor]:
-
-    #     """
-        
-        
-    #     Returns
-    #     --------
-    #     images: Tensor(N, H, W, n_sigmas, 3)
-        
-    #     """
-        
-    #     # TODO: remove and relplace with similar PIL functions
-    #     # Transform image to correct format
-    #     transform = cast(
-    #         Callable[[th.Tensor], th.Tensor], 
-    #         tv.transforms.Compose([
-    #             # Convert to float
-    #             tv.transforms.Lambda(lambda img: img.float() / 255.),
-    #             # Resize image
-    #             tv.transforms.Resize(
-    #                 (image_height, image_width), 
-    #                 interpolation=tv.transforms.InterpolationMode.BICUBIC, 
-    #                 antialias=True # type: ignore
-    #             ),
-    #             # Transform alpha to white background (removes alpha too)
-    #             tv.transforms.Lambda(lambda img: img[-1] * img[:3] + (1 - img[-1])),
-    #             # Permute channels to (H, W, C)
-    #             # WARN: This is against the convention of PyTorch.
-    #             #  Doing it to enable easier batching of rays.
-    #             tv.transforms.Lambda(lambda img: img.permute(1, 2, 0))
-    #         ])
-    #     )
-        
-    #     # TODO: load images with the old _open_image function to PIL images
-    #     # Open RGBA image
-    #     read = lambda path: tv.io.read_image(
-    #         os.path.join(image_dir_path, path), 
-    #         tv.io.ImageReadMode.RGB_ALPHA
-    #     )
-
-    #     # Load each image, transform, and store
-    #     return {
-    #         pathlib.PurePath(path).stem: transform(read(path))
-    #         for path in os.listdir(image_dir_path) 
-    #     }
 
     
     def _load_images(self, images_path: str, img_height: int, img_width, sigmas: list[float], verbose=False
@@ -451,8 +389,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             th.matmul(camera_to_worlds[:, :3, :3].unsqueeze(1), meshgrid.unsqueeze(0).unsqueeze(-1)).squeeze(-1) 
         )
 
-    # TODO TODO TODO!!!!
-    # this function is only for testing - should probably be removed when we have seen the other thing work
+    # NOTE: This is only for bug hunting (to see that validation transform works)
     def _screw_up_original_camera_poses_for_testing_validation_transform_in_CameraCalibrationModel(
             self) -> th.Tensor:
         """
@@ -523,80 +460,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         camera_directions_noisy = th.matmul(rotation_noise, camera_directions.unsqueeze(-1)).squeeze(-1)
         ray_directions_noisy    = th.matmul(rotation_noise.unsqueeze(1), ray_directions.unsqueeze(-1)).squeeze(-1)
 
-        # TODO remove this comment when we have seen the other thing work 
-        # camera_origins_noisy = camera_origins + th.randn_like(camera_origins)*translation_noise_sigma
-        # camera_directions_noisy = th.matmul(camera_directions.unsqueeze(-1).permute(0,2,1), rotation_noise).squeeze(1)
-
         return camera_origins_noisy, camera_directions_noisy, ray_origins_noisy, ray_directions_noisy
-
-
-    # def _get_gaussian_blur_kernel(self, kernel_size: int, relative_sigma: float, max_side_length: int) -> th.Tensor:
-    #     # If sigma is 0, return a Dirac delta kernel
-    #     if relative_sigma <= sys.float_info.epsilon:
-    #         kernel = th.zeros(kernel_size)
-    #         kernel[kernel_size//2] = 1
-    #     # Else, create 1D Gaussian kernel
-    #     # NOTE: Gaussian blur is separable, so 1D kernel can simply be applied twice
-    #     else:
-    #         kernel = th.linspace(-kernel_size/2, kernel_size/2, kernel_size)
-    #         # Calculate inplace exp(-x^2 / (2 * (relative_sigma*max_side_length)^2))
-    #         kernel.square_().divide_(-2 * (relative_sigma * max_side_length)**2).exp_()
-    #         # Normalize the kernel
-    #         kernel.divide_(kernel.sum())
-
-
-    #     return kernel
-
-
-    # def _get_blurred_pixel(self, img: th.Tensor, x: int, y: int, gaussian_blur_kernel: th.Tensor):
-    #     # NOTE: Assuming x and y are within bounds of img
-
-    #     # Retrive kernel dimensions
-    #     kernel_size = gaussian_blur_kernel.shape[0]
-    #     kernel_half = kernel_size//2
-
-    #     # Retrieve image dimensions
-    #     img_height, img_width = img.shape[:2]
-
-    #     # Calculate padding
-    #     left = max(kernel_half - x, 0)
-    #     top = max(kernel_half - y, 0)
-    #     right = max(kernel_half + x - (img_width-1), 0)
-    #     bottom = max(kernel_half + y - (img_height-1), 0)
-
-    #     pad = tv.transforms.Pad(
-    #         padding=(left, top, right, bottom), 
-    #         padding_mode="reflect"
-    #     )
-
-    #     # Pad image and retrieve pixel and neighbors
-    #     neighborhood: th.Tensor = pad(img.permute(2, 0, 1))[
-    #         :,
-    #         (top+y-kernel_half):(top+y+kernel_half)+1, 
-    #         (left+x-kernel_half):(left+x+kernel_half)+1,
-    #     ].permute(1, 2, 0)
-
-
-    #     # Blur y-direction and store y-column of pixel
-    #     # (H, W, C) -> (W, C)
-    #     blurred_y = (neighborhood * gaussian_blur_kernel.view(-1, 1, 1)).sum(dim=0)
-    #     # Blur x-direction and store pixel
-    #     # (W, C) -> (C)
-    #     blurred_pixel = (blurred_y * gaussian_blur_kernel.view(-1, 1)).sum(dim=0)
-
-    #     # Return blurred pixel
-    #     return blurred_pixel
-
-
-    # def gaussian_blur_step(self) -> None:
-    #     # Update current variance
-    #     self.gaussian_blur_relative_sigma_current *= self.gaussian_blur_relative_sigma_decay
-    #     # Get new kernel
-    #     self.gaussian_blur_kernel = self._get_gaussian_blur_kernel(
-    #         self.gaussian_blur_kernel_size,
-    #         self.gaussian_blur_relative_sigma_current,
-    #         max(self.image_height, self.image_width)
-    #     )
 
 
     def subset_dataset(self, image_indices: th.Tensor | list[int|str]):
@@ -668,7 +532,6 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             o_n, 
             d_r.view(-1, 3)[i], 
             d_n.view(-1, 3)[i], 
-            # img.view(-1, self.n_sigmas, 3)[i], # TODO the pixel color is now shape = (3,) - should be (N, 3) - where N is the number of gaussian blurred pixel values
             img.view(-1, len(self.gaussian_blur_sigmas), 3)[i],
             th.tensor(self.index_to_index[img_idx])
         )
