@@ -43,7 +43,7 @@ if __name__ == "__main__":
 
     # Set up data module
     BATCH_SIZE = 1024*2
-    NUM_WORKERS = 8
+    NUM_WORKERS = 1
     
     dm = ImagePoseDataModule(
         image_width=400,
@@ -51,8 +51,9 @@ if __name__ == "__main__":
         scene_path="../data/lego",
         validation_fraction=0.06,
         validation_fraction_shuffle=1234,
-        rotation_noise_sigma = 0.,
-        translation_noise_sigma = 0.,
+        gaussian_blur_sigmas =[3.0, 1.92, 1.08, 0.48, 0.0],
+        rotation_noise_sigma = 0.0,
+        translation_noise_sigma = 0.0,
         batch_size=BATCH_SIZE,
         num_workers=NUM_WORKERS,
         shuffle=True,
@@ -165,6 +166,7 @@ if __name__ == "__main__":
                                                      alpha_increase_start_epoch=1.28,
                                                      alpha_increase_end_epoch=6.4,
                                                      include_identity=True),
+        max_gaussian_sigma=2.0,
         proposal=(args.use_proposal, 64),
         delayed_direction=args.delayed_direction,
         delayed_density=args.delayed_density,

@@ -179,6 +179,14 @@ class LogCameraExtrinsics(Callback):
         })
 
         # Log images
+        self.logger.experiment.log({
+            self.metric_name: wandb.Object3D.from_point_cloud(
+                points=[(*p, *c) for p,c in zip(camera_origs_raw.tolist(), origins_raw_colors.tolist())]  + [(*p, *c) for p,c in zip(camera_origs_pred.tolist(), origins_pred_colors.tolist())],
+                vectors=[],
+                boxes=[]
+            ) 
+        })
+        # Log images
         # self.logger.experiment.log({
         #     self.metric_name: wandb.Object3D.from_point_cloud(
         #         points=[(*p, *c) for p,c in zip(camera_origs_raw.tolist(), origins_raw_colors.tolist())]  + [(*p, *c) for p,c in zip(camera_origs_pred.tolist(), origins_pred_colors.tolist())],
