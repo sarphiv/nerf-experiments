@@ -184,3 +184,7 @@ data/
 
 # vscode settings
 .vscode/settings.json
+
+# images
+*.png
+*.jpg
