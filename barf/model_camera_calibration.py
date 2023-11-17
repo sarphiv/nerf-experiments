@@ -377,15 +377,13 @@ class CameraCalibrationModel(NerfInterpolation):
             self.log_dict({f"{purpose}_loss_fine": loss_fine,
                         f"{purpose}_loss_coarse": loss_coarse,
                         f"{purpose}_psnr": psnr,
-                        "alpha": self.position_encoder.alpha,
-                        "camera_extrinsics_pos_sigma": self.camera_extrinsics.pos_sigma,
+                        "alpha": self.position_encoder.alpha.item(),
                         })
         else:
             loss = loss_fine
             self.log_dict({f"{purpose}_loss_fine": loss_fine,
                         f"{purpose}_psnr": psnr,
-                        "alpha": self.position_encoder.alpha,
-                        "camera_extrinsics_pos_sigma": self.camera_extrinsics.pos_sigma,
+                        "alpha": self.position_encoder.alpha.item(),
                         })
 
         
