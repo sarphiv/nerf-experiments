@@ -236,8 +236,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         Details
         -------
         The `index_to_index` dict is used for subsetting the dataset.
-        This is used for subsetting the dataset
-        this is a dict that is used to get the original index of an image in the origina dataset
+        It is a dict that is used to get the index of an image in the origina dataset
         from its index in the current subset of the original dataset:
          * Key: image index in current subset of original dataset, i.e. and integer in [0, n_images_in_current_dataset)
          * Value: the original index of the image, i.e. an integer in [0, n_train_images_originally)
@@ -288,7 +287,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
 
         return images, image_name_to_index, image_index_to_name, index_to_index, n_images
 
-    def gaussian_blur(self, img: Image.Image, sigmas: list[float]) -> list[Image.Image]:
+    def gaussian_blur(self, img: Image.Image, sigmas: list[float], min_sigma = 0.25) -> list[Image.Image]:
         """
         Apply gaussian blurring to the image with the given sigmas.
         """
@@ -296,7 +295,8 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
 
         # Apply gaussian smoothing
         for sigma in sigmas:
-            imgs.append(img.filter(ImageFilter.GaussianBlur(radius=sigma)))
+            if sigma > min_sigma: imgs.append(img.filter(ImageFilter.GaussianBlur(radius=sigma)))
+            else: imgs.append(img)
 
         return imgs
 
@@ -312,8 +312,13 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         
         Returns:
         --------
-            * `focal_length`: `float` - the focal length of the camera
-            * `camera_to_worlds`: `dict[str, th.Tensor(4,4)]` - a dict that maps from image name to the camera to world matrix
+            * `focal_length`: `float` - the focal length of the camera.\\
+                NOTE: Don't know if focal length is the correct word,
+                but here it is the distance from the camera to the plane
+                that satisfies that the intersections of two neighboring
+                camera rays are exactly distance 1 apart.
+            * `camera_to_worlds`: `dict[str, th.Tensor(4,4)]` - a dict
+                that maps from image name to the camera to world matrix
 
         """
 
@@ -528,75 +533,6 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         # camera_directions_noisy = th.matmul(camera_directions.unsqueeze(-1).permute(0,2,1), rotation_noise).squeeze(1)
 
         return camera_origins_noisy, camera_directions_noisy, ray_origins_noisy, ray_directions_noisy
-
-
-    # def _get_gaussian_blur_kernel(self, kernel_size: int, relative_sigma: float, max_side_length: int) -> th.Tensor:
-    #     # If sigma is 0, return a Dirac delta kernel
-    #     if relative_sigma <= sys.float_info.epsilon:
-    #         kernel = th.zeros(kernel_size)
-    #         kernel[kernel_size//2] = 1
-    #     # Else, create 1D Gaussian kernel
-    #     # NOTE: Gaussian blur is separable, so 1D kernel can simply be applied twice
-    #     else:
-    #         kernel = th.linspace(-kernel_size/2, kernel_size/2, kernel_size)
-    #         # Calculate inplace exp(-x^2 / (2 * (relative_sigma*max_side_length)^2))
-    #         kernel.square_().divide_(-2 * (relative_sigma * max_side_length)**2).exp_()
-    #         # Normalize the kernel
-    #         kernel.divide_(kernel.sum())
-
-
-    #     return kernel
-
-
-    # def _get_blurred_pixel(self, img: th.Tensor, x: int, y: int, gaussian_blur_kernel: th.Tensor):
-    #     # NOTE: Assuming x and y are within bounds of img
-
-    #     # Retrive kernel dimensions
-    #     kernel_size = gaussian_blur_kernel.shape[0]
-    #     kernel_half = kernel_size//2
-
-    #     # Retrieve image dimensions
-    #     img_height, img_width = img.shape[:2]
-
-    #     # Calculate padding
-    #     left = max(kernel_half - x, 0)
-    #     top = max(kernel_half - y, 0)
-    #     right = max(kernel_half + x - (img_width-1), 0)
-    #     bottom = max(kernel_half + y - (img_height-1), 0)
-
-    #     pad = tv.transforms.Pad(
-    #         padding=(left, top, right, bottom), 
-    #         padding_mode="reflect"
-    #     )
-
-    #     # Pad image and retrieve pixel and neighbors
-    #     neighborhood: th.Tensor = pad(img.permute(2, 0, 1))[
-    #         :,
-    #         (top+y-kernel_half):(top+y+kernel_half)+1, 
-    #         (left+x-kernel_half):(left+x+kernel_half)+1,
-    #     ].permute(1, 2, 0)
-
-
-    #     # Blur y-direction and store y-column of pixel
-    #     # (H, W, C) -> (W, C)
-    #     blurred_y = (neighborhood * gaussian_blur_kernel.view(-1, 1, 1)).sum(dim=0)
-    #     # Blur x-direction and store pixel
-    #     # (W, C) -> (C)
-    #     blurred_pixel = (blurred_y * gaussian_blur_kernel.view(-1, 1)).sum(dim=0)
-
-    #     # Return blurred pixel
-    #     return blurred_pixel
-
-
-    # def gaussian_blur_step(self) -> None:
-    #     # Update current variance
-    #     self.gaussian_blur_relative_sigma_current *= self.gaussian_blur_relative_sigma_decay
-    #     # Get new kernel
-    #     self.gaussian_blur_kernel = self._get_gaussian_blur_kernel(
-    #         self.gaussian_blur_kernel_size,
-    #         self.gaussian_blur_relative_sigma_current,
-    #         max(self.image_height, self.image_width)
-    #     )
 
 
     def subset_dataset(self, image_indices: th.Tensor | list[int|str]):
