@@ -14,8 +14,6 @@ from model_camera_calibration import CameraCalibrationModel
 from model_interpolation_architecture import BarfPositionalEncoding
 
 
-
-
 if __name__ == "__main__":
     # Parse arguments
     parser = argparse.ArgumentParser()
@@ -37,7 +35,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="testing new dataset"
+        name="BARF no noise"
     )
 
 
