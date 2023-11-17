@@ -329,6 +329,35 @@ class CameraCalibrationModel(NerfInterpolation):
     ##############################################################
     # helper methods for the lightning module methods
 
+    def linear_interpolation(self, batch: InnerModelBatchInput, alpha: float) -> InnerModelBatchInput:
+        """
+        Makes a linear interpolation of the 6 entry of the batch between floor(alpha) and ceil(alpha) and returns a batch of the same shape. 
+        """
+        # TODO : (David) LOOK AT THIS
+        # Unpack batch 
+        (
+            ray_origs_raw,
+            ray_origs_pred,
+            ray_dirs_raw,
+            ray_dirs_pred,
+            ray_colors_raw,
+            img_idx
+        ) = batch
+        
+        # Make interpolation 
+        if alpha >= len(ray_colors_raw):
+            interpolation = ray_colors_raw[-1]
+        else: 
+            interpolation = ray_colors_raw[th.floor(alpha)] * (1 - alpha%1) + ray_colors_raw[th.ceil(alpha)] * (alpha%1)
+
+        return (ray_origs_raw,
+            ray_origs_pred,
+            ray_dirs_raw,
+            ray_dirs_pred,
+            th.stack([interpolation, ray_colors_raw[-1]]),
+            img_idx)
+
+
     def _step_helper(self, batch, batch_idx, purpose: Literal["train", "val"]):
 
         # Transform batch to model prediction space
@@ -348,6 +377,10 @@ class CameraCalibrationModel(NerfInterpolation):
 
         # interpolate the blurred pixel colors
         batch = self.get_blurred_pixel_colors(batch)
+
+        # TODO : (David) LOOK AT THIS 
+        # Get linear interpolation of the valid sigma 
+        batch = self.linear_interpolation(batch, self.position_encoder.alpha)
 
         # unpack batch
         (

@@ -9,6 +9,7 @@ import copy
 import torch as th
 from torch.utils.data import Dataset
 import torchvision as tv
+from PIL import Image, ImageFilter
 
 from model_camera_extrinsics import CameraExtrinsics
 
@@ -42,6 +43,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         rotation_noise_sigma: float=1.0,
         translation_noise_sigma: float=1.0,
         noise_seed: Optional[int]=None,
+        sigmas: list[float]=[0.0], # NOTE: the last element is reserved for the original image (0.0) 
         gaussian_blur_kernel_size: int=40,
         gaussian_blur_relative_sigma_start: float=0.,
         gaussian_blur_relative_sigma_decay: float=1.
@@ -77,12 +79,14 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         self.rotation_noise_sigma = rotation_noise_sigma
         self.translation_noise_sigma = translation_noise_sigma
         self.noise_seed = noise_seed
+        self.sigmas = sigmas
 
         # Load images
         self.images = self._load_images(
             self.images_path, 
             self.image_width, 
-            self.image_height
+            self.image_height,
+            self.sigmas
         )
 
         self.n_images = len(self.images)
@@ -146,53 +150,103 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         # self._screw_up_original_camera_poses_for_testing_validation_transform_in_CameraCalibrationModel()
 
 
-    # TODO: Change this such that it produces gaussian blurs in discrete steps. 
-    def _load_images(self, image_dir_path, image_width, image_height) -> dict[str, th.Tensor]:
+    # # TODO: Change this such that it produces gaussian blurs in discrete steps. 
+    # def _load_images(self, image_dir_path, image_width, image_height) -> dict[str, th.Tensor]:
 
+    #     """
+        
+        
+    #     Returns
+    #     --------
+    #     images: Tensor(N, H, W, n_sigmas, 3)
+        
+    #     """
+        
+    #     # TODO: remove and relplace with similar PIL functions
+    #     # Transform image to correct format
+    #     transform = cast(
+    #         Callable[[th.Tensor], th.Tensor], 
+    #         tv.transforms.Compose([
+    #             # Convert to float
+    #             tv.transforms.Lambda(lambda img: img.float() / 255.),
+    #             # Resize image
+    #             tv.transforms.Resize(
+    #                 (image_height, image_width), 
+    #                 interpolation=tv.transforms.InterpolationMode.BICUBIC, 
+    #                 antialias=True # type: ignore
+    #             ),
+    #             # Transform alpha to white background (removes alpha too)
+    #             tv.transforms.Lambda(lambda img: img[-1] * img[:3] + (1 - img[-1])),
+    #             # Permute channels to (H, W, C)
+    #             # WARN: This is against the convention of PyTorch.
+    #             #  Doing it to enable easier batching of rays.
+    #             tv.transforms.Lambda(lambda img: img.permute(1, 2, 0))
+    #         ])
+    #     )
+        
+    #     # TODO: load images with the old _open_image function to PIL images
+    #     # Open RGBA image
+    #     read = lambda path: tv.io.read_image(
+    #         os.path.join(image_dir_path, path), 
+    #         tv.io.ImageReadMode.RGB_ALPHA
+    #     )
+
+    #     # Load each image, transform, and store
+    #     return {
+    #         pathlib.PurePath(path).stem: transform(read(path))
+    #         for path in os.listdir(image_dir_path) 
+    #     }
+
+    
+    def _load_images(self, images_path: str, img_height: int, img_width, sigmas: list[float]) -> dict[str, list[th.Tensor]]: 
         """
+        Opens and returns the desired images (with gaussian smoothing applied). 
+        Each image is resized, alpha is converted to white, gaussian smoothing is applied, channels are permuted and it is converted to a tensor. 
+
+        Parameters:
+        -----------
+            images_path: str - path to the directory containing the images
+            img_height: int - height of the images
+            img_width: int - width of the images
+            sigmas: list[float] - list of sigmas/radii for the gaussian smoothing
         
-        
-        Returns
+        Returns:
         --------
-        images: Tensor(N, H, W, n_sigmas, 3)
-        
+            images: dict[str, th.Tensor] - dictionary of the images, where the keys are the image names and the values are a tensor of shape (H, W, N_sigmas, 3)
         """
-        
-        # TODO: remove and relplace with similar PIL functions
-        # Transform image to correct format
-        transform = cast(
-            Callable[[th.Tensor], th.Tensor], 
-            tv.transforms.Compose([
-                # Convert to float
-                tv.transforms.Lambda(lambda img: img.float() / 255.),
-                # Resize image
-                tv.transforms.Resize(
-                    (image_height, image_width), 
-                    interpolation=tv.transforms.InterpolationMode.BICUBIC, 
-                    antialias=True # type: ignore
-                ),
-                # Transform alpha to white background (removes alpha too)
-                tv.transforms.Lambda(lambda img: img[-1] * img[:3] + (1 - img[-1])),
-                # Permute channels to (H, W, C)
-                # WARN: This is against the convention of PyTorch.
-                #  Doing it to enable easier batching of rays.
-                tv.transforms.Lambda(lambda img: img.permute(1, 2, 0))
-            ])
-        )
-        
-        # TODO: load images with the old _open_image function to PIL images
-        # Open RGBA image
-        read = lambda path: tv.io.read_image(
-            os.path.join(image_dir_path, path), 
-            tv.io.ImageReadMode.RGB_ALPHA
-        )
+        # Load the images as PIL.Image's 
+        images = {pathlib.PurePath(path).stem: Image.open(os.path.join(images_path, path)) for path in os.listdir(images_path) }
 
-        # Load each image, transform, and store
-        return {
-            pathlib.PurePath(path).stem: transform(read(path))
-            for path in os.listdir(image_dir_path) 
-        }
+        # Resize each image 
+        images = {name: img.resize((img_height, img_width), Image.BICUBIC) for name, img in images.items()}
 
+        # Convert alpha to white background
+        white_image = Image.new("RGBA", (img_height, img_width), (255, 255, 255, 255))
+        images = {name: Image.alpha_composite(white_image, img).convert('RGB') for name, img in images.items()}
+
+        # Apply gaussian smoothing
+        images = {name: self.gaussian_blur(img, sigmas) for name, img in images.items()}
+
+        # Convert to tensor
+        PIL_to_tensor = tv.transforms.ToTensor()
+        images = {name: th.stack([PIL_to_tensor(img) for img in imgs]) for name, imgs in images.items()}
+
+        # Permute channels to (H, W, C)
+        images = {name: th.tensor(imgs).permute(2, 3, 0, 1) for name, imgs in images.items()}
+
+        return images 
+
+    def gaussian_blur(self, img: Image.Image, sigmas: list[float]) -> list[Image.Image]:
+        """
+        Apply gaussian blurring to the image with the given sigmas.
+        """
+        imgs = [] 
+
+        # Apply gaussian smoothing
+        for sigma in sigmas:
+            imgs.append(img.filter(ImageFilter.GaussianBlur(radius=sigma)))
+
+        return imgs
 
     def _load_camera_info(self, camera_info_path: str, image_width: int) -> tuple[float, dict[str, th.Tensor]]:
         # Read info file
@@ -510,7 +564,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             d_r.view(-1, 3)[i], 
             d_n.view(-1, 3)[i], 
             # img.view(-1, self.n_sigmas, 3)[i], # TODO the pixel color is now shape = (3,) - should be (N, 3) - where N is the number of gaussian blurred pixel values
-            img.view(-1, 3)[i],
+            img.view(-1, len(self.sigmas), 3)[i],
             th.tensor(self.index_to_index[img_idx])
         )
 
