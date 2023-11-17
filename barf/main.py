@@ -52,7 +52,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="testing new dataset"
+        name="BARF no noise"
     )
 
 
@@ -61,8 +61,8 @@ if __name__ == "__main__":
     NUM_WORKERS = 1
     
     dm = ImagePoseDataModule(
-        image_width=80,
-        image_height=80,
+        image_width=400,
+        image_height=400,
         scene_path="../data/lego",
         validation_fraction=0.06,
         validation_fraction_shuffle=1234,
@@ -125,17 +125,17 @@ if __name__ == "__main__":
                 metric_name_val="val_img",
                 metric_name_train="train_img",
             ),
-            # LogCameraExtrinsics(
-            #     wandb_logger=wandb_logger,
-            #     logging_start=0.002,
-            #     delay_start=1/200,
-            #     delay_end=1/16,
-            #     delay_taper=4.0,
-            #     batch_size=BATCH_SIZE,
-            #     num_workers=NUM_WORKERS,
-            #     ray_direction_length=1/10,
-            #     metric_name="train_point",
-            # ),
+            LogCameraExtrinsics(
+                wandb_logger=wandb_logger,
+                logging_start=0.002,
+                delay_start=1/200,
+                delay_end=1/16,
+                delay_taper=4.0,
+                batch_size=BATCH_SIZE,
+                num_workers=NUM_WORKERS,
+                ray_direction_length=1/10,
+                metric_name="train_point",
+            ),
             LearningRateMonitor(
                 logging_interval="step"
             ),
@@ -172,9 +172,9 @@ if __name__ == "__main__":
         hidden_dim=256,
         position_encoder = BarfPositionalEncoding(levels=10,
                                                   alpha_start=0,
-                                                  alpha_increase_start_epoch=0.,
-                                                #   alpha_increase_start_epoch=1.28,
-                                                  alpha_increase_end_epoch=10.,
+                                                #   alpha_increase_start_epoch=0.,
+                                                  alpha_increase_start_epoch=1.28,
+                                                  alpha_increase_end_epoch=6.4,
                                                   include_identity=True),
         direction_encoder = BarfPositionalEncoding(levels=4,
                                                      alpha_start=4,
