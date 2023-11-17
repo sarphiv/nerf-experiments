@@ -363,7 +363,7 @@ class CameraCalibrationModel(NerfInterpolation):
         """
         sigma = sigma_max * 2 ** (- alpha)
         if sigma < 1/4:
-            return th.Tensor([0.])
+            return th.Tensor([0.], device=alpha.device)
         else: 
             return sigma
 
