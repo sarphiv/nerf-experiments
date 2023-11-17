@@ -21,6 +21,7 @@ class CameraCalibrationModel(NerfInterpolation):
         camera_learning_rate_decay: float = 0.999,
         camera_learning_rate_period: float = 0.4,
         camera_weight_decay: float = 0.0,
+        max_gaussian_sigma: float = 0.0,
         *inner_model_args, 
         **inner_model_kwargs,
     ):  
@@ -43,6 +44,7 @@ class CameraCalibrationModel(NerfInterpolation):
 
         self._camera_learning_rate_milestone = camera_learning_rate_period
 
+        self.max_gaussian_sigma = max_gaussian_sigma
 
     ##############################################################
     # Batch transformation helpers
@@ -288,7 +290,7 @@ class CameraCalibrationModel(NerfInterpolation):
         )
 
 
-    def get_blurred_pixel_colors(self, batch: InnerModelBatchInput) -> th.Tensor:
+    def get_blurred_pixel_colors(self, batch: InnerModelBatchInput, sigmas: list[float], sigma: float) -> InnerModelBatchInput:
         """
         Compute the interpolation of the blurred pixel colors
         to get the blurred pixel color used for training, while also
@@ -297,7 +299,9 @@ class CameraCalibrationModel(NerfInterpolation):
         Parameters:
         -----------
             batch: InnerModelBatchInput - the batch of data to transform
-            one of the elements is ray_colors of shape (N, n_sigmas+1, 3)
+            one of the elements is ray_colors of shape (N, n_sigmas, 3) 
+            sigmas: list[float] - the sigmas used for the gaussian blur
+            sigma: float - the sigma to use for the interpolation
         
         Returns:
         -----------
@@ -311,10 +315,9 @@ class CameraCalibrationModel(NerfInterpolation):
         The batch contains 6 different elements.
         One of the elements contains the ray_colors (this is
         what it is called in _step_helper() etc.).
-        ray_colors is a Tensor of shape (N, n_sigmas+1, 3), where
+        ray_colors is a Tensor of shape (N, n_sigmas, 3), where
         N is the number of rays in the batch, and n_sigmas is the number
-        of sigmas used for the blurring. (the +1 is for the original
-        pixel color).
+        of sigmas used for the blurring. 
 
         This method only modifies the ray_colors element of the batch.
         It is modified to have shape (N, 2, 3), where 
@@ -323,18 +326,7 @@ class CameraCalibrationModel(NerfInterpolation):
 
         
         """
-        # TODO implement this method
-        return batch
-
-    ##############################################################
-    # helper methods for the lightning module methods
-
-    def linear_interpolation(self, batch: InnerModelBatchInput, alpha: float) -> InnerModelBatchInput:
-        """
-        Makes a linear interpolation of the 6 entry of the batch between floor(alpha) and ceil(alpha) and returns a batch of the same shape. 
-        """
-        # TODO : (David) LOOK AT THIS
-        # Unpack batch 
+        # Unpack batch
         (
             ray_origs_raw,
             ray_origs_pred,
@@ -343,20 +335,39 @@ class CameraCalibrationModel(NerfInterpolation):
             ray_colors_raw,
             img_idx
         ) = batch
+
+        # Find the sigma closest to the given sigma
+        for index_high, s in enumerate(sigmas):
+            if s < sigma: break
+            index_low = index_high  
+        
+        # ls_1 + (1-l)s_2 = s <=> l = (s - s_2) / (s_1 - s_2)
+        interpolation_coefficient = (sigma - sigmas[index_high]) / (sigmas[index_low] - sigmas[index_high] )
         
         # Make interpolation 
-        # if alpha >= len(ray_colors_raw):
-        #     interpolation = ray_colors_raw[-1]
-        # else: 
-        #     interpolation = ray_colors_raw[th.floor(alpha)] * (1 - alpha%1) + ray_colors_raw[th.ceil(alpha)] * (alpha%1)
-
+        interpolation = ray_colors_raw[:,index_low] * (interpolation_coefficient) + ray_colors_raw[:,index_high] * (1-interpolation_coefficient)
+        
         return (ray_origs_raw,
             ray_origs_pred,
             ray_dirs_raw,
             ray_dirs_pred,
-            th.stack([ray_colors_raw[:,-1],ray_colors_raw[:,-1]], dim=1), #TODO fix interpolation
+            th.stack([interpolation,ray_colors_raw[:,-1]], dim=1), #TODO fix interpolation
             img_idx)
+    
+    @staticmethod
+    def get_sigma_alpha(alpha: th.Tensor, sigma_max: float) -> th.Tensor: 
+        """
+        Calculate an exponential decaying sigmaa value from the alpha value.
+        """
+        sigma = sigma_max * 2 ** (- alpha)
+        if sigma < 1/4:
+            return 0.
+        else: 
+            return sigma
 
+
+    ##############################################################
+    # helper methods for the lightning module methods
 
     def _step_helper(self, batch, batch_idx, purpose: Literal["train", "val"]):
 
@@ -371,16 +382,12 @@ class CameraCalibrationModel(NerfInterpolation):
             self.position_encoder.update_alpha(epoch)
             self.direction_encoder.update_alpha(epoch)
             
-
-
         elif purpose == "val": batch = self.validation_transform(batch)
 
         # interpolate the blurred pixel colors
-        batch = self.get_blurred_pixel_colors(batch)
+        sigma = CameraCalibrationModel.get_sigma_alpha(self.position_encoder.alpha, self.max_gaussian_sigma)
+        batch = self.get_blurred_pixel_colors(batch, self.trainer.datamodule.gaussian_blur_sigmas, sigma) 
 
-        # TODO : (David) LOOK AT THIS 
-        # Get linear interpolation of the valid sigma 
-        batch = self.linear_interpolation(batch, self.position_encoder.alpha)
 
         # unpack batch
         (
@@ -399,11 +406,11 @@ class CameraCalibrationModel(NerfInterpolation):
         assert not th.isnan(ray_colors_pred_coarse).any(), "NaN values in ray_colors_pred_coarse"
 
         # compute the loss
-        loss_fine = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw[:,1])
+        loss_fine = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw[:,-1])
         psnr = -10 * th.log10(loss_fine)
 
         if self.proposal:
-            loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors_raw[:,1]) #TODO fix interpolation
+            loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors_raw[:,-1]) #TODO fix interpolation
             loss = loss_fine + loss_coarse
 
             # Log metrics
@@ -411,12 +418,14 @@ class CameraCalibrationModel(NerfInterpolation):
                         f"{purpose}_loss_coarse": loss_coarse,
                         f"{purpose}_psnr": psnr,
                         "alpha": self.position_encoder.alpha.item(),
+                        "sigma": sigma.item(),
                         })
         else:
             loss = loss_fine
             self.log_dict({f"{purpose}_loss_fine": loss_fine,
                         f"{purpose}_psnr": psnr,
                         "alpha": self.position_encoder.alpha.item(),
+                        "sigma": sigma.item(),
                         })
 
         
