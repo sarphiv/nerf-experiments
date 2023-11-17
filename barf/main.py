@@ -36,8 +36,8 @@ if __name__ == "__main__":
     # Parse arguments
     # NOTE: Default is BARF settings
     parser = argparse.ArgumentParser()
-    # parser.add_argument("--run_name", type=str, default="unknown-run-BARF-mebe")
-    parser.add_argument("--run_name", type=str, default="BARF-test-before-hpc")
+    parser.add_argument("--run_name", type=str, default="unknown-run-BARF-mebe")
+    # parser.add_argument("--run_name", type=str, default="BARF-test-before-hpc")
     parser.add_argument("--rotation_noise", type=float, default=0.0)
     parser.add_argument("--translation_noise", type=float, default=0.0)
     parser.add_argument('--use_fourier', type=bool, default=True, help='Whether to use Fourier features or not')
@@ -192,7 +192,7 @@ if __name__ == "__main__":
         hidden_dim=256,
         position_encoder = positional_encoder,
         direction_encoder = directional_encoder,
-        max_gaussian_sigma=max(args.sigmas_for_blur),
+        max_gaussian_sigma=max(SIGMAS_FOR_BLUR),
         proposal=(args.use_proposal, 64),
         delayed_direction=args.delayed_direction,
         delayed_density=args.delayed_density,
