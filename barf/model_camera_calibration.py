@@ -345,16 +345,16 @@ class CameraCalibrationModel(NerfInterpolation):
         ) = batch
         
         # Make interpolation 
-        if alpha >= len(ray_colors_raw):
-            interpolation = ray_colors_raw[-1]
-        else: 
-            interpolation = ray_colors_raw[th.floor(alpha)] * (1 - alpha%1) + ray_colors_raw[th.ceil(alpha)] * (alpha%1)
+        # if alpha >= len(ray_colors_raw):
+        #     interpolation = ray_colors_raw[-1]
+        # else: 
+        #     interpolation = ray_colors_raw[th.floor(alpha)] * (1 - alpha%1) + ray_colors_raw[th.ceil(alpha)] * (alpha%1)
 
         return (ray_origs_raw,
             ray_origs_pred,
             ray_dirs_raw,
             ray_dirs_pred,
-            th.stack([interpolation, ray_colors_raw[-1]]),
+            th.stack([ray_colors_raw[:,-1],ray_colors_raw[:,-1]], dim=1), #TODO fix interpolation
             img_idx)
 
 
@@ -399,11 +399,11 @@ class CameraCalibrationModel(NerfInterpolation):
         assert not th.isnan(ray_colors_pred_coarse).any(), "NaN values in ray_colors_pred_coarse"
 
         # compute the loss
-        loss_fine = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw)
+        loss_fine = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw[:,1])
         psnr = -10 * th.log10(loss_fine)
 
         if self.proposal:
-            loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors_raw)
+            loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors_raw[:,1]) #TODO fix interpolation
             loss = loss_fine + loss_coarse
 
             # Log metrics

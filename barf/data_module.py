@@ -26,9 +26,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         rotation_noise_sigma: float=1.0,
         translation_noise_sigma: float=1.0,
         camera_noise_seed: Optional[int]=None,
-        gaussian_blur_kernel_size: int=40,
-        gaussian_blur_relative_sigma_start: float=0.,
-        gaussian_blur_relative_sigma_decay: float=1.,
+        gaussian_blur_sigmas: Optional[list[float]]=[0.0], # TODO: change such that default argument is none, and then gaussian blur is disabled
         validation_fraction: float = 1.0,
         validation_fraction_shuffle: Literal["disabled", "random"] | int = "disabled",
         *dataloader_args, **dataloader_kwargs
@@ -70,11 +68,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         self.translation_noise_sigma = translation_noise_sigma
         self.camera_noise_seed = camera_noise_seed
         
-        self.gaussian_blur_kernel_size = gaussian_blur_kernel_size
-        self.gaussian_blur_relative_sigma_start = gaussian_blur_relative_sigma_start
-        self.gaussian_blur_relative_sigma_decay = gaussian_blur_relative_sigma_decay
-
-
+        self.gaussian_blur_sigmas = gaussian_blur_sigmas
         # Store validation dataset splitting arguments
         self.validation_fraction = validation_fraction
         self.validation_fraction_shuffle = validation_fraction_shuffle
@@ -107,9 +101,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
             rotation_noise_sigma=self.rotation_noise_sigma,
             translation_noise_sigma=self.translation_noise_sigma,
             noise_seed=None if self.camera_noise_seed is None else self.camera_noise_seed + hash(purpose),
-            gaussian_blur_kernel_size=self.gaussian_blur_kernel_size,
-            gaussian_blur_relative_sigma_start=self.gaussian_blur_relative_sigma_start,
-            gaussian_blur_relative_sigma_decay=self.gaussian_blur_relative_sigma_decay
+            gaussian_blur_sigmas = self.gaussian_blur_sigmas,
         )
 
         return dataset

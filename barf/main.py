@@ -37,7 +37,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="lauge testing kabsch algorithm - screw everything up"
+        name="testing new dataset"
     )
 
 
@@ -84,7 +84,7 @@ if __name__ == "__main__":
 
 
     # Set up trainer
-    # th.set_float32_matmul_precision("medium")
+    th.set_float32_matmul_precision("high")
 
     trainer = pl.Trainer(
         accelerator="auto",
@@ -106,7 +106,8 @@ if __name__ == "__main__":
                 validation_image_names=["r_2", "r_84"],
                 reconstruction_batch_size=BATCH_SIZE,
                 reconstruction_num_workers=NUM_WORKERS,
-                metric_name="val_img",
+                metric_name_val="val_img",
+                metric_name_train="train_img",
             ),
             # LogCameraExtrinsics(
             #     wandb_logger=wandb_logger,
