@@ -172,11 +172,11 @@ class LogCameraExtrinsics(Callback):
         direction_colors_raw = blue.repeat(n_images, 1)
 
 
-        self.logger.experiment.log({
-            self.metric_name: wandb.Object3D.from_numpy(
-                1 + camera_origs_raw.cpu().numpy().astype(float),
-            )
-        })
+        # self.logger.experiment.log({
+        #     self.metric_name: wandb.Object3D.from_numpy(
+        #         1 + camera_origs_raw.cpu().numpy().astype(float),
+        #     )
+        # })
 
         # Log images
         self.logger.experiment.log({

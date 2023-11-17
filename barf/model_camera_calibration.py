@@ -3,6 +3,7 @@ from typing import Literal, Optional, cast
 import torch as th
 import torch.nn as nn
 import pytorch_lightning as pl
+from torch.optim.lr_scheduler import ExponentialLR
 
 from dataset import DatasetOutput
 from data_module import ImagePoseDataModule
@@ -337,12 +338,13 @@ class CameraCalibrationModel(NerfInterpolation):
         ) = batch
 
         # Find the sigma closest to the given sigma
+        index_low = 0
         for index_high, s in enumerate(sigmas):
             if s < sigma: break
             index_low = index_high  
         
         # ls_1 + (1-l)s_2 = s <=> l = (s - s_2) / (s_1 - s_2)
-        interpolation_coefficient = (sigma - sigmas[index_high]) / (sigmas[index_low] - sigmas[index_high] )
+        interpolation_coefficient = (sigma - sigmas[index_high]) / (sigmas[index_low] - sigmas[index_high] + 1e-8)
         
         # Make interpolation 
         interpolation = ray_colors_raw[:,index_low] * (interpolation_coefficient) + ray_colors_raw[:,index_high] * (1-interpolation_coefficient)
@@ -361,7 +363,7 @@ class CameraCalibrationModel(NerfInterpolation):
         """
         sigma = sigma_max * 2 ** (- alpha)
         if sigma < 1/4:
-            return 0.
+            return th.tensor([0.], device=alpha.device)
         else: 
             return sigma
 
@@ -463,3 +465,37 @@ class CameraCalibrationModel(NerfInterpolation):
                 ]
             )
         return optimizer
+    
+    # TODO: We would like to use different schedulars for each segment, but then each segment needs its own optimizer. 
+    # Does the following work with automatic backwards? 
+    # def cofigure_optimizers(self):
+    #     # Optimizers 
+    #     coarse_optimizer = th.optim.Adam([{"params": self.model_coarse.parameters(), "lr": self.learning_rate}])
+    #     camera_optimizer = th.optim.Adam([{"params": self.camera_extrinsics.parameters(), "lr": self.learning_rate}])
+        
+    #     if self.proposal:
+    #         fine_optimizer = th.optim.Adam([{"params": self.model_coarse.parameters(), "lr": self.learning_rate}])
+
+    #     # Calculate decay factor
+    #     # Solve: start : s, end : e, decay : d, number of epochs : n 
+    #     # s * d^n = e <=> d = (e/s)^(1/n)
+    #     decay_factor = self.learning_rate_end / self.learning_rate_start ** (1 / self.learning_rate_stop_epoch)
+    #     decay_factor_camera = self.camera_learning_rate_end / self.camera_learning_rate_start ** (1 / self.camera_learning_rate_stop_epoch)
+
+    #     # Schedulers
+    #     coarse_scheduler = ExponentialLR(coarse_optimizer, gamma=decay_factor)
+    #     camera_scheduler = ExponentialLR(camera_optimizer, gamma=decay_factor_camera)
+        
+    #     if self.proposal: 
+    #         fine_scheduler = ExponentialLR(fine_optimizer, gamma=decay_factor)
+
+    #         return [
+    #                 {'optimizer': coarse_optimizer, 'scheduler': coarse_scheduler},
+    #                 {'optimizer': fine_optimizer, 'scheduler': fine_scheduler},
+    #                 {'optimizer': camera_optimizer, 'scheduler': camera_scheduler},
+    #             ]   
+    #     else:  
+    #         return [
+    #                 {'optimizer': coarse_optimizer, 'scheduler': coarse_scheduler},
+    #                 {'optimizer': camera_optimizer, 'scheduler': camera_scheduler},
+    #             ] 
