@@ -28,8 +28,6 @@ class CameraCalibrationModel(NerfInterpolation):
     ):  
         super().__init__(*inner_model_args, **inner_model_kwargs)
 
-        # self.automatic_optimization = False
-
         self.position_encoder = cast(BarfPositionalEncoding, self.position_encoder)
         self.direction_encoder = cast(BarfPositionalEncoding, self.direction_encoder)
 
@@ -353,7 +351,7 @@ class CameraCalibrationModel(NerfInterpolation):
             ray_origs_pred,
             ray_dirs_raw,
             ray_dirs_pred,
-            th.stack([interpolation,ray_colors_raw[:,-1]], dim=1), #TODO fix interpolation
+            th.stack([interpolation, ray_colors_raw[:,-1]], dim=1),
             img_idx)
     
     @staticmethod

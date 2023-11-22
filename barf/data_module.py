@@ -77,7 +77,9 @@ class ImagePoseDataModule(pl.LightningDataModule):
         self.dataloader_args = dataloader_args
         self.dataloader_kwargs = dataloader_kwargs
 
-
+    @staticmethod
+    def _worker_init_fn(worker_id):
+        os.sched_setaffinity(0, range(os.cpu_count())) 
 
     def _get_dataset(self, purpose: Literal["train", "val", "test"]) -> ImagePoseDataset:
         """Get dataset for given purpose.
@@ -181,6 +183,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
     def train_dataloader(self):
         return DataLoader(
             self.dataset_train,
+            # worker_init_fn=ImagePoseDataModule._worker_init_fn,
             *self.dataloader_args,
             **self.dataloader_kwargs
         )
@@ -233,6 +236,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         # Return data loader of validation dataset
         return DataLoader(
             dataset,
+            # worker_init_fn=ImagePoseDataModule._worker_init_fn,
             *args,
             **kwargs
         )
@@ -241,6 +245,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         args, kwargs = self._disable_shuffle_arg(self.dataloader_args, self.dataloader_kwargs)
         return DataLoader(
             self.dataset_test,
+            # worker_init_fn=ImagePoseDataModule._worker_init_fn,
             *args,
             **kwargs
         )

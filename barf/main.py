@@ -49,7 +49,7 @@ if __name__ == "__main__":
     # parser.add_argument('--sigmas_for_blur', type=list, default=[0.0], help='Sigmas for the gaussian blur')
     # parser.add_argument('--sigmas_for_blur', type=list, default=[2**(2), 2**(1), 2**(0), 2**(-1), 2**(-2), 0.0], help='Sigmas for the gaussian blur')
     parser.add_argument('--use_blur', type=bool, action=argparse.BooleanOptionalAction, default=False, help='Whether to use blur or not')
-    parser.add_argument('--camera_learning_rate_start', type=float, default=1e-5, help='Learning rate for the camera') #This should be 1e-3 if like barf, but that does not work... 
+    parser.add_argument('--camera_learning_rate_start', type=float, default=1e-3, help='Learning rate for the camera') #This should be 1e-3 if like barf, but that does not work... 
     parser.add_argument('--camera_learning_rate_end', type=float, default=1e-5, help='Learning rate for the camera')
     parser.add_argument('--initial_fourier_features', type=float, default=0.0, help="Active Fourier features initially")
     parser.add_argument('--start_fourier_features_iterations', type=int, default=20000, help="Start increasing the number of fourier features after this many iterations")
