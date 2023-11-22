@@ -42,7 +42,7 @@ if __name__ == "__main__":
     # Parse arguments
     # NOTE: Default is BARF settings
     parser = argparse.ArgumentParser()
-    parser.add_argument("--run_name", type=str, default="unknown-run-BARF-mebe")
+    parser.add_argument("--name", type=str, default="unknown-run-BARF-mebe")
     # parser.add_argument("--run_name", type=str, default="BARF-test-before-hpc")
     parser.add_argument("--rotation_noise", type=float, default=0.15)
     parser.add_argument("--translation_noise", type=float, default=0.15) #0.00625)
