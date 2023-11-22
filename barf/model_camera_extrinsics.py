@@ -1,6 +1,7 @@
 import torch as th
 import torch.nn as nn
 
+from magic import MAGIC_NUMBER_THE_SECOND
 
 class CameraExtrinsics(nn.Module):
     def __init__(self, n_train_images: int) -> None:
@@ -55,7 +56,7 @@ class CameraExtrinsics(nn.Module):
         Forwards pass: Gets the origins in the predicted camera space
         """
         # Translation
-        t = self.translation[i]
+        t = self.translation[i] / MAGIC_NUMBER_THE_SECOND # TODO DONT 
          
         # Create the rotation matrix
         

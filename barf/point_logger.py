@@ -113,9 +113,9 @@ class LogCameraExtrinsics(Callback):
         if step < self.logging_start:
             return
 
-        # If not at the right step, return
-        if step < self.logging_milestone:
-            return
+        # # If not at the right step, return
+        # if step < self.logging_milestone:
+        #     return
 
         # Update logging milestop and log
         self.logging_milestone = step + self._get_next_delay(step)
