@@ -25,6 +25,14 @@ from model_interpolation_architecture import BarfPositionalEncoding
 # TODO: Fix image logger - see that file
 # TODO: Remove all the runs in WANDB (davids are gone)
 # TODO: Use decay of learningrate - Check if it works in the bottom of model_camera_calibration - for camera extrinsics go as default from 1e-3 to 1e-5. For normal nerf from 5e-4 to 1e-4 
+# TODO: dataset.py: Rewrite datamodule to save the transformed images as (blurred images e.g)
+#       such that it can be easily read when instantiating a dataset with sigmas that
+#       have already been calculated once. This will save a lot of time during startup of a run.
+#       May not be a good idea tho, as it would require a lot of memory to store all the images??
+# TODO: We should try to run an experiment where we simulate BARF,
+#       but without our space transformation to the unit sphere.
+# TODO: Run experiment where we use the so3_to_SO3 from BARF - see Lie_barf.py
+#       
 
 # Converter that takes iterations to epochs to adjust alpha
 def convert_iterations_to_epochs(iterations: int, batch_size: int, dataset_size_samples: int) -> float:
