@@ -33,14 +33,7 @@ class NerfInterpolation(pl.LightningModule):
         learning_rate_period: float = 0.4,
         weight_decay: float = 0.0
     ):  
-        """
-        barf: tuple[bool, float, float, float] - whether to use barf weighting scheme and the parameters for it
-            1: use barf weighting scheme or not
-            2: the initial value of alpha
-            3: the final value of alpha
-            4: the decay start epoch
-            5: the decay end epoch
-        """
+
 
         super().__init__()
         # self.save_hyperparameters()
@@ -81,7 +74,7 @@ class NerfInterpolation(pl.LightningModule):
             # Fine model -> actual prediction 
             self.model_fine = NerfModel(
                 n_hidden=n_hidden,
-                hidden_dim=256,
+                hidden_dim=hidden_dim,
                 delayed_direction=delayed_direction,
                 delayed_density=delayed_density,
                 n_segments=n_segments,
@@ -111,7 +104,7 @@ class NerfInterpolation(pl.LightningModule):
             
         Returns:
         --------
-            t_start: Tensor of shape (batch_size, samples_per_ray) - the t value for the begining of the bin
+            t_start: Tensor of shape (batch_size, samples_per_ray) - the t value for the beginning of the bin
             t_end: Tensor of shape (batch_size, samples_per_ray) - the t value for the end of the bin
         """
         t_start = t 
@@ -315,63 +308,6 @@ class NerfInterpolation(pl.LightningModule):
         
         return rgb, weights, sample_dist
 
-    
-
-    # def _proposal_optimizer_step(self, loss: th.Tensor):
-    #     pass 
-    #     # self._proposal_optimizer.zero_grad()
-    #     # self.manual_backward(loss, retain_graph=True)
-    #     # self._proposal_optimizer.step()
-
-
-    # def _radiance_optimizer_step(self, loss: th.Tensor):
-    #     self._optimizer.zero_grad()
-    #     self.manual_backward(loss, retain_graph=True)
-    #     self._optimizer.step()
-
-
-    # def _proposal_scheduler_step(self, batch_idx: int):
-    #     pass 
-        # epoch_fraction = self.trainer.current_epoch + batch_idx/self.trainer.num_training_batches
-
-        # if (
-        #     epoch_fraction >= self._proposal_learning_rate_milestone and
-        #     epoch_fraction <= self.proposal_learning_rate_stop_epoch
-        # ):
-        #     self._proposal_learning_rate_milestone += self.proposal_learning_rate_period
-        #     self._proposal_learning_rate_scheduler.step()
-
-
-    # def _radiance_scheduler_step(self, batch_idx: int):
-    #     epoch_fraction = self.trainer.current_epoch + batch_idx/self.trainer.num_training_batches
-
-    #     if (
-    #         epoch_fraction >= self._learning_rate_milestone and
-    #         epoch_fraction <= self.learning_rate_stop_epoch
-    #     ):
-    #         self._learning_rate_milestone += self.learning_rate_period
-    #         self._scheduler.step()
-
-    
-    # def _get_logging_losses(
-    #     self, 
-    #     stage: Literal["train", "val", "test"], 
-    #     proposal_loss: th.Tensor, 
-    #     radiance_loss: th.Tensor, 
-    #     *args, 
-    #     **kwargs
-    # ) -> dict[str, th.Tensor]:
-    #     # Calculate PSNR
-    #     # NOTE: Cannot calculate SSIM because it relies on image patches
-    #     # NOTE: Cannot calculate LPIPS because it relies on image patches
-    #     psnr = -10 * th.log10(radiance_loss)
-
-    #     # Return losses to be logged
-    #     return {
-    #         f"{stage}_proposal_loss": proposal_loss,
-    #         f"{stage}_radiance_loss": radiance_loss,
-    #         f"{stage}_psnr": psnr,
-    #     }
         
 
     def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:

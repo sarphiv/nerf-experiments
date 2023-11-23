@@ -29,6 +29,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         gaussian_blur_sigmas: Optional[list[float]]=[0.0], # TODO: change such that default argument is none, and then gaussian blur is disabled
         validation_fraction: float = 1.0,
         validation_fraction_shuffle: Literal["disabled", "random"] | int = "disabled",
+        verbose=False,
         *dataloader_args, **dataloader_kwargs
     ):
         """Initialize the data module.
@@ -77,6 +78,9 @@ class ImagePoseDataModule(pl.LightningDataModule):
         self.dataloader_args = dataloader_args
         self.dataloader_kwargs = dataloader_kwargs
 
+        # print progress in dataset
+        self.verbose = verbose
+
 
 
     def _get_dataset(self, purpose: Literal["train", "val", "test"]) -> ImagePoseDataset:
@@ -102,6 +106,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
             translation_noise_sigma=self.translation_noise_sigma,
             noise_seed=None if self.camera_noise_seed is None else self.camera_noise_seed + hash(purpose),
             gaussian_blur_sigmas = self.gaussian_blur_sigmas,
+            verbose=self.verbose
         )
 
         return dataset

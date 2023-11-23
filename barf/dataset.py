@@ -73,7 +73,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
                 print(msg)
 
         # Store image dimensions
-        self.image_height, self.image_width = image_width, image_height
+        self.image_height, self.image_width = image_height, image_width
         self.image_batch_size = self.image_width * self.image_height
 
         # Store paths
@@ -87,7 +87,15 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         self.noise_seed = noise_seed
         self.gaussian_blur_sigmas = gaussian_blur_sigmas
 
-        print_verbose("Loading images...")
+
+        print_verbose("Loading camera info...")
+
+        # Load camera info
+        self.focal_length, self.camera_to_worlds = ImagePoseDataset._load_camera_info(
+            self.camera_info_path, 
+            self.image_width,
+        )
+
         
         # Load images
         (self.images,
@@ -96,18 +104,10 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
          self.index_to_index,
          self.n_images) = ImagePoseDataset._load_images(
             self.images_path, 
-            self.image_width, 
             self.image_height,
+            self.image_width, 
             self.gaussian_blur_sigmas,
             verbose,
-        )
-
-        print_verbose("Loading camera info...")
-
-        # Load camera info
-        self.focal_length, self.camera_to_worlds = ImagePoseDataset._load_camera_info(
-            self.camera_info_path, 
-            self.image_width,
         )
 
         # Transform camera to world matrices
@@ -129,7 +129,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         self.camera_origins, self.camera_directions = ImagePoseDataset._get_cam_origs_and_directions(self.camera_to_worlds)
 
         # Create mesh grid for the directions 
-        meshgrid = ImagePoseDataset._get_directions_meshgrid(self.image_width, self.image_height, self.focal_length)
+        meshgrid = ImagePoseDataset._get_directions_meshgrid(self.image_height, self.image_width, self.focal_length)
         
         # Transform the unit directions to a direction for each camera
         self.ray_origins, self.ray_directions = ImagePoseDataset._meshgrid_to_world(meshgrid, self.camera_to_worlds)
@@ -157,7 +157,11 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
     ######### static methods ###############
 
     @staticmethod
-    def _load_images(images_path: str, img_height: int, img_width, sigmas: list[float], verbose=False
+    def _load_images(images_path: str,
+                     image_height: int,
+                     image_width,
+                     sigmas: list[float],
+                     verbose=False
                      ) -> tuple[th.Tensor, dict[str, int], dict[int, str], dict[int, int], int]: 
         """
         Opens and returns the desired images (with gaussian smoothing applied). 
@@ -215,10 +219,10 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         images = [Image.open(os.path.join(images_path, path)) for path in iterator]
 
         # Resize each image 
-        images = [img.resize((img_width, img_height), Image.BICUBIC) for img in images]
+        images = [img.resize((image_width, image_height), Image.BICUBIC) for img in images]
 
         # Convert alpha to white background
-        white_image = Image.new("RGBA", (img_width, img_height), (255, 255, 255, 255))
+        white_image = Image.new("RGBA", (image_width, image_height), (255, 255, 255, 255))
         images = [Image.alpha_composite(white_image, img).convert('RGB') for img in images]
 
         # Apply gaussian smoothing
@@ -277,12 +281,18 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
                 that maps from image name to the camera to world matrix
 
         """
-
-        def _scale_c2w_mat(c2w: list[list[float]]) -> th.Tensor:
+        def _process_c2w(c2w, path) -> th.Tensor:
             c2w = th.tensor(c2w)
-            c2w[:3, 3] *= 1/c2w[-1, -1]
-            c2w[-1, -1] = 1.0
+            if not th.allclose(c2w[-1, -1], th.tensor(1.)):
+                raise ValueError(f"camera_to_world matrices are expected to have scale 1, found {c2w[-1, -1].item()} in {path}")
+            c2w_iden = th.matmul(c2w[:3, :3], c2w[:3, :3].T)
+            identity = th.eye(3)
+
+            if not th.allclose(c2w_iden, identity, atol=2e-6, rtol=0.):
+                raise ValueError(f"camera_to_world matrices are expected to be orthogonal, found error {(c2w_iden - identity).abs().max()} in {path}") 
+
             return c2w
+
  
         # Read info file
         camera_data = json.loads(open(camera_info_path).read())
@@ -291,8 +301,8 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         focal_length = image_width / 2 / math.tan(camera_data["camera_angle_x"] / 2)
         # Get camera to world matrices
         # NOTE: Projections are scaled to have scale 1
-        camera_to_worlds: dict[str, th.Tensor] = { 
-            pathlib.PurePath(path).stem: _scale_c2w_mat(c2w)
+        camera_to_worlds: dict[str, th.Tensor] = {
+            pathlib.PurePath(path).stem: _process_c2w(c2w, path)
             for frame in camera_data["frames"] 
             for path, rotation, c2w in [frame.values()] 
         }
@@ -356,11 +366,14 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
 
         # Move origin to average position of all cameras and scale world coordinates
         # by the 3*the maximum distance of any two cameras
+
+        camera_to_worlds_output = th.stack([(camera_to_worlds[image_index_to_name[index]] - translate_matrix)/scale_matrix 
+                                                        for index in range(n_images)],
+                                                        dim = 0
+                                                        )  
+
         return (
-            th.stack([(camera_to_worlds[image_index_to_name[index]] - translate_matrix)/scale_matrix 
-                      for index in range(n_images)],
-                      dim = 0
-                      ),
+            camera_to_worlds_output,
             space_transform_scale,
             space_transform_translate,
         )
@@ -389,7 +402,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         return camera_origins, camera_directions
 
     @staticmethod
-    def _get_directions_meshgrid(image_width: int, image_height: int, focal_length: float) -> th.Tensor:
+    def _get_directions_meshgrid(image_height: int, image_width: int, focal_length: float) -> th.Tensor:
         """
         Create direction vectors in camera coordinates whose lines intersect with the image plane at the pixel centers.
 
@@ -399,8 +412,8 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
 
         Parameters:
         -----------
-            * `image_width`: `int` - width of the images
-            * `image_height`: `int` - height of the images
+            * `image_height`: `int` - height of the images (H)
+            * `image_width`: `int` - width of the images (W)
             * `focal_length`: `float` - the focal length of the camera (see description of focal length in `_load_camera_info()`)
         
 
