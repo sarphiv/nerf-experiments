@@ -113,9 +113,9 @@ class LogCameraExtrinsics(Callback):
         if step < self.logging_start:
             return
 
-        # If not at the right step, return
-        if step < self.logging_milestone:
-            return
+        # # If not at the right step, return
+        # if step < self.logging_milestone:
+        #     return
 
         # Update logging milestop and log
         self.logging_milestone = step + self._get_next_delay(step)
@@ -156,8 +156,8 @@ class LogCameraExtrinsics(Callback):
         
         # NOTE: Red is wrong everything, green is correct origin, blue is correct direction
         # NOTE: See that everything that is outside one standard deviation of the original origins are red, and within a standard devition we graduate from green to red
-        origins_pred_errors = 255 * th.norm(camera_origs_raw - camera_origs_pred, dim=1).view(-1, 1) / th.std(camera_origs_raw, dim=0).norm()
-        origins_pred_errors = origins_pred_errors.clip(0, 255)
+        origins_pred_errors = th.norm(camera_origs_raw - camera_origs_pred, dim=1).view(-1, 1) / th.std(camera_origs_raw, dim=0).norm()
+        origins_pred_errors = origins_pred_errors.clip(0, 1)
         origins_pred_colors = red * origins_pred_errors + green*(1- origins_pred_errors) #th.hstack((origins_pred_errors, 255 - origins_pred_errors, th.zeros(n_images, 1, device=model.device)))
 
         # Start and stop points for the direction arrows 

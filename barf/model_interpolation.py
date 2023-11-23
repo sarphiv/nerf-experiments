@@ -11,7 +11,8 @@ from model_interpolation_architecture import NerfModel, PositionalEncoding
 #  (origin, direction, pixel_color, pixel_relative_blur)
 InnerModelBatchInput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]
 
-MAGIC_NUMBER = 7
+# MAGIC_NUMBER = 7#/24
+from magic import MAGIC_NUMBER
 
 class NerfInterpolation(pl.LightningModule):
     def __init__(
@@ -27,10 +28,9 @@ class NerfInterpolation(pl.LightningModule):
         delayed_direction: bool, 
         delayed_density: bool, 
         n_segments: int,
-        learning_rate: float = 1e-4,
-        learning_rate_stop_epoch: int = 10,
-        learning_rate_decay: float = 0.5,
-        learning_rate_period: float = 0.4,
+        learning_rate_start: float = 1e-4,
+        learning_rate_stop: float = 1e-4,
+        learning_rate_stop_step: int = -1,
         weight_decay: float = 0.0
     ):  
 
@@ -39,11 +39,11 @@ class NerfInterpolation(pl.LightningModule):
         # self.save_hyperparameters()
 
         # Hyper parameters for the optimizer 
-        self.learning_rate = learning_rate
-        self.learning_rate_stop_epoch = learning_rate_stop_epoch
-        self.learning_rate_decay = learning_rate_decay
-        self.learning_rate_period = learning_rate_period
-        self._learning_rate_milestone = learning_rate_period
+        self.learning_rate_start = learning_rate_start
+        self.learning_rate_stop = learning_rate_stop
+        self.learning_rate_stop_step = learning_rate_stop_step
+
+
         self.weight_decay = weight_decay
 
         # The near and far sphere distances 

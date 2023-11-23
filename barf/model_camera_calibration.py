@@ -1,9 +1,11 @@
 from typing import Literal, Optional, cast
+import warnings
 
 import torch as th
 import torch.nn as nn
 import pytorch_lightning as pl
 from torch.optim.lr_scheduler import ExponentialLR
+from torch.optim.optimizer import Optimizer
 
 from dataset import DatasetOutput
 from data_module import ImagePoseDataModule
@@ -17,10 +19,9 @@ class CameraCalibrationModel(NerfInterpolation):
     def __init__(
         self, 
         n_training_images: int,
-        camera_learning_rate: float,
-        camera_learning_rate_stop_epoch: int = 10,
-        camera_learning_rate_decay: float = 0.999,
-        camera_learning_rate_period: float = 0.4,
+        camera_learning_rate_start: float,
+        camera_learning_rate_stop: float,
+        camera_learning_rate_stop_step: int = -1,
         camera_weight_decay: float = 0.0,
         max_gaussian_sigma: float = 0.0,
         *inner_model_args, 
@@ -28,7 +29,7 @@ class CameraCalibrationModel(NerfInterpolation):
     ):  
         super().__init__(*inner_model_args, **inner_model_kwargs)
 
-        # self.automatic_optimization = False
+
 
         self.position_encoder = cast(BarfPositionalEncoding, self.position_encoder)
         self.direction_encoder = cast(BarfPositionalEncoding, self.direction_encoder)
@@ -37,13 +38,11 @@ class CameraCalibrationModel(NerfInterpolation):
         self.camera_extrinsics = CameraExtrinsics(n_training_images)
 
         # Store hyperparameters
-        self.camera_learning_rate = camera_learning_rate
-        self.camera_learning_rate_stop_epoch = camera_learning_rate_stop_epoch
-        self.camera_learning_rate_decay = camera_learning_rate_decay
-        self.camera_learning_rate_period = camera_learning_rate_period
-        self.camera_weight_decay = camera_weight_decay
+        self.camera_learning_rate_start = camera_learning_rate_start
+        self.camera_learning_rate_stop = camera_learning_rate_stop
+        self.camera_learning_rate_stop_step = camera_learning_rate_stop_step
 
-        self._camera_learning_rate_milestone = camera_learning_rate_period
+        self.camera_weight_decay = camera_weight_decay
 
         self.max_gaussian_sigma = max_gaussian_sigma
 
@@ -353,7 +352,7 @@ class CameraCalibrationModel(NerfInterpolation):
             ray_origs_pred,
             ray_dirs_raw,
             ray_dirs_pred,
-            th.stack([interpolation,ray_colors_raw[:,-1]], dim=1), #TODO fix interpolation
+            th.stack([interpolation, ray_colors_raw[:,-1]], dim=1),
             img_idx)
     
     @staticmethod
@@ -447,55 +446,86 @@ class CameraCalibrationModel(NerfInterpolation):
 
 
     def configure_optimizers(self):
-
+        # Create optimizer and schedular 
         if self.proposal:
 
             optimizer = th.optim.Adam(
                 [
-                    {"params": self.model_coarse.parameters(), "lr": self.learning_rate},
-                    {"params": self.model_fine.parameters(), "lr": self.learning_rate},
-                    {"params": self.camera_extrinsics.parameters(), "lr": self.camera_learning_rate}
+                    {"params": self.model_coarse.parameters(), "lr": self.learning_rate_start},
+                    {"params": self.model_fine.parameters(), "lr": self.learning_rate_start},
+                    {"params": self.camera_extrinsics.parameters(), "lr": self.camera_learning_rate_start}
                 ]
+            )
+
+            lr_scheduler = SchedulerLeNice(
+                optimizer, 
+                start_LR=[self.learning_rate_start, self.learning_rate_start, self.camera_learning_rate_start], 
+                stop_LR= [self.learning_rate_stop,  self.learning_rate_stop,  self.camera_learning_rate_stop], 
+                number_of_steps=[self.learning_rate_stop_step, self.learning_rate_stop_step, self.camera_learning_rate_stop_step],
+                verbose=False
             )
         else:
             optimizer = th.optim.Adam(
                 [
-                    {"params": self.model_coarse.parameters(), "lr": self.learning_rate},
-                    {"params": self.camera_extrinsics.parameters(), "lr": self.learning_rate},
+                    {"params": self.model_coarse.parameters(), "lr": self.learning_rate_start},
+                    {"params": self.camera_extrinsics.parameters(), "lr": self.learning_rate_start},
                 ]
             )
-        return optimizer
+            lr_scheduler = SchedulerLeNice(
+                optimizer, 
+                start_LR=[self.learning_rate_start, self.camera_learning_rate_start], 
+                stop_LR= [self.learning_rate_stop,  self.camera_learning_rate_stop], 
+                number_of_steps=[self.learning_rate_stop_step, self.camera_learning_rate_stop_step],
+                verbose=False
+            )
+        
+
+        lr_scheduler_config = {
+            # REQUIRED: The scheduler instance
+            "scheduler": lr_scheduler,
+            # The unit of the scheduler's step size, could also be 'step'.
+            # 'epoch' updates the scheduler on epoch end whereas 'step'
+            # updates it after a optimizer update.
+            "interval": "step",
+            # How many epochs/steps should pass between calls to
+            # `scheduler.step()`. 1 corresponds to updating the learning
+            # rate after every epoch/step.
+            "frequency": 1,
+            # If using the `LearningRateMonitor` callback to monitor the
+            # learning rate progress, this keyword can be used to specify
+            # a custom logged name
+            "name": "le_nice_lr_scheduler",
+        }
+
+        return {"optimizer": optimizer, "lr_scheduler": lr_scheduler_config}
     
-    # TODO: We would like to use different schedulars for each segment, but then each segment needs its own optimizer. 
-    # Does the following work with automatic backwards? 
-    # def cofigure_optimizers(self):
-    #     # Optimizers 
-    #     coarse_optimizer = th.optim.Adam([{"params": self.model_coarse.parameters(), "lr": self.learning_rate}])
-    #     camera_optimizer = th.optim.Adam([{"params": self.camera_extrinsics.parameters(), "lr": self.learning_rate}])
+class SchedulerLeNice(th.optim.lr_scheduler.LRScheduler):
+    def __init__(self, optimizer: th.optim.Optimizer, start_LR: list[float], stop_LR: list[float], number_of_steps: list[float], verbose=False) -> None:
+        # Store extra parameters 
+        self.start_LR = start_LR
+        self.stop_LR = stop_LR
+        self.number_of_steps = number_of_steps
+
+        # Calculate decay factors
+        # Solve: start : s, end : e, decay : d, number of epochs : n 
+        # s * d^n = e <=> d = (e/s)^(1/n)
+        self.decay_factors = []
+        for i, _ in enumerate(optimizer.param_groups):
+            self.decay_factors.append((self.stop_LR[i] / self.start_LR[i]) ** (1 / self.number_of_steps[i]))
+
+        super().__init__(optimizer,verbose=verbose)
         
-    #     if self.proposal:
-    #         fine_optimizer = th.optim.Adam([{"params": self.model_coarse.parameters(), "lr": self.learning_rate}])
 
-    #     # Calculate decay factor
-    #     # Solve: start : s, end : e, decay : d, number of epochs : n 
-    #     # s * d^n = e <=> d = (e/s)^(1/n)
-    #     decay_factor = self.learning_rate_end / self.learning_rate_start ** (1 / self.learning_rate_stop_epoch)
-    #     decay_factor_camera = self.camera_learning_rate_end / self.camera_learning_rate_start ** (1 / self.camera_learning_rate_stop_epoch)
 
-    #     # Schedulers
-    #     coarse_scheduler = ExponentialLR(coarse_optimizer, gamma=decay_factor)
-    #     camera_scheduler = ExponentialLR(camera_optimizer, gamma=decay_factor_camera)
-        
-    #     if self.proposal: 
-    #         fine_scheduler = ExponentialLR(fine_optimizer, gamma=decay_factor)
+    
+    def get_lr(self):
+        # Original function 
+        if not self._get_lr_called_within_step:
+            warnings.warn("To get the last learning rate computed by the scheduler, "
+                          "please use `get_last_lr()`.", UserWarning)
 
-    #         return [
-    #                 {'optimizer': coarse_optimizer, 'scheduler': coarse_scheduler},
-    #                 {'optimizer': fine_optimizer, 'scheduler': fine_scheduler},
-    #                 {'optimizer': camera_optimizer, 'scheduler': camera_scheduler},
-    #             ]   
-    #     else:  
-    #         return [
-    #                 {'optimizer': coarse_optimizer, 'scheduler': coarse_scheduler},
-    #                 {'optimizer': camera_optimizer, 'scheduler': camera_scheduler},
-    #             ] 
+        # Update lr for each individually 
+        return [(group['lr'] * self.decay_factors[i] if self._step_count < self.number_of_steps[i] else group["lr"]) for i, group in enumerate(self.optimizer.param_groups)]
+
+    def _get_closed_form_lr(self):
+        return [base_lr * self.decay_factors[i] ** max(self._step_count, self.number_of_steps[i]) for i, base_lr in enumerate(self.start_LR)]

@@ -219,7 +219,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         images = [Image.open(os.path.join(images_path, path)) for path in iterator]
 
         # Resize each image 
-        images = [img.resize((image_width, image_height), Image.BICUBIC) for img in images]
+        images = [img.resize((image_width, image_height), Image.BILINEAR) for img in images]
 
         # Convert alpha to white background
         white_image = Image.new("RGBA", (image_width, image_height), (255, 255, 255, 255))
@@ -546,11 +546,11 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         # ))
         
         # Create N random translation vectors with the given noise level
-        translation_noise = th.randn((len(camera_origins), 3))*translation_noise_sigma
+        translation_noise = th.randn((len(camera_origins), 3), generator=noise_generator)*translation_noise_sigma
 
         # Apply translations 
         camera_origins_noisy    = camera_origins    + translation_noise
-        ray_origins_noisy       = ray_origins       + translation_noise.unsqueeze(1)
+        ray_origins_noisy       = ray_origins       + translation_noise.unsqueeze(1) 
         
         # Apply rotations 
         camera_directions_noisy = th.matmul(rotation_noise, camera_directions.unsqueeze(-1)).squeeze(-1)
