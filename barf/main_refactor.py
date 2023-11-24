@@ -55,9 +55,10 @@ if __name__ == "__main__":
 
 
     # Set up data module
-    BATCH_SIZE = 1024
+    BATCH_SIZE = 1024*2
     NUM_WORKERS = 4
-    IMAGE_SIZE = 400
+    IMAGE_SIZE = 60
+    # IMAGE_SIZE = 400
     SIGMAS_FOR_BLUR = [0.0]
     
     dm = ImagePoseDataModule(
@@ -96,7 +97,8 @@ if __name__ == "__main__":
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
                 logging_start=0.002,
-                delay_start=1/16,
+                delay_start=1/8,
+                # delay_start=1/16,
                 delay_end=1.,
                 delay_taper=5.0,
                 train_image_names=["r_1", "r_23"],
@@ -106,17 +108,17 @@ if __name__ == "__main__":
                 metric_name_val="val_img",
                 metric_name_train="train_img",
             ),
-            LogCameraExtrinsics(
-                wandb_logger=wandb_logger,
-                logging_start=0.000,
-                delay_start=1/200,
-                delay_end=1/16,
-                delay_taper=4.0,
-                batch_size=BATCH_SIZE,
-                num_workers=NUM_WORKERS,
-                ray_direction_length=1/10,
-                metric_name="train_point",
-            ),
+            # LogCameraExtrinsics(
+            #     wandb_logger=wandb_logger,
+            #     logging_start=0.000,
+            #     delay_start=1/200,
+            #     delay_end=1/16,
+            #     delay_taper=4.0,
+            #     batch_size=BATCH_SIZE,
+            #     num_workers=NUM_WORKERS,
+            #     ray_direction_length=1/10,
+            #     metric_name="train_point",
+            # ),
             LearningRateMonitor(
                 logging_interval="step"
             ),
@@ -138,14 +140,16 @@ if __name__ == "__main__":
 
 
     position_encoder = BarfPositionalEncoding(levels=10,
-                                                alpha_start=0,
+                                                # alpha_start=0,
+                                                alpha_start=10,
                                                 alpha_increase_start_epoch=1.28,
                                                 alpha_increase_end_epoch=6.4,
                                                 include_identity=True,
                                                 scale=1.
                                                 )
     direction_encoder = BarfPositionalEncoding(levels=4,
-                                                    alpha_start=0,
+                                                    alpha_start=4,
+                                                    # alpha_start=0,
                                                     alpha_increase_start_epoch=1.28,
                                                     alpha_increase_end_epoch=6.4,
                                                     include_identity=True,
@@ -180,29 +184,29 @@ if __name__ == "__main__":
     )
 
 
-    # model = NerfInterpolation(
-    #     near_sphere_normalized=2.,
-    #     far_sphere_normalized=8.,
-    #     samples_per_ray_radiance=124,
-    #     samples_per_ray_proposal=0,
-    #     model_radiance=model_radiance,
-        # model_proposal=model_proposal,
-    # )
-
-    # # Set up model
-    model = BarfModel(
-        n_training_images=len(dm.dataset_train.images),
-        camera_learning_rate_start=1e-3,
-        camera_learning_rate_stop=1e-5,
-        camera_learning_rate_decay_end=200000,
-        max_gaussian_sigma=max(SIGMAS_FOR_BLUR),
+    model = NerfInterpolation(
         near_sphere_normalized=2.,
         far_sphere_normalized=8.,
-        samples_per_ray_radiance=128,
-        # samples_per_ray_proposal=64,
+        samples_per_ray_radiance=124,
+        samples_per_ray_proposal=64,
         model_radiance=model_radiance,
-        # model_proposal=model_proposal,
+        model_proposal=model_proposal,
     )
+
+    # # # Set up model
+    # model = BarfModel(
+    #     n_training_images=len(dm.dataset_train.images),
+    #     camera_learning_rate_start=1e-3,
+    #     camera_learning_rate_stop=1e-5,
+    #     camera_learning_rate_decay_end=200000,
+    #     max_gaussian_sigma=max(SIGMAS_FOR_BLUR),
+    #     near_sphere_normalized=2.,
+    #     far_sphere_normalized=8.,
+    #     samples_per_ray_radiance=128,
+    #     # samples_per_ray_proposal=64,
+    #     model_radiance=model_radiance,
+    #     # model_proposal=model_proposal,
+    # )
 
 
     # wandb_logger.watch(model, log="all")

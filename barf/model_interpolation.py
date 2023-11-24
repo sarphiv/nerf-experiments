@@ -1,6 +1,7 @@
 from typing import Literal
 from itertools import chain
 import warnings
+import math
 
 import torch as th
 import torch.nn as nn
@@ -382,17 +383,17 @@ class NerfInterpolation(pl.LightningModule):
         ray_colors_pred_fine, ray_colors_pred_coarse = self(ray_origs_pred, ray_dirs_pred)
 
 
-        if not self.proposal:
-            # compute the loss
-            loss_fine = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw[:,-1])
-            psnr = -10 * th.log10(float(loss_fine.detach().item()))
-            # Log metrics
-            logs  = {f"{purpose}_loss_fine": loss_fine,
-                        f"{purpose}_psnr": psnr,
-                        }
-        else:
+        # compute the loss
+        loss = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw[:,-1])
+        psnr = -10 * math.log10(float(loss.detach().item()))
+        # Log metrics
+        logs  = {f"{purpose}_loss_fine": loss,
+                    f"{purpose}_psnr": psnr,
+                    }
+
+        if self.proposal:
             loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors_raw[:,-1]) #TODO fix interpolation
-            loss = loss_fine + loss_coarse
+            loss = loss + loss_coarse
             logs[f"{purpose}_loss_coarse"] = loss_coarse
 
         self.log_dict(logs)
@@ -400,8 +401,8 @@ class NerfInterpolation(pl.LightningModule):
         return loss
 
 
-    def validation_transform_rays(self, batch):
-        return batch
+    def validation_transform_rays(self, ray_origs, ray_dirs, transform_params=None):
+        return ray_origs, ray_dirs, transform_params
 
 
     def training_step(self, batch, batch_idx):
