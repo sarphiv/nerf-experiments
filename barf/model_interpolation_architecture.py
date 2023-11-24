@@ -156,6 +156,9 @@ class NerfModel(nn.Module):
         n_segments: int,
         position_encoder: PositionalEncoding,
         direction_encoder: PositionalEncoding,
+        learning_rate_start: float = 5e-4,
+        learning_rate_stop: float = 5e-5,
+        learning_rate_decay_end: float = 0,
     ):
         """
         This is an interpolation between the original NeRF vanilla model and a naive version
@@ -174,6 +177,9 @@ class NerfModel(nn.Module):
         self.n_segments = n_segments
         self.position_encoder = position_encoder
         self.direction_encoder = direction_encoder
+        self.learning_rate_start = learning_rate_start
+        self.learning_rate_stop = learning_rate_stop
+        self.learning_rate_decay_end = learning_rate_decay_end
 
         # Dimensionality of the input to the network 
         positional_dim = self.position_encoder.output_dim

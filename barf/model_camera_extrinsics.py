@@ -4,13 +4,21 @@ import torch.nn as nn
 from magic import MAGIC_NUMBER_THE_SECOND
 
 class CameraExtrinsics(nn.Module):
-    def __init__(self, n_train_images: int) -> None:
+    def __init__(self,
+                 n_train_images: int,
+                 learning_rate_start: float,
+                 learning_rate_stop: float,
+                 learning_rate_decay_end: int = -1,) -> None:
         super().__init__()
         
         self.size = n_train_images
         # Rotation stored as so3 Lie algebra
         self.rotation = nn.Parameter(th.zeros((n_train_images, 3)))
         self.translation = nn.Parameter(th.zeros((n_train_images, 3)))
+
+        self.learning_rate_start = learning_rate_start
+        self.learning_rate_stop = learning_rate_stop
+        self.learning_rate_decay_end = learning_rate_decay_end
 
     @staticmethod
     def so3_to_SO3(so3: th.Tensor) -> th.Tensor:

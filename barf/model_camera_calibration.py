@@ -21,30 +21,24 @@ class CameraCalibrationModel(NerfInterpolation):
         n_training_images: int,
         camera_learning_rate_start: float,
         camera_learning_rate_stop: float,
-        camera_learning_rate_stop_step: int = -1,
-        camera_weight_decay: float = 0.0,
+        camera_learning_rate_decay_end: int = -1,
         max_gaussian_sigma: float = 0.0,
-        *inner_model_args, 
-        **inner_model_kwargs,
+        *base_model_args, 
+        **base_model_kwargs,
     ):  
-        super().__init__(*inner_model_args, **inner_model_kwargs)
-
-
-
-        self.position_encoder = cast(BarfPositionalEncoding, self.position_encoder)
-        self.direction_encoder = cast(BarfPositionalEncoding, self.direction_encoder)
+        super().__init__(*base_model_args, **base_model_kwargs)
 
         # Create camera calibration model
-        self.camera_extrinsics = CameraExtrinsics(n_training_images)
+        self.camera_extrinsics = CameraExtrinsics(n_training_images,
+                                                  camera_learning_rate_start,
+                                                  camera_learning_rate_stop,
+                                                  camera_learning_rate_decay_end)
+        
+        self.models = self.models + [self.camera_extrinsics]
 
         # Store hyperparameters
-        self.camera_learning_rate_start = camera_learning_rate_start
-        self.camera_learning_rate_stop = camera_learning_rate_stop
-        self.camera_learning_rate_stop_step = camera_learning_rate_stop_step
-
-        self.camera_weight_decay = camera_weight_decay
-
         self.max_gaussian_sigma = max_gaussian_sigma
+
 
     ##############################################################
     # Batch transformation helpers
@@ -354,178 +348,6 @@ class CameraCalibrationModel(NerfInterpolation):
             ray_dirs_pred,
             th.stack([interpolation, ray_colors_raw[:,-1]], dim=1),
             img_idx)
-    
-    @staticmethod
-    def get_sigma_alpha(alpha: th.Tensor, sigma_max: float) -> th.Tensor: 
-        """
-        Calculate an exponential decaying sigmaa value from the alpha value.
-        """
-        sigma = sigma_max * 2 ** (- alpha)
-        if sigma < 1/4:
-            return th.tensor([0.], device=alpha.device)
-        else: 
-            return sigma
 
 
-    ##############################################################
-    # helper methods for the lightning module methods
 
-    def _step_helper(self, batch, batch_idx, purpose: Literal["train", "val"]):
-
-        # Transform batch to model prediction space
-        if purpose == "train":
-            batch = self.training_transform(batch)
-            
-            # Update alpha (for positional encoding in BARF)
-            n_batches = len(self.trainer.train_dataloader)
-            epoch = self.trainer.current_epoch + batch_idx/n_batches
-
-            self.position_encoder.update_alpha(epoch)
-            self.direction_encoder.update_alpha(epoch)
-            
-        elif purpose == "val": batch = self.validation_transform(batch)
-
-        # interpolate the blurred pixel colors
-        sigma = CameraCalibrationModel.get_sigma_alpha(self.position_encoder.alpha, self.max_gaussian_sigma)
-        batch = self.get_blurred_pixel_colors(batch, self.trainer.datamodule.gaussian_blur_sigmas, sigma) 
-
-
-        # unpack batch
-        (
-            ray_origs_raw, 
-            ray_origs_pred, 
-            ray_dirs_raw, 
-            ray_dirs_pred, 
-            ray_colors_raw, 
-            img_idx
-        ) = batch
-
-        # Forward pass
-        ray_colors_pred_fine, ray_colors_pred_coarse = self(ray_origs_pred, ray_dirs_pred)
-
-        assert not th.isnan(ray_colors_pred_fine).any(), "NaN values in ray_colors_pred_fine"
-        assert not th.isnan(ray_colors_pred_coarse).any(), "NaN values in ray_colors_pred_coarse"
-
-        # compute the loss
-        loss_fine = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw[:,-1])
-        psnr = -10 * th.log10(loss_fine)
-
-        if self.proposal:
-            loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors_raw[:,-1]) #TODO fix interpolation
-            loss = loss_fine + loss_coarse
-
-            # Log metrics
-            self.log_dict({f"{purpose}_loss_fine": loss_fine,
-                        f"{purpose}_loss_coarse": loss_coarse,
-                        f"{purpose}_psnr": psnr,
-                        "alpha": self.position_encoder.alpha.item(),
-                        "sigma": sigma.item(),
-                        })
-        else:
-            loss = loss_fine
-            self.log_dict({f"{purpose}_loss_fine": loss_fine,
-                        f"{purpose}_psnr": psnr,
-                        "alpha": self.position_encoder.alpha.item(),
-                        "sigma": sigma.item(),
-                        })
-
-        
-        return loss
-
-
-    ##############################################################
-    # Lightning Module Methods
-
-
-    def training_step(self, batch, batch_idx):
-        return self._step_helper(batch, batch_idx, "train")
-
-
-    def validation_step(self, batch, batch_idx):
-        return self._step_helper(batch, batch_idx, "val")
-
-
-    def configure_optimizers(self):
-        # Create optimizer and schedular 
-        if self.proposal:
-
-            optimizer = th.optim.Adam(
-                [
-                    {"params": self.model_coarse.parameters(), "lr": self.learning_rate_start},
-                    {"params": self.model_fine.parameters(), "lr": self.learning_rate_start},
-                    {"params": self.camera_extrinsics.parameters(), "lr": self.camera_learning_rate_start}
-                ]
-            )
-
-            lr_scheduler = SchedulerLeNice(
-                optimizer, 
-                start_LR=[self.learning_rate_start, self.learning_rate_start, self.camera_learning_rate_start], 
-                stop_LR= [self.learning_rate_stop,  self.learning_rate_stop,  self.camera_learning_rate_stop], 
-                number_of_steps=[self.learning_rate_stop_step, self.learning_rate_stop_step, self.camera_learning_rate_stop_step],
-                verbose=False
-            )
-        else:
-            optimizer = th.optim.Adam(
-                [
-                    {"params": self.model_coarse.parameters(), "lr": self.learning_rate_start},
-                    {"params": self.camera_extrinsics.parameters(), "lr": self.learning_rate_start},
-                ]
-            )
-            lr_scheduler = SchedulerLeNice(
-                optimizer, 
-                start_LR=[self.learning_rate_start, self.camera_learning_rate_start], 
-                stop_LR= [self.learning_rate_stop,  self.camera_learning_rate_stop], 
-                number_of_steps=[self.learning_rate_stop_step, self.camera_learning_rate_stop_step],
-                verbose=False
-            )
-        
-
-        lr_scheduler_config = {
-            # REQUIRED: The scheduler instance
-            "scheduler": lr_scheduler,
-            # The unit of the scheduler's step size, could also be 'step'.
-            # 'epoch' updates the scheduler on epoch end whereas 'step'
-            # updates it after a optimizer update.
-            "interval": "step",
-            # How many epochs/steps should pass between calls to
-            # `scheduler.step()`. 1 corresponds to updating the learning
-            # rate after every epoch/step.
-            "frequency": 1,
-            # If using the `LearningRateMonitor` callback to monitor the
-            # learning rate progress, this keyword can be used to specify
-            # a custom logged name
-            "name": "le_nice_lr_scheduler",
-        }
-
-        return {"optimizer": optimizer, "lr_scheduler": lr_scheduler_config}
-    
-class SchedulerLeNice(th.optim.lr_scheduler.LRScheduler):
-    def __init__(self, optimizer: th.optim.Optimizer, start_LR: list[float], stop_LR: list[float], number_of_steps: list[float], verbose=False) -> None:
-        # Store extra parameters 
-        self.start_LR = start_LR
-        self.stop_LR = stop_LR
-        self.number_of_steps = number_of_steps
-
-        # Calculate decay factors
-        # Solve: start : s, end : e, decay : d, number of epochs : n 
-        # s * d^n = e <=> d = (e/s)^(1/n)
-        self.decay_factors = []
-        for i, _ in enumerate(optimizer.param_groups):
-            self.decay_factors.append((self.stop_LR[i] / self.start_LR[i]) ** (1 / self.number_of_steps[i]))
-
-        super().__init__(optimizer,verbose=verbose)
-        
-
-
-    
-    def get_lr(self):
-        # Original function 
-        if not self._get_lr_called_within_step:
-            warnings.warn("To get the last learning rate computed by the scheduler, "
-                          "please use `get_last_lr()`.", UserWarning)
-
-        # Update lr for each individually 
-        return [(group['lr'] * self.decay_factors[i] if self._step_count < self.number_of_steps[i] else group["lr"]) for i, group in enumerate(self.optimizer.param_groups)]
-
-    def _get_closed_form_lr(self):
-        return [base_lr * self.decay_factors[i] ** max(self._step_count, self.number_of_steps[i]) for i, base_lr in enumerate(self.start_LR)]

@@ -59,7 +59,7 @@ if __name__ == "__main__":
     # parser.add_argument('--camera_learning_rate_stop', type=float, default=1e-7, help='Learning rate for the camera at the end')
     parser.add_argument('--camera_learning_rate_start', type=float, default=1e-3, help='Learning rate for the camera at the beginning')  
     parser.add_argument('--camera_learning_rate_stop', type=float, default=1e-5, help='Learning rate for the camera at the end')
-    parser.add_argument('--camera_learning_rate_stop_step', type=int, default=200000, help="The number of iterations the ")
+    parser.add_argument('--camera_learning_rate_decay_end', type=int, default=200000, help="The number of iterations the ")
     parser.add_argument('--initial_fourier_features', type=float, default=0.0, help="Active Fourier features initially")
     parser.add_argument('--start_fourier_features_iterations', type=int, default=20000, help="Start increasing the number of fourier features after this many iterations")
     parser.add_argument('--full_fourier_features_iterations', type=int, default=100000, help="Have all fourier features after this many iterations")
@@ -67,7 +67,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=1024, help="Number of camera rays pr optimization step")
     parser.add_argument('--learning_rate_start', type=float, default=5e-4)
     parser.add_argument('--learning_rate_stop', type=float, default=1e-4)
-    parser.add_argument('--learning_rate_stop_step', type=int, default=200000)
+    parser.add_argument('--learning_rate_decay_end', type=int, default=200000)
     args = parser.parse_args()
 
     # Set seeds
@@ -206,10 +206,10 @@ if __name__ == "__main__":
         # camera_learning_rate=5e-4,
         camera_learning_rate_start=args.camera_learning_rate_start,
         camera_learning_rate_stop=args.camera_learning_rate_stop,
-        camera_learning_rate_stop_step=args.camera_learning_rate_stop_step,
+        camera_learning_rate_decay_end=args.camera_learning_rate_decay_end,
         # camera_learning_rate_start=args.camera_learning_rate_start*BATCH_SIZE_MULTIPLIER,
         # camera_learning_rate_stop=args.camera_learning_rate_stop*BATCH_SIZE_MULTIPLIER,
-        # camera_learning_rate_stop_step=2e+5/BATCH_SIZE_MULTIPLIER,
+        # camera_learning_rate_decay_end=2e+5/BATCH_SIZE_MULTIPLIER,
         camera_weight_decay=0.0,
         near_sphere_normalized= 2, # 1/10,
         far_sphere_normalized= 7, #1/3,
@@ -225,12 +225,12 @@ if __name__ == "__main__":
         n_segments=args.n_segments,
         learning_rate_start=args.learning_rate_start,
         learning_rate_stop=args.learning_rate_stop,
-        learning_rate_stop_step=args.learning_rate_stop_step,
+        learning_rate_decay_end=args.learning_rate_decay_end,
         weight_decay=0
     )
 
 
-    wandb_logger.watch(model, log="all")
+    # wandb_logger.watch(model, log="all")
 
     # Start training, resume from checkpoint
     trainer.fit(model, dm)
