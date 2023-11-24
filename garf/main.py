@@ -103,6 +103,12 @@ if __name__ == "__main__":
 
     # Set up model
     # NOTE: Period is in epoch fractions
+    CAMERA_LEARNING_RATE_START = 1e-3
+    CAMERA_LEARNING_RATE_STOP = 1e-5
+    CAMERA_LEARNING_RATE_STOP_EPOCH = 4
+    CAMERA_LEARNING_RATE_PERIOD = 0.01
+    CAMERA_LEARNING_RATE_DECAY: float = 2**(log2(CAMERA_LEARNING_RATE_STOP/CAMERA_LEARNING_RATE_START) * CAMERA_LEARNING_RATE_PERIOD/CAMERA_LEARNING_RATE_STOP_EPOCH) # type: ignore
+    
     PROPOSAL_LEARNING_RATE_START = 5e-4
     PROPOSAL_LEARNING_RATE_STOP = 5e-6
     PROPOSAL_LEARNING_RATE_STOP_EPOCH = 8
@@ -117,10 +123,10 @@ if __name__ == "__main__":
 
     model = CameraCalibrationModel(
         n_training_images=len(dm.dataset_train.images),
-        camera_learning_rate=5e-4,
-        camera_learning_rate_stop_epoch=8,
-        camera_learning_rate_decay=0.995,
-        camera_learning_rate_period=0.02,
+        camera_learning_rate=CAMERA_LEARNING_RATE_START,
+        camera_learning_rate_stop_epoch=CAMERA_LEARNING_RATE_STOP_EPOCH,
+        camera_learning_rate_decay=CAMERA_LEARNING_RATE_DECAY,
+        camera_learning_rate_period=CAMERA_LEARNING_RATE_PERIOD,
         camera_weight_decay=0.0,
 
         near_plane=2,
