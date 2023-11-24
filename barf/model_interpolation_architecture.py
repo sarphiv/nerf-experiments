@@ -181,6 +181,8 @@ class NerfModel(nn.Module):
 
         # Create list of model segments
         self.model_segments = nn.ModuleList()
+        if n_segments == 0:
+            raise NotImplementedError("n_segments must be greater than 0")
         for i in range(self.n_segments):
             # Create the model segment
             input_size = positional_dim + (not self.delayed_direction)*directional_dim + (i>0)*self.hidden_dim
@@ -264,49 +266,6 @@ class NerfModel(nn.Module):
 
             # Concatenate the layers into one sequential
             return nn.Sequential(layer1, *intermediate_layers, nn.ReLU(True), layer2)
-
-    # def _get_mask(self, levels: int, alpha: float, device: str) -> th.Tensor:
-    #     mask = th.zeros((levels), device=device)
-
-    # def _get_mask_old(self, levels: int, device: str) -> th.Tensor:
-    #     """
-    #     Get the mask from the barf paper that fits the positional encodings
-    #     """
-    #     def get_mask(alpha: th.Tensor, k: th.Tensor) -> th.Tensor:
-    #         """
-    #         Calculates the mask from the barf paper given alpha and k. 
-
-    #         Args:
-    #             alpha (float): value that is proporitional to the batch
-    #             k (float):     the level of the positional encoding
-            
-    #         Returns:
-    #             float: 0 if alpha < k, 1 if alpha - k >= 1 and a cosine interpolation otherwise
-    #         """
-    #         result = th.zeros_like(alpha)
-            
-    #         condition1 = alpha - k < 0
-    #         condition2 = (0 <= alpha - k) & (alpha - k < 1)
-            
-    #         result[condition1] = 0
-    #         result[condition2] = (1 - th.cos((alpha[condition2] - k[condition2]) * th.pi)) / 2
-    #         result[~(condition1 | condition2)] = 1
-            
-    #         return result
-        
-    #     # Create a vector of alpha values
-    #     alpha = th.ones((levels), device=device) * self.alpha
-    #     k = th.arange(levels, device=device)
-
-    #     # Get the mask vector 
-    #     mask = get_mask(alpha, k)
-
-    #     # Reshape mask to take in (x,y,z) and repeat an extra time for sin/cos 
-    #     mask = mask.repeat_interleave(3)
-    #     mask = mask.repeat(2) 
-
-    #     return mask
-
 
     def list_segments(self):
         # Iterate through the ModuleList and list its segments
