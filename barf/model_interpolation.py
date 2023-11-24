@@ -86,8 +86,8 @@ class NerfInterpolation(pl.LightningModule):
 
         self.proposal = samples_per_ray_proposal > 0
 
-        self.models = [model_radiance, model_proposal] if self.proposal else [model_radiance]
-
+        self.param_groups = [param_group for model in ([model_radiance, model_proposal] if self.proposal else [model_radiance])
+                             for param_group in model.param_groups]
 
 
     def _get_intervals(self, t: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
@@ -149,9 +149,9 @@ class NerfInterpolation(pl.LightningModule):
 
         Parameters:
         -----------
-            t_coarse:           Tensor of shape (batch_size, samples_per_ray_coarse) - the t-values for the beginning of each bin
-            weights:            Tensor of shape (batch_size, samples_per_ray_coarse) (these are assumed to almost sum to 1)
-            distances_coarse:   Tensor of shape (batch_size, samples_per_ray_coarse)
+            t_coarse:           Tensor of shape (batch_size, samples_per_ray_proposal) - the t-values for the beginning of each bin
+            weights:            Tensor of shape (batch_size, samples_per_ray_proposal) (these are assumed to almost sum to 1)
+            distances_coarse:   Tensor of shape (batch_size, samples_per_ray_proposal)
         
         Returns:
         --------
@@ -176,6 +176,7 @@ class NerfInterpolation(pl.LightningModule):
         rank = fine_samples.argsort(dim=1).argsort(dim=1)
         add_mask = (rank >= (n_bins - excess.abs()))
         fine_samples = fine_samples + add_mask*th.sign(excess) + 1
+        # NOTE: this may lead to empty bins -> will fail.
         # Old version - only adds the difference to the largest segment
         # fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += n_samples - fine_samples.sum(dim=1) - n_bins
         # fine_samples += 1

@@ -34,6 +34,7 @@ class CameraCalibrationModel(NerfInterpolation):
                                                   camera_learning_rate_stop,
                                                   camera_learning_rate_decay_end)
         
+        # TODO: rewrite as param groups - see nerfinterpolation
         self.models = self.models + [self.camera_extrinsics]
 
         # Store hyperparameters
