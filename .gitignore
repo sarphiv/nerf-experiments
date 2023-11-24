@@ -179,5 +179,12 @@ sprinkle-job-export.sh
 data/
 
 # bsub output files
-*\.err
-*\.out
+*.err
+*.out
+
+# vscode settings
+.vscode/settings.json
+
+# images
+*.png
+*.jpg

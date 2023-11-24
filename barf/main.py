@@ -11,20 +11,63 @@ from image_logger import Log2dImageReconstruction
 from point_logger import LogCameraExtrinsics
 from epoch_fraction_logger import LogEpochFraction
 from model_camera_calibration import CameraCalibrationModel
+from model_interpolation_architecture import BarfPositionalEncoding
 
+
+
+# High priority 
+# TODO: Script that generates runs where the plots are used for the paper 
+# TODO: Bug hunting
+# TODO: Write paper 
+
+# Low priority
+# TODO: Fix image logger - see that file
+# TODO: Remove all the runs in WANDB (davids are gone)
+# TODO: Use decay of learning rate - Check if it works in the bottom of model_camera_calibration - for camera extrinsics go as default from 1e-3 to 1e-5. For normal nerf from 5e-4 to 1e-4 
+# TODO: dataset.py: Rewrite datamodule to save the transformed images as (blurred images e.g)
+#       such that it can be easily read when instantiating a dataset with sigmas that
+#       have already been calculated once. This will save a lot of time during startup of a run.
+#       May not be a good idea tho, as it would require a lot of memory to store all the images??
+# TODO: We should try to run an experiment where we simulate BARF,
+#       but without our space transformation to the unit sphere.
+# TODO: Run experiment where we use the so3_to_SO3 from BARF - see Lie_barf.py
+#       
+
+# Converter that takes iterations to epochs to adjust alpha
+def convert_iterations_to_epochs(iterations: int, batch_size: int, dataset_size_samples: int) -> float:
+    return iterations * batch_size / dataset_size_samples
 
 
 if __name__ == "__main__":
     # Parse arguments
+    # NOTE: Default is BARF settings
     parser = argparse.ArgumentParser()
-    parser.add_argument("--rotation_noise", type=float, default=0.0)
-    parser.add_argument("--translation_noise", type=float, default=0.0)
-    parser.add_argument('--use_fourier', type=bool, default=True, help='Whether to use Fourier features or not')
-    parser.add_argument('--use_proposal', type=bool, default=True, help='Whether to have a proposal network or not')
-    parser.add_argument('--delayed_direction', type=bool, default=True, help='When the directional input is feed to the network')
-    parser.add_argument('--delayed_density', type=bool, default=True, help='When the network outputs the density')
-    parser.add_argument('--n_segments', type=int, default=2, help='Number of times the positional data is feed to the network')
+    parser.add_argument("--name", type=str, default="unknown-run-BARF-mebe")
+    # parser.add_argument("--run_name", type=str, default="BARF-test-before-hpc")
+    parser.add_argument("--rotation_noise", type=float, default=0.15)
+    parser.add_argument("--translation_noise", type=float, default=0.15) #0.00625)
+    parser.add_argument('--use_fourier', type=bool, action=argparse.BooleanOptionalAction, default=True, help='Whether to use Fourier features or not')
+    parser.add_argument('--use_proposal', type=bool, action=argparse.BooleanOptionalAction, default=True, help='Whether to have a proposal network or not')
+    parser.add_argument('--delayed_direction', type=bool, action=argparse.BooleanOptionalAction, default=True, help='When the directional input is feed to the network')
+    parser.add_argument('--delayed_density', type=bool, action=argparse.BooleanOptionalAction, default=False, help='When the network outputs the density')
+    parser.add_argument('--n_segments', type=int, default=2, help='Number of times the positional data is fed to the network')
     parser.add_argument('--n_hidden', type=int, default=4, help='Number of hidden layers')
+    # parser.add_argument('--sigmas_for_blur', type=list, default=[0.0], help='Sigmas for the gaussian blur')
+    # parser.add_argument('--sigmas_for_blur', type=list, default=[2**(2), 2**(1), 2**(0), 2**(-1), 2**(-2), 0.0], help='Sigmas for the gaussian blur')
+    parser.add_argument('--use_blur', type=bool, action=argparse.BooleanOptionalAction, default=False, help='Whether to use blur or not')
+    # parser.add_argument('--camera_learning_rate_start', type=float, default=1e-5, help='Learning rate for the camera at the beginning')  
+    # parser.add_argument('--camera_learning_rate_stop', type=float, default=1e-7, help='Learning rate for the camera at the end')
+    parser.add_argument('--camera_learning_rate_start', type=float, default=1e-3, help='Learning rate for the camera at the beginning')  
+    parser.add_argument('--camera_learning_rate_stop', type=float, default=1e-5, help='Learning rate for the camera at the end')
+    parser.add_argument('--camera_learning_rate_stop_step', type=int, default=200000, help="The number of iterations the ")
+    parser.add_argument('--initial_fourier_features', type=float, default=0.0, help="Active Fourier features initially")
+    parser.add_argument('--start_fourier_features_iterations', type=int, default=20000, help="Start increasing the number of fourier features after this many iterations")
+    parser.add_argument('--full_fourier_features_iterations', type=int, default=100000, help="Have all fourier features after this many iterations")
+    parser.add_argument('--image_size', type=int, default=400, help="Image height and width")
+    parser.add_argument('--batch_size', type=int, default=1024, help="Number of camera rays pr optimization step")
+    parser.add_argument('--learning_rate_start', type=float, default=5e-4)
+    parser.add_argument('--learning_rate_stop', type=float, default=1e-4)
+    parser.add_argument('--learning_rate_stop_step', type=int, default=200000)
     args = parser.parse_args()
 
     # Set seeds
@@ -35,28 +78,27 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="point-cloud-test-barf"
+        name=args.run_name
     )
 
 
     # Set up data module
-    BATCH_SIZE = 1024*2
-    NUM_WORKERS = 1
+    BATCH_SIZE = args.batch_size
+    NUM_WORKERS = 8
+    IMAGE_SIZE = args.image_size
+    SIGMAS_FOR_BLUR = [0.0] if not args.use_blur else [2**(2), 2**(1), 2**(0), 2**(-1), 2**(-2), 0.0]
     
     dm = ImagePoseDataModule(
-        image_width=400,
-        image_height=400,
+        image_width=IMAGE_SIZE,
+        image_height=IMAGE_SIZE,
+        space_transform_scale=1.,
+        space_transform_translate=th.Tensor([0,0,0]),
         scene_path="../data/lego",
-        space_transform_scale=None,
-        space_transform_translate=None,
-        rotation_noise_sigma=float(args.rotation_noise),
-        translation_noise_sigma=float(args.translation_noise),
-        camera_noise_seed=13571113,
-        gaussian_blur_kernel_size=81,
-        gaussian_blur_relative_sigma_start=0.,
-        gaussian_blur_relative_sigma_decay=0.99,
-        validation_fraction=0.05,
+        validation_fraction=0.06,
         validation_fraction_shuffle=1234,
+        gaussian_blur_sigmas = SIGMAS_FOR_BLUR,
+        rotation_noise_sigma = args.rotation_noise,
+        translation_noise_sigma = args.translation_noise,
         batch_size=BATCH_SIZE,
         num_workers=NUM_WORKERS,
         shuffle=True,
@@ -64,15 +106,15 @@ if __name__ == "__main__":
     )
 
     dm.setup("fit")
-    
+
 
     # Set up trainer
-    th.set_float32_matmul_precision("medium")
+    th.set_float32_matmul_precision("high")
 
     trainer = pl.Trainer(
         accelerator="auto",
         max_epochs=100,
-        precision="16-mixed",
+        # precision="32-mixed",
         logger=wandb_logger,
         callbacks=[
             LogEpochFraction(
@@ -82,19 +124,19 @@ if __name__ == "__main__":
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
                 logging_start=0.002,
-                delay_start=1/32,
-                delay_end=1/8,
-                delay_taper=4.0,
+                delay_start=1/16,
+                delay_end=1.,
+                delay_taper=5.0,
+                train_image_names=["r_1", "r_23"],
                 validation_image_names=["r_2", "r_84"],
-                train_image_names=["r_2", "r_3"],
                 reconstruction_batch_size=BATCH_SIZE,
                 reconstruction_num_workers=NUM_WORKERS,
-                metric_name="val_img",
-                metric_name2="train_img",
+                metric_name_val="val_img",
+                metric_name_train="train_img",
             ),
             LogCameraExtrinsics(
                 wandb_logger=wandb_logger,
-                logging_start=0.002,
+                logging_start=0.000,
                 delay_start=1/200,
                 delay_end=1/16,
                 delay_taper=4.0,
@@ -111,45 +153,83 @@ if __name__ == "__main__":
                 every_n_epochs=2,
                 save_top_k=-1,
             ),
-            dm.get_dataset_blur_scheduler_callback(
-                epoch_fraction_period=0.02,
-                dataset_name="train"
-            ),
-            dm.get_dataset_blur_scheduler_callback(
-                epoch_fraction_period=0.02,
-                dataset_name="val"
-            )
+            # dm.get_dataset_blur_scheduler_callback(
+            #     epoch_fraction_period=0.02,
+            #     dataset_name="train"
+            # ),
+            # dm.get_dataset_blur_scheduler_callback(
+            #     epoch_fraction_period=0.02,
+            #     dataset_name="val"
+            # )
         ]
     )
+    
+    # Initialize the positional encoder
+    alpha_increase_start_epoch = convert_iterations_to_epochs(args.start_fourier_features_iterations, BATCH_SIZE, len(dm.dataset_train))
+    alpha_increase_end_epoch = convert_iterations_to_epochs(args.full_fourier_features_iterations, BATCH_SIZE, len(dm.dataset_train))
 
+    # When no feature encoding is used the positional encoder is set to the identity
+    if args.use_fourier:
+        positional_encoder = BarfPositionalEncoding(levels=10,
+                                                    alpha_start=0,
+                                                    alpha_increase_start_epoch=alpha_increase_start_epoch,
+                                                    alpha_increase_end_epoch=alpha_increase_end_epoch,
+                                                    include_identity=True,
+                                                    scale=1.
+                                                    )
+        directional_encoder = BarfPositionalEncoding(levels=4,
+                                                     alpha_start=4,
+                                                     alpha_increase_start_epoch=alpha_increase_start_epoch,
+                                                     alpha_increase_end_epoch=alpha_increase_end_epoch,
+                                                     include_identity=True,
+                                                     scale=1.
+                                                     )
+    else: 
+        positional_encoder = BarfPositionalEncoding(levels=0,
+                                                    alpha_start=0,
+                                                    alpha_increase_start_epoch=alpha_increase_start_epoch,
+                                                    alpha_increase_end_epoch=alpha_increase_end_epoch,
+                                                    include_identity=True,
+                                                    scale=1.
+                                                    )
+        directional_encoder = BarfPositionalEncoding(levels=0,
+                                                     alpha_start=4,
+                                                     alpha_increase_start_epoch=alpha_increase_start_epoch,
+                                                     alpha_increase_end_epoch=alpha_increase_end_epoch,
+                                                     include_identity=True,
+                                                     scale=1.
+                                                     )
 
     # Set up model
     model = CameraCalibrationModel(
         n_training_images=len(dm.dataset_train.images),
-        camera_learning_rate=1e-6,
-        camera_learning_rate_stop_epoch=8,
-        camera_learning_rate_decay=0.999,
-        camera_learning_rate_period=0.02,
+        # camera_learning_rate=5e-4,
+        camera_learning_rate_start=args.camera_learning_rate_start,
+        camera_learning_rate_stop=args.camera_learning_rate_stop,
+        camera_learning_rate_stop_step=args.camera_learning_rate_stop_step,
+        # camera_learning_rate_start=args.camera_learning_rate_start*BATCH_SIZE_MULTIPLIER,
+        # camera_learning_rate_stop=args.camera_learning_rate_stop*BATCH_SIZE_MULTIPLIER,
+        # camera_learning_rate_stop_step=2e+5/BATCH_SIZE_MULTIPLIER,
         camera_weight_decay=0.0,
-        near_sphere_normalized=1/10,
-        far_sphere_normalized=1/3,
+        near_sphere_normalized= 2, # 1/10,
+        far_sphere_normalized= 7, #1/3,
         samples_per_ray=64 + 192,
         n_hidden=args.n_hidden,
-        # fourier=(args.use_fourier, 10, 4),
-        fourier = (False, True, 10, 4, True, 8, 2),
+        hidden_dim=256,
+        position_encoder = positional_encoder,
+        direction_encoder = directional_encoder,
+        max_gaussian_sigma=max(SIGMAS_FOR_BLUR),
         proposal=(args.use_proposal, 64),
         delayed_direction=args.delayed_direction,
         delayed_density=args.delayed_density,
         n_segments=args.n_segments,
-        learning_rate=5e-4,
-        learning_rate_stop_epoch = 100,
-        learning_rate_decay=2**(log2(5e-5/5e-4) / trainer.max_epochs), # type: ignore
-        learning_rate_period = 1.0,
+        learning_rate_start=args.learning_rate_start,
+        learning_rate_stop=args.learning_rate_stop,
+        learning_rate_stop_step=args.learning_rate_stop_step,
         weight_decay=0
     )
 
 
-    # Log model gradients and parameters
     wandb_logger.watch(model, log="all")
 
     # Start training, resume from checkpoint

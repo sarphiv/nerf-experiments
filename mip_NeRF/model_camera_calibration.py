@@ -44,7 +44,7 @@ class CameraExtrinsics(nn.Module):
         # Testing barf 
         o = th.ones_like(o)
         d = th.ones_like(d)
-        new_o = th.matmul(R, o.unsqueeze(-1)).squeeze(-1) + trans
+        new_o = o + trans
         new_d = th.matmul(R, d.unsqueeze(-1)).squeeze(-1)
 
         return new_o, new_d, trans, R
