@@ -63,7 +63,7 @@ if __name__ == "__main__":
     parser.add_argument('--initial_fourier_features', type=float, default=0.0, help="Active Fourier features initially")
     parser.add_argument('--start_fourier_features_iterations', type=int, default=20000, help="Start increasing the number of fourier features after this many iterations")
     parser.add_argument('--full_fourier_features_iterations', type=int, default=100000, help="Have all fourier features after this many iterations")
-    parser.add_argument('--image_size', type=int, default=400, help="Image height and width")
+    parser.add_argument('--image_size', type=int, default=80, help="Image height and width")
     parser.add_argument('--batch_size', type=int, default=1024, help="Number of camera rays pr optimization step")
     parser.add_argument('--learning_rate_start', type=float, default=5e-4)
     parser.add_argument('--learning_rate_stop', type=float, default=1e-4)
@@ -78,7 +78,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name=args.run_name
+        name=args.name
     )
 
 
