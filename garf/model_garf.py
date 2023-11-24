@@ -11,7 +11,7 @@ from model_proposal import ProposalNetwork
 
 # Type alias for inner model batch input
 #  (origin, direction, pixel_color, pixel_relative_blur)
-InnerModelBatchInput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]
+InnerModelBatchInput = tuple[th.Tensor, th.Tensor, th.Tensor]
 
 
 class GarfModel(pl.LightningModule):
@@ -252,7 +252,7 @@ class GarfModel(pl.LightningModule):
             tuple[th.Tensor, tuple[th.Tensor, th.Tensor]]: Color predictions and ordered losses for each optimizer
         """
         # Decontsruct batch
-        ray_origs, ray_dirs, ray_colors, ray_scales = batch
+        ray_origs, ray_dirs, ray_colors = batch
         
         # Forward pass
         ray_colors_pred, ray_opacity, ray_depth, extras = self(ray_origs, ray_dirs)
