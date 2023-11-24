@@ -165,10 +165,25 @@ class NerfInterpolation(pl.LightningModule):
 
         # Each segment needs weight*samples_per_ray_fine new samples plus 1 because of the coarse sample 
         fine_samples = th.round(weights*(n_samples - n_bins))
-        # Rounding might cause the sum to be less than or larger than samples_per_ray_fine, so we add the difference to the largest segment (especially since weights don't sum all the way to 1)
-        fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += n_samples - fine_samples.sum(dim=1) - n_bins
-        fine_samples += 1
+
+
+        # # Rounding might cause the sum to be less than or larger than samples_per_ray_fine (especially since weights don't sum all the way to 1)
+        # New way of distributing the excess created by rounding:
+        # if th.round(weights*(n_samples - n_bins)) produces k too few samples - add 1 to the k largest elements in th.round(weights*(n_samples - n_bins))
+        # if it produces too many samples, subtract 1 from the k largest elements.
+        fine_samples_sum = fine_samples.sum(dim=1, keepdim=True)
+        excess = n_samples - n_bins - fine_samples_sum
+        rank = fine_samples.argsort(dim=1).argsort(dim=1)
+        add_mask = (rank >= (n_bins - excess.abs()))
+        fine_samples = fine_samples + add_mask*th.sign(excess) + 1
+        # Old version - only adds the difference to the largest segment
+        # fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += n_samples - fine_samples.sum(dim=1) - n_bins
+        # fine_samples += 1
+
+        
         fine_samples_cum_sum = th.hstack((th.zeros(batch_size, 1, device=device), fine_samples.cumsum(dim=1)))
+
+        assert th.all(fine_samples > 0)
         
         # Instanciate the t_fine tensor and arange is used to mask the correct t values for each batch
         arange = th.arange(n_samples, device=device).unsqueeze(0)
