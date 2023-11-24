@@ -68,9 +68,9 @@ if __name__ == "__main__":
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
                 logging_start=0.002,
-                delay_start=1/200,
-                delay_end=1/16,
-                delay_taper=4.0,
+                delay_start=1/16,
+                delay_end=1/4,
+                delay_taper=5.0,
                 train_image_names=["r_1", "r_23"],
                 validation_image_names=["r_2", "r_84"],
                 reconstruction_batch_size=BATCH_SIZE,
