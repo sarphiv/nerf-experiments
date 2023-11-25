@@ -181,6 +181,7 @@ data/
 # bsub output files
 *.err
 *.out
+/bsub*/*
 
 # vscode settings
 .vscode/settings.json
