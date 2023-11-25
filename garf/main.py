@@ -28,7 +28,7 @@ if __name__ == "__main__":
 
 
     # Set up data module
-    BATCH_SIZE = 2024
+    BATCH_SIZE = 1024
     NUM_WORKERS = 8
 
     dm = ImagePoseDataModule(
@@ -103,9 +103,9 @@ if __name__ == "__main__":
 
     # Set up model
     # NOTE: Period is in epoch fractions
-    CAMERA_LEARNING_RATE_START = 1e-3
+    CAMERA_LEARNING_RATE_START = 1e-4
     CAMERA_LEARNING_RATE_STOP = 1e-5
-    CAMERA_LEARNING_RATE_STOP_EPOCH = 4
+    CAMERA_LEARNING_RATE_STOP_EPOCH = 3
     CAMERA_LEARNING_RATE_PERIOD = 0.01
     CAMERA_LEARNING_RATE_DECAY: float = 2**(log2(CAMERA_LEARNING_RATE_STOP/CAMERA_LEARNING_RATE_START) * CAMERA_LEARNING_RATE_PERIOD/CAMERA_LEARNING_RATE_STOP_EPOCH) # type: ignore
     
