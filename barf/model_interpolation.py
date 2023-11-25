@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Callable
 from itertools import chain
 import warnings
 import math
@@ -6,6 +6,7 @@ import math
 import torch as th
 import torch.nn as nn
 import pytorch_lightning as pl
+import nerfacc
 
 from model_interpolation_architecture import NerfModel, PositionalEncoding
 
@@ -66,6 +67,7 @@ class NerfInterpolation(pl.LightningModule):
         samples_per_ray_radiance: int,
         model_proposal: NerfModel|None = None,
         samples_per_ray_proposal: int = 0,
+        use_nerfacc: bool = False,
 
     ):  
 
@@ -88,6 +90,7 @@ class NerfInterpolation(pl.LightningModule):
 
         self.models = [model_radiance, model_proposal] if self.proposal else [model_radiance]
 
+        self.use_nerfacc = use_nerfacc
 
 
     def _get_intervals(self, t: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
@@ -180,7 +183,7 @@ class NerfInterpolation(pl.LightningModule):
         # fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += n_samples - fine_samples.sum(dim=1) - n_bins
         # fine_samples += 1
 
-        
+
         fine_samples_cum_sum = th.hstack((th.zeros(batch_size, 1, device=device), fine_samples.cumsum(dim=1)))
 
         assert th.all(fine_samples > 0)
@@ -319,9 +322,176 @@ class NerfInterpolation(pl.LightningModule):
         
         return rgb, weights, sample_dist
 
-        
 
     def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+        if self.use_nerfacc:
+            return self.forward_nerfacc(ray_origs, ray_dirs)
+        else:
+            return self.forward_original(ray_origs, ray_dirs)
+
+
+
+    def _create_proposal_forward(
+        self, 
+        ray_origs: th.Tensor, 
+        ray_dirs: th.Tensor
+    ) -> Callable[[th.Tensor, th.Tensor], th.Tensor]:
+        """Create a closure that captures the current rays and returns a function that samples the density at the given t values.
+        
+        Args:
+            ray_origs (th.Tensor): Tensor of shape (n_rays, 3) - the ray origins.
+            ray_dirs (th.Tensor): Tensor of shape (n_rays, 3) - the ray directions.
+            
+        Returns:
+            Callable[[th.Tensor, th.Tensor], th.Tensor]: Function that samples the density at the given t values.
+        """
+        # Define forward function that captures the current rays        
+        def forward(t_starts: th.Tensor, t_ends: th.Tensor) -> th.Tensor:
+            """Sample each ray at the given t values and return the sampled density.
+            
+            Args:
+                t_starts (th.Tensor): Tensor of shape (n_rays, n_samples) - the start values for each ray.
+                t_ends (th.Tensor): Tensor of shape (n_rays, n_samples) - the end values for each ray.
+                
+            Returns:
+                th.Tensor: Tensor of shape (n_rays, n_samples) - the sampled density.
+            """
+            # Calculate positions to sample (n_rays, n_samples, 3)
+
+            sample_pos, sample_dir = self._compute_positions(ray_origs, ray_dirs, (t_starts + t_ends)/2)
+            sample_dist = t_ends - t_starts
+
+            # Ungroup samples by ray (for the model)
+            sample_pos = sample_pos.view(-1, 3)
+            sample_dir = sample_dir.view(-1, 3)
+            
+            # Evaluate density and color at sample positions
+            sample_density, sample_color = model_proposal.forward(sample_pos, sample_dir)
+
+            # # Calculate and return densities (n_rays, n_samples)
+            # return self.proposal_network(positions.view(-1, 3)).view(t_starts.shape)
+            return sample_density.view(t_starts.shape)
+
+        # Return closure
+        return forward
+
+
+    def _create_radiance_forward(
+        self, 
+        ray_origs: th.Tensor, 
+        ray_dirs: th.Tensor,
+    ) -> Callable[[th.Tensor, th.Tensor, Optional[th.Tensor]], tuple[th.Tensor, th.Tensor]]:
+        """Create a closure that captures the current rays and returns a function that samples the radiance at the given t values.
+        
+        Args:
+            ray_origs (th.Tensor): Tensor of shape (n_rays, 3) - the ray origins.
+            ray_dirs (th.Tensor): Tensor of shape (n_rays, 3) - the ray directions.
+            
+        Returns:
+            Callable[[th.Tensor, th.Tensor, Optional[th.Tensor]], tuple[th.Tensor, th.Tensor]]: Function that samples the radiance at the given t values.
+        """
+        
+        # Define forward function that captures the current rays
+        def forward(
+            t_starts: th.Tensor, 
+            t_ends: th.Tensor, 
+            ray_indices: Optional[th.Tensor] = None
+        ) -> tuple[th.Tensor, th.Tensor]:
+            """Sample each ray at the given t values and return the sampled density.
+            
+            Args:
+                t_starts (th.Tensor): Tensor of shape (n_rays, n_samples) - the start values for each ray.
+                t_ends (th.Tensor): Tensor of shape (n_rays, n_samples) - the end values for each ray.
+                ray_indices (th.Tensor): Not used. Tensor of shape (n_rays, n_samples) - the ray indices for each sample.
+                
+            Returns:
+                th.Tensor, th.Tensor: Tensors of shape (n_rays, n_samples, x), where x=3 for rgb, and x=1 for density.
+            """
+
+            # Compute the positions for the given t values
+            sample_pos, sample_dir = self._compute_positions(ray_origs, ray_dirs, (t_starts + t_ends)/2)
+            sample_dist = t_ends - t_starts
+
+            # Ungroup samples by ray (for the model)
+            sample_pos = sample_pos.view(-1, 3)
+            sample_dir = sample_dir.view(-1, 3)
+            
+            # Evaluate density and color at sample positions
+            sample_density, sample_color = model.forward(sample_pos, sample_dir)
+
+            assert not th.isnan(sample_density).any(), "Density is NaN"
+            assert not th.isnan(sample_color).any(), "Color is NaN"
+            
+            # Group samples by ray
+            sample_density = sample_density.view(*t_starts.shape)
+            sample_color = sample_color.view(*t_starts.shape, 3)
+
+            return sample_color, sample_density
+
+            # # Calculate positions to sample (n_rays, n_samples, 3)
+            # positions = self._get_positions(ray_origs, ray_dirs, t_starts, t_ends)
+
+            # # Calculate rgb and densities (n_rays, n_samples, x)
+            # rgb, density = self.radiance_network(
+            #     positions.view(-1, 3), 
+            #     ray_dirs.repeat_interleave(positions.shape[1], dim=0)
+            # )
+            
+            # # Return for volume rendering (n_rays, 3), (n_rays, n_samples)
+            # return rgb.view(*t_starts.shape, 3), density.view(t_starts.shape)
+
+        # Return closure
+        return forward
+
+
+    def forward_nerfacc(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor, Dict]:
+        """
+        Forward pass of the model.
+        Given the ray origins and directions, compute the rgb values for the given rays.
+
+        Args:
+            ray_origs: Tensor of shape (n_rays, 3) - focal point position in world, i.e. origin in camera coordinates
+            ray_dirs: Tensor of shape (n_rays, 3) - direction vectors (unit vectors) of the viewing directions
+
+        Returns:
+            rgb: Tensor of shape (n_rays, 3) - the rgb values of the given rays
+            opacity: Tensor of shape (n_rays, 1) - the opacity values of the given rays
+            depth: Tensor of shape (n_rays, 1) - the depth values of the given rays
+            extras: Dict - extra intermediate calculation data, e.g. transmittance
+        """
+        # Estimate positions to sample
+        t_starts, t_ends = self.transmittance_estimator.sampling(
+            prop_sigma_fns=[self._create_proposal_forward(ray_origs, ray_dirs)], 
+            prop_samples=[self.proposal_samples_per_ray],
+            num_samples=self.radiance_samples_per_ray,
+            n_rays=ray_origs.shape[0],
+            near_plane=self.near_sphere_normalized,
+            far_plane=self.far_sphere_normalized,
+            sampling_type="lindisp",
+            stratified=self.training,
+            requires_grad=th.is_grad_enabled()
+        )
+
+        # Sample colors and densities
+        rgb, opacity, depth, extras = nerfacc.rendering(
+            t_starts=t_starts,
+            t_ends=t_ends,
+            ray_indices=None,
+            n_rays=None,
+            rgb_sigma_fn=self._create_radiance_forward(ray_origs, ray_dirs),
+            render_bkgd=None
+        )
+
+
+        # Return colors for the given pixel coordinates (n_rays, 3),
+        #  together with the opacity (n_rays, 1) and depth (n_rays, 1),
+        #  and the extras Dict
+        return rgb, opacity, depth, extras
+
+
+
+
+    def forward_original(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
         Forward pass of the model.
         Given the ray origins and directions, compute the rgb values for the given rays.
