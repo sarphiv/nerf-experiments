@@ -156,7 +156,6 @@ if __name__ == "__main__":
                                                     scale=1.
                                                     )
 
-# TODO give the models names
     model_radiance = NerfModel(
         n_hidden=4,
         hidden_dim=256,
