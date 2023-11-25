@@ -434,16 +434,16 @@ class NerfInterpolation(pl.LightningModule):
 
         optimizer = th.optim.Adam(
             [
-                {"params": model.parameters(), "lr": model.learning_rate_start}
-                for model in self.models
+                {"params": param_group["parameters"], "lr": param_group["learning_rate_start"]}
+                for param_group in self.param_groups
             ]
         )
 
         lr_scheduler = SchedulerLeNice(
             optimizer, 
-            start_LR=[model.learning_rate_start for model in self.models], 
-            stop_LR= [model.learning_rate_stop for model in self.models], 
-            number_of_steps=[model.learning_rate_decay_end for model in self.models],
+            start_LR=[param_group["learning_rate_start"] for param_group in self.param_groups], 
+            stop_LR= [param_group["learning_rate_stop"] for param_group in self.param_groups], 
+            number_of_steps=[param_group["learning_rate_decay_end"] for param_group in self.param_groups],
             verbose=False
         )
 

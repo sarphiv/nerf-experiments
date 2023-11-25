@@ -1,4 +1,4 @@
-from typing import Iterator
+from typing import Iterator, Literal
 
 import torch as th
 import torch.nn as nn
@@ -152,22 +152,20 @@ class BarfPositionalEncoding(PositionalEncoding):
 class NerfBaseModel(nn.Module):
     def __init__(self):
         super().__init__()
-        self.param_groups: list[dict[str, float]] = []
+        self.param_groups: list[dict[Literal["parameters", "learning_rate_start", "learning_rate_stop", "learning_rate_decay_end"], float]] = []
     
     def _add_param_group(self,
-                         group_name: str,
                          parameters: Iterator,
                          learning_rate_start: float,
                          learning_rate_stop: float,
                          learning_rate_decay_end: float
                          ):
-        assert group_name not in self.param_groups
-        self.param_groups[group_name] = {
+        self.param_groups.append({
                             "parameters": parameters,
                             "learning_rate_start": learning_rate_start,
                             "learning_rate_stop": learning_rate_stop,
                             "learning_rate_decay_end": learning_rate_decay_end,
-         }
+         })
         
 
 
@@ -180,7 +178,6 @@ class NerfModel(NerfBaseModel):
         n_segments: int,
         position_encoder: PositionalEncoding,
         direction_encoder: PositionalEncoding,
-        model_name: str,
         learning_rate_start: float = 5e-4,
         learning_rate_stop: float = 5e-5,
         learning_rate_decay_end: float = 0,
@@ -232,7 +229,7 @@ class NerfModel(NerfBaseModel):
         self.sigmoid = nn.Sigmoid()
 
 
-        self._add_param_group(model_name, self.parameters(), learning_rate_start, learning_rate_stop, learning_rate_decay_end)
+        self._add_param_group(self.parameters(), learning_rate_start, learning_rate_stop, learning_rate_decay_end)
                               
 
     def forward(self,

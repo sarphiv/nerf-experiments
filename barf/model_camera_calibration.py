@@ -35,7 +35,7 @@ class CameraCalibrationModel(NerfInterpolation):
                                                   camera_learning_rate_decay_end)
         
         # TODO: rewrite as param groups - see nerfinterpolation
-        self.models = self.models + [self.camera_extrinsics]
+        self.param_groups += self.camera_extrinsics.param_groups # proposal and radiance network are already in the param groups
 
         # Store hyperparameters
         self.max_gaussian_sigma = max_gaussian_sigma
