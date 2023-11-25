@@ -2,8 +2,9 @@ import torch as th
 import torch.nn as nn
 
 from magic import MAGIC_NUMBER_THE_SECOND
+from model_interpolation_architecture import NerfBaseModel
 
-class CameraExtrinsics(nn.Module):
+class CameraExtrinsics(NerfBaseModel):
     def __init__(self,
                  n_train_images: int,
                  learning_rate_start: float,
@@ -16,9 +17,7 @@ class CameraExtrinsics(nn.Module):
         self.rotation = nn.Parameter(th.zeros((n_train_images, 3)))
         self.translation = nn.Parameter(th.zeros((n_train_images, 3)))
 
-        self.learning_rate_start = learning_rate_start
-        self.learning_rate_stop = learning_rate_stop
-        self.learning_rate_decay_end = learning_rate_decay_end
+        self._add_param_group(self.parameters(), learning_rate_start, learning_rate_stop, learning_rate_decay_end)
 
     @staticmethod
     def so3_to_SO3(so3: th.Tensor) -> th.Tensor:
@@ -64,7 +63,7 @@ class CameraExtrinsics(nn.Module):
         Forwards pass: Gets the origins in the predicted camera space
         """
         # Translation
-        t = self.translation[i] / MAGIC_NUMBER_THE_SECOND # TODO DONT 
+        t = self.translation[i] / MAGIC_NUMBER_THE_SECOND # TODO DON'T 
          
         # Create the rotation matrix
         

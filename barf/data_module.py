@@ -27,6 +27,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         translation_noise_sigma: float=1.0,
         camera_noise_seed: Optional[int]=None,
         gaussian_blur_sigmas: Optional[list[float]]=[0.0], # TODO: change such that default argument is none, and then gaussian blur is disabled
+                                                           # ANSWER: has already been done: if sigma is less than 0.25 no blur is applied
         validation_fraction: float = 1.0,
         validation_fraction_shuffle: Literal["disabled", "random"] | int = "disabled",
         *dataloader_args, **dataloader_kwargs
@@ -42,9 +43,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
             rotation_noise_sigma (float, optional): Standard deviation of rotation noise in radians. Defaults to 1.0.
             translation_noise_sigma (float, optional): Standard deviation of translation noise. Defaults to 1.0.
             camera_noise_seed (Optional[int], optional): Seed for the camera noise generator. Defaults to None.
-            gaussian_blur_kernel_size (int, optional): Kernel size of the Gaussian blur. Defaults to 40.
-            gaussian_blur_relative_sigma_start (float, optional): Starting relative sigma of the Gaussian blur. Defaults to 0..
-            gaussian_blur_relative_sigma_decay (float, optional): Relative sigma decay of the Gaussian blur. Defaults to 1..
+            gaussian_blur_sigmas: (Optional[list[float]], optional): the predetermined standard deviations for the guassian blur.
             validation_fraction (float, optional): Fraction of the validation dataset to use for validation. Defaults to 1.0.
             validation_fraction_shuffle (Literal["disabled", "random"] | int, optional): Whether to shuffle the validation data. 
                 If "disabled", validation data is not shuffled. If "random", validation data is shuffled randomly. 

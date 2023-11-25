@@ -1,4 +1,4 @@
-from typing import Literal, Callable
+from typing import Literal, Callable, Optional
 from itertools import chain
 import warnings
 import math
@@ -89,10 +89,10 @@ class NerfInterpolation(pl.LightningModule):
 
         self.proposal = samples_per_ray_proposal > 0
 
-        self.models = [model_radiance, model_proposal] if self.proposal else [model_radiance]
+        self.param_groups = [param_group for model in ([model_radiance, model_proposal] if self.proposal else [model_radiance])
+                             for param_group in model.param_groups]
 
         self.use_nerfacc = use_nerfacc
-
 
     def _get_intervals(self, t: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
@@ -153,9 +153,9 @@ class NerfInterpolation(pl.LightningModule):
 
         Parameters:
         -----------
-            t_coarse:           Tensor of shape (batch_size, samples_per_ray_coarse) - the t-values for the beginning of each bin
-            weights:            Tensor of shape (batch_size, samples_per_ray_coarse) (these are assumed to almost sum to 1)
-            distances_coarse:   Tensor of shape (batch_size, samples_per_ray_coarse)
+            t_coarse:           Tensor of shape (batch_size, samples_per_ray_proposal) - the t-values for the beginning of each bin
+            weights:            Tensor of shape (batch_size, samples_per_ray_proposal) (these are assumed to almost sum to 1)
+            distances_coarse:   Tensor of shape (batch_size, samples_per_ray_proposal)
         
         Returns:
         --------
@@ -180,6 +180,7 @@ class NerfInterpolation(pl.LightningModule):
         rank = fine_samples.argsort(dim=1).argsort(dim=1)
         add_mask = (rank >= (n_bins - excess.abs()))
         fine_samples = fine_samples + add_mask*th.sign(excess) + 1
+        # NOTE: this may lead to empty bins -> will fail.
         # Old version - only adds the difference to the largest segment
         # fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += n_samples - fine_samples.sum(dim=1) - n_bins
         # fine_samples += 1
@@ -367,7 +368,7 @@ class NerfInterpolation(pl.LightningModule):
             sample_dir = sample_dir.view(-1, 3)
             
             # Evaluate density and color at sample positions
-            sample_density, sample_color = model_proposal.forward(sample_pos, sample_dir)
+            sample_density, sample_color = self.model_proposal.forward(sample_pos, sample_dir)
 
             # # Calculate and return densities (n_rays, n_samples)
             # return self.proposal_network(positions.view(-1, 3)).view(t_starts.shape)
@@ -418,7 +419,7 @@ class NerfInterpolation(pl.LightningModule):
             sample_dir = sample_dir.view(-1, 3)
             
             # Evaluate density and color at sample positions
-            sample_density, sample_color = model.forward(sample_pos, sample_dir)
+            sample_density, sample_color = self.model_radiance.forward(sample_pos, sample_dir)
 
             assert not th.isnan(sample_density).any(), "Density is NaN"
             assert not th.isnan(sample_color).any(), "Color is NaN"
@@ -445,7 +446,7 @@ class NerfInterpolation(pl.LightningModule):
         return forward
 
 
-    def forward_nerfacc(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor, Dict]:
+    def forward_nerfacc(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor, dict]:
         """
         Forward pass of the model.
         Given the ray origins and directions, compute the rgb values for the given rays.
@@ -604,16 +605,16 @@ class NerfInterpolation(pl.LightningModule):
 
         optimizer = th.optim.Adam(
             [
-                {"params": model.parameters(), "lr": model.learning_rate_start}
-                for model in self.models
+                {"params": param_group["parameters"], "lr": param_group["learning_rate_start"]}
+                for param_group in self.param_groups
             ]
         )
 
         lr_scheduler = SchedulerLeNice(
             optimizer, 
-            start_LR=[model.learning_rate_start for model in self.models], 
-            stop_LR= [model.learning_rate_stop for model in self.models], 
-            number_of_steps=[model.learning_rate_decay_end for model in self.models],
+            start_LR=[param_group["learning_rate_start"] for param_group in self.param_groups], 
+            stop_LR= [param_group["learning_rate_stop"] for param_group in self.param_groups], 
+            number_of_steps=[param_group["learning_rate_decay_end"] for param_group in self.param_groups],
             verbose=False
         )
 

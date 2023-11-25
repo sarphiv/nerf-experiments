@@ -61,9 +61,9 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         Details:
         --------
         `space_transform_scale` and `space_transform_translate` are used to transform the camera to world matrices such that the cameras are centered.
-        However, it uses the convention, where the input is actually the inverse of the transformation that is applied to the camera to world matrices.
+        However, it uses the convention, where the transform arguments are actually the inverse of the transformation that is applied to the camera to world matrices.
         This means, that, camera_poses_original = space_transform_scale * camera_poses_transformed + space_transform_translate,
-        where camera_poses_original is the original camera to world matrices, and camera_poses_transformed is the transformed camera to world matrices.
+        where camera_poses_original are the original camera to world matrices, and camera_poses_transformed are the transformed camera to world matrices.
 
         """
         super().__init__()
@@ -147,7 +147,8 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
                                   self.ray_origins,
                                   self.ray_directions,
                                   self.rotation_noise_sigma,
-                                  self.translation_noise_sigma)
+                                  self.translation_noise_sigma,
+                                  self.noise_seed)
         
         print_verbose("Done loading data!")
         

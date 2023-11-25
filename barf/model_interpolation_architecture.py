@@ -1,3 +1,5 @@
+from typing import Iterator, Literal
+
 import torch as th
 import torch.nn as nn
 
@@ -147,7 +149,27 @@ class BarfPositionalEncoding(PositionalEncoding):
             return th.hstack((mask*th.cos(args), mask*th.sin(args)))
         
 
-class NerfModel(nn.Module):
+class NerfBaseModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.param_groups: list[dict[Literal["parameters", "learning_rate_start", "learning_rate_stop", "learning_rate_decay_end"], float]] = []
+    
+    def _add_param_group(self,
+                         parameters: Iterator,
+                         learning_rate_start: float,
+                         learning_rate_stop: float,
+                         learning_rate_decay_end: float
+                         ):
+        self.param_groups.append({
+                            "parameters": parameters,
+                            "learning_rate_start": learning_rate_start,
+                            "learning_rate_stop": learning_rate_stop,
+                            "learning_rate_decay_end": learning_rate_decay_end,
+         })
+        
+
+
+class NerfModel(NerfBaseModel):
     def __init__(self, 
         n_hidden: int,
         hidden_dim: int,
@@ -177,9 +199,6 @@ class NerfModel(nn.Module):
         self.n_segments = n_segments
         self.position_encoder = position_encoder
         self.direction_encoder = direction_encoder
-        self.learning_rate_start = learning_rate_start
-        self.learning_rate_stop = learning_rate_stop
-        self.learning_rate_decay_end = learning_rate_decay_end
 
         # Dimensionality of the input to the network 
         positional_dim = self.position_encoder.output_dim
@@ -208,6 +227,10 @@ class NerfModel(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.softplus = nn.Softplus(threshold=8)
         self.sigmoid = nn.Sigmoid()
+
+
+        self._add_param_group(self.parameters(), learning_rate_start, learning_rate_stop, learning_rate_decay_end)
+                              
 
     def forward(self,
                 pos: th.Tensor,
