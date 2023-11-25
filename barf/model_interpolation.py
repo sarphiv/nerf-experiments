@@ -10,6 +10,7 @@ import nerfacc
 
 from model_interpolation_architecture import NerfModel, PositionalEncoding
 
+
 # Type alias for inner model batch input
 #  (origin, direction, pixel_color, pixel_relative_blur)
 InnerModelBatchInput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]
