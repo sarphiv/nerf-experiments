@@ -15,6 +15,9 @@ from model_interpolation_architecture import NerfModel, PositionalEncoding
 #  (origin, direction, pixel_color, pixel_relative_blur)
 InnerModelBatchInput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]
 
+uniform_sampling_strategies = Literal["stratified_uniform", "equidistant"]
+integration_strategies = Literal["left", "middle"]
+
 # MAGIC_NUMBER = 7#/24
 from magic import MAGIC_NUMBER
 
@@ -42,9 +45,6 @@ class SchedulerLeNice(th.optim.lr_scheduler.LRScheduler):
 
         super().__init__(optimizer,verbose=verbose)
         
-
-
-    
     def get_lr(self):
         # Original function 
         if not self._get_lr_called_within_step:
@@ -59,22 +59,26 @@ class SchedulerLeNice(th.optim.lr_scheduler.LRScheduler):
 
 
 
-class NerfInterpolation(pl.LightningModule):
+class NerfInterpolationBase(pl.LightningModule):
     def __init__(
         self, 
         near_sphere_normalized: float,
         far_sphere_normalized: float,
         model_radiance: NerfModel,
         samples_per_ray_radiance: int,
+        uniform_sampling_strategy: uniform_sampling_strategies = "stratified_uniform",
+        uniform_sampling_offset_size: float = 0.,
+        integration_strategy: integration_strategies = "middle",
         model_proposal: NerfModel|None = None,
         samples_per_ray_proposal: int = 0,
-        use_nerfacc: bool = False,
 
     ):  
-
-
+        
         super().__init__()
-        # self.save_hyperparameters()
+
+        self.save_hyperparameters(
+            ignore=["model_radiance", "model_proposal",]
+                                )
 
         # The near and far sphere distances 
         self.near_sphere_normalized = near_sphere_normalized
@@ -82,6 +86,10 @@ class NerfInterpolation(pl.LightningModule):
 
         self.samples_per_ray_radiance = samples_per_ray_radiance
         self.samples_per_ray_proposal = samples_per_ray_proposal
+
+        self.uniform_sampling_strategy = uniform_sampling_strategy
+        self.uniform_sampling_offset_size = uniform_sampling_offset_size
+        self.integration_strategy = integration_strategy
 
         self.model_radiance = model_radiance
         self.model_proposal = model_proposal
@@ -92,7 +100,7 @@ class NerfInterpolation(pl.LightningModule):
         self.param_groups = [param_group for model in ([model_radiance, model_proposal] if self.proposal else [model_radiance])
                              for param_group in model.param_groups]
 
-        self.use_nerfacc = use_nerfacc
+
 
     def _get_intervals(self, t: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
@@ -115,13 +123,22 @@ class NerfInterpolation(pl.LightningModule):
         return t_start, t_end
 
 
-    def _sample_t_stratified_uniform(self, batch_size: int, n_samples: int) -> tuple[th.Tensor, th.Tensor]:
+    def _sample_t_stratified_uniform(self,
+                                     batch_size: int,
+                                     n_samples: int,
+                                     strategy: uniform_sampling_strategies,
+                                     offset_size: float,
+                                     ) -> tuple[th.Tensor, th.Tensor]:
         """
         Sample t for coarse sampling. Divides interval into equally sized bins, and samples a random point in each bin.
 
         Parameters:
         -----------
             batch_size: int - the amount of rays in a batch
+            n_samples: int - samples per ray
+            strategy: str - what sampling strategy to use
+            offset_size: float in [0,1] - offset all samples by the same uniformly random number in the interval [0, interval_size*offset_size]
+                                          where interval_size = (self.far_sphere_normalized - self.near_sphere_normalized) / n_samples
 
         Returns:
         -----------
@@ -139,9 +156,17 @@ class NerfInterpolation(pl.LightningModule):
             n_samples, 
             device=self.device
         ).unsqueeze(0).repeat(batch_size, 1)
-        
-        # Perturb sample positions to be anywhere in each interval
-        t_coarse += th.rand_like(t_coarse, device=self.device) * interval_size
+
+        if strategy == "stratified_uniform":
+            # Perturb sample positions to be anywhere in each interval
+            t_coarse += th.rand((batch_size, n_samples), device=self.device) * interval_size
+        elif strategy == "equidistant":
+            pass
+        else:
+            raise ValueError(f"sampling_strategy must be one of {uniform_sampling_strategies.__args__}, was '{strategy}'")
+
+        if offset_size != 0:
+            t_coarse += th.rand((batch_size, 1), device=self.device) * interval_size * offset_size
 
         return self._get_intervals(t_coarse)
     
@@ -168,45 +193,48 @@ class NerfInterpolation(pl.LightningModule):
         device = t_coarse.device
 
         # Each segment needs weight*samples_per_ray_fine new samples plus 1 because of the coarse sample 
-        fine_samples = th.round(weights*(n_samples - n_bins))
+        fine_samples_raw = th.round(weights*(n_samples - n_bins))
 
 
         # # Rounding might cause the sum to be less than or larger than samples_per_ray_fine (especially since weights don't sum all the way to 1)
         # New way of distributing the excess created by rounding:
-        # if th.round(weights*(n_samples - n_bins)) produces k too few samples - add 1 to the k largest elements in th.round(weights*(n_samples - n_bins))
-        # if it produces too many samples, subtract 1 from the k largest elements.
-        fine_samples_sum = fine_samples.sum(dim=1, keepdim=True)
-        excess = n_samples - n_bins - fine_samples_sum
-        rank = fine_samples.argsort(dim=1).argsort(dim=1)
-        add_mask = (rank >= (n_bins - excess.abs()))
-        fine_samples = fine_samples + add_mask*th.sign(excess) + 1
-        # NOTE: this may lead to empty bins -> will fail.
-        # Old version - only adds the difference to the largest segment
-        # fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += n_samples - fine_samples.sum(dim=1) - n_bins
-        # fine_samples += 1
+        fine_samples = (fine_samples_raw/fine_samples_raw.sum(dim=1, keepdim=True)*(n_samples - n_bins)).round()
+        fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += n_samples - fine_samples.sum(dim=1) - n_bins
+        fine_samples += 1
+        if th.any(fine_samples <= 0):
+            warnings.warn(f"couldn't sample exactly {n_samples} with pdf sampling - using _sample_t_stratified_uniform instead")
+            t_start, t_end = self._sample_t_stratified_uniform(batch_size, n_samples, "equidistant", 0.)
 
+        else:
+            fine_samples_cum_sum = th.hstack((th.zeros(batch_size, 1, device=device), fine_samples.cumsum(dim=1)))
+            
+            # Instanciate the t_fine tensor and arange is used to mask the correct t values for each batch
+            arange = th.arange(n_samples, device=device).unsqueeze(0)
+            t_fine = th.zeros(batch_size, n_samples, device=device)
 
-        fine_samples_cum_sum = th.hstack((th.zeros(batch_size, 1, device=device), fine_samples.cumsum(dim=1)))
+            for i in range(n_bins):
+                # Pick out the samples for each segment, everything within cumsum[i] and cumsum[i+1] is in segment i because the difference is the new samples
+                # This mask is for each ray in the batch 
+                mask = (arange >= fine_samples_cum_sum[:, i].unsqueeze(-1)) & (arange < fine_samples_cum_sum[:, i+1].unsqueeze(-1))
+                # Set samples to be the coarsely sampled point 
+                t_fine += t_coarse[:, i].unsqueeze(-1)*mask
+                # And spread them out evenly in the segment by deviding the length of the segment with the amount of samples in that segment
+                t_fine += (arange - fine_samples_cum_sum[:, i].unsqueeze(-1))*mask*distances_coarse[:, i].unsqueeze(-1)/fine_samples[:, i].unsqueeze(-1)
 
-        assert th.all(fine_samples > 0)
-        
-        # Instanciate the t_fine tensor and arange is used to mask the correct t values for each batch
-        arange = th.arange(n_samples, device=device).unsqueeze(0)
-        t_fine = th.zeros(batch_size, n_samples, device=device)
+            t_start, t_end = self._get_intervals(t_fine)
 
-        for i in range(n_bins):
-            # Pick out the samples for each segment, everything within cumsum[i] and cumsum[i+1] is in segment i because the difference is the new samples
-            # This mask is for each ray in the batch 
-            mask = (arange >= fine_samples_cum_sum[:, i].unsqueeze(-1)) & (arange < fine_samples_cum_sum[:, i+1].unsqueeze(-1))
-            # Set samples to be the coarsely sampled point 
-            t_fine += t_coarse[:, i].unsqueeze(-1)*mask
-            # And spread them out evenly in the segment by deviding the length of the segment with the amount of samples in that segment
-            t_fine += (arange - fine_samples_cum_sum[:, i].unsqueeze(-1))*mask*distances_coarse[:, i].unsqueeze(-1)/fine_samples[:, i].unsqueeze(-1)
+        return t_start, t_end
 
-        return self._get_intervals(t_fine)
+    def _get_t_query(self, t_start: th.Tensor, t_end: th.Tensor, strategy: integration_strategies) -> th.Tensor:
+        if strategy == "left":
+            t_query = t_start
+        elif strategy == "middle":
+            t_query = (t_start + t_end)/2
+        else:
+            raise ValueError(f"strategy must be one of {integration_strategies.__args__}, was '{strategy}'")
+        return t_query
 
-
-    def _compute_positions(self, origins: th.Tensor, directions: th.Tensor, t: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+    def _compute_positions(self, origins: th.Tensor, directions: th.Tensor, t_start: th.Tensor, t_end: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
         Compute the positions and directions for given rays and t values.
 
@@ -224,6 +252,7 @@ class NerfInterpolation(pl.LightningModule):
         """
         # Calculates the position with the equation p = o + t*d 
         # The unsqueeze is because origins and directions are spacial vectors while t is the sample times
+        t = self._get_t_query(t_start, t_end, self.integration_strategy)
         positions = origins.unsqueeze(1) + t.unsqueeze(2) * directions.unsqueeze(1)
 
         # Format the directions to match the found positions
@@ -231,6 +260,68 @@ class NerfInterpolation(pl.LightningModule):
         
         return positions, directions
 
+
+    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+        raise NotImplementedError("forward must be implemented")
+
+
+    def validation_transform_rays(self, ray_origs, ray_dirs, transform_params=None):
+        return ray_origs, ray_dirs, transform_params
+
+
+    def _step_helper(self, batch, batch_idx, purpose: Literal["train", "val"]):
+        raise NotImplementedError
+
+
+    def training_step(self, batch, batch_idx):
+        return self._step_helper(batch, batch_idx, "train")
+
+
+    def validation_step(self, batch, batch_idx):
+        return self._step_helper(batch, batch_idx, "val")
+
+
+    def configure_optimizers(self):
+        # Create optimizer and schedular 
+
+        optimizer = th.optim.Adam(
+            [
+                {"params": param_group["parameters"], "lr": param_group["learning_rate_start"]}
+                for param_group in self.param_groups
+            ]
+        )
+
+        lr_scheduler = SchedulerLeNice(
+            optimizer, 
+            start_LR=[param_group["learning_rate_start"] for param_group in self.param_groups], 
+            stop_LR= [param_group["learning_rate_stop"] for param_group in self.param_groups], 
+            number_of_steps=[param_group["learning_rate_decay_end"] for param_group in self.param_groups],
+            verbose=False
+        )
+
+    
+        lr_scheduler_config = {
+            # REQUIRED: The scheduler instance
+            "scheduler": lr_scheduler,
+            # The unit of the scheduler's step size, could also be 'step'.
+            # 'epoch' updates the scheduler on epoch end whereas 'step'
+            # updates it after a optimizer update.
+            "interval": "step",
+            # How many epochs/steps should pass between calls to
+            # `scheduler.step()`. 1 corresponds to updating the learning
+            # rate after every epoch/step.
+            "frequency": 1,
+            # If using the `LearningRateMonitor` callback to monitor the
+            # learning rate progress, this keyword can be used to specify
+            # a custom logged name
+            "name": "le_nice_lr_scheduler",
+        }
+
+        return {"optimizer": optimizer, "lr_scheduler": lr_scheduler_config}
+
+
+
+class NerfInterpolationOurs(NerfInterpolationBase):
 
     def _render_rays(self, densities: th.Tensor, colors: th.Tensor, distances: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
@@ -277,6 +368,7 @@ class NerfInterpolation(pl.LightningModule):
                             t_end: th.Tensor,
                             ray_origs: th.Tensor,
                             ray_dirs: th.Tensor,
+                            # pixel_widths: th.Tensor,
                             batch_size: int,
                             samples_per_ray: int) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
         
@@ -302,18 +394,20 @@ class NerfInterpolation(pl.LightningModule):
         
         """
         # Compute the positions for the given t values
-        sample_pos, sample_dir = self._compute_positions(ray_origs, ray_dirs, (t_start + t_end)/2)
+        sample_pos, sample_dir = self._compute_positions(ray_origs, ray_dirs, t_start, t_end)
         sample_dist = t_end - t_start
 
         # Ungroup samples by ray (for the model)
         sample_pos = sample_pos.view(batch_size * samples_per_ray, 3)
         sample_dir = sample_dir.view(batch_size * samples_per_ray, 3)
         
+        # sample_pixel_widths = pixel_widths.repeat(1, samples_per_ray).view(batch_size * samples_per_ray, 1)
+        
         # Evaluate density and color at sample positions
         sample_density, sample_color = model.forward(sample_pos, sample_dir)
 
-        assert not th.isnan(sample_density).any(), "Density is NaN"
-        assert not th.isnan(sample_color).any(), "Color is NaN"
+        if th.isnan(sample_density).any(): warnings.warn("Density is NaN")
+        if th.isnan(sample_color).any(): warnings.warn("Color is NaN")
         
         # Group samples by ray
         sample_density = sample_density.view(batch_size, samples_per_ray)
@@ -322,16 +416,124 @@ class NerfInterpolation(pl.LightningModule):
         # Compute the rgb of the rays, and the weights for fine sampling
         rgb, weights = self._render_rays(sample_density, sample_color, sample_dist)
         
+
         return rgb, weights, sample_dist
 
 
     def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
-        if self.use_nerfacc:
-            return self.forward_nerfacc(ray_origs, ray_dirs)
-        else:
-            return self.forward_original(ray_origs, ray_dirs)
+        """
+        Forward pass of the model.
+        Given the ray origins and directions, compute the rgb values for the given rays.
+
+        Parameters:
+        -----------
+            ray_origs: Tensor of shape (batch_size, 3) - camera position, i.e. origin in camera coordinates
+            ray_dirs: Tensor of shape (batch_size, 3) - direction vectors (unit vectors) of the viewing directions
+
+        Returns:
+        --------
+            rgb_fine: Tensor of shape (batch_size, 3) - the rgb values for the given rays using fine model (the actual prediction)
+            rgb_coarse: Tensor of shape (batch_size, 3) - the rgb values for the given rays using coarse model (only used for the loss - not the rendering)
+        """
+
+        # Amount of pixels to render
+        batch_size = ray_origs.shape[0]
+        
+        
+        if self.proposal:
+            ### Coarse sampling
+            # sample t
+            t_coarse_start, t_coarse_end = self._sample_t_stratified_uniform(batch_size,
+                                                                             self.samples_per_ray_proposal,
+                                                                             self.uniform_sampling_strategy,
+                                                                             self.uniform_sampling_offset_size)
+
+            #compute rgb
+            rgb_coarse, weights, sample_dist_coarse = self._compute_color(self.model_proposal,
+                                                    t_coarse_start, 
+                                                    t_coarse_end,
+                                                    ray_origs,
+                                                    ray_dirs,
+                                                    # pixel_widths,
+                                                    batch_size,
+                                                    self.samples_per_ray_proposal)
+        
+            ### Fine sampling
+            # Sample t
+            t_fine_start, t_fine_end = self._sample_t_pdf_weighted(t_coarse_start, weights, sample_dist_coarse, self.samples_per_ray_radiance)
+            # compute rgb
+            rgb_fine, _, _ = self._compute_color(self.model_radiance,
+                                                    t_fine_start, 
+                                                    t_fine_end,
+                                                    ray_origs,
+                                                    ray_dirs,
+                                                    # pixel_widths,
+                                                    batch_size,
+                                                    self.samples_per_ray_radiance)
+        else: 
+            t_fine_start, t_fine_end = self._sample_t_stratified_uniform(batch_size,
+                                                                         self.samples_per_ray_radiance,
+                                                                         self.uniform_sampling_strategy,
+                                                                         self.uniform_sampling_offset_size)
+
+            #compute rgb
+            rgb_fine, _, _ = self._compute_color(self.model_radiance,
+                                                    t_fine_start, 
+                                                    t_fine_end,
+                                                    ray_origs,
+                                                    ray_dirs,
+                                                    # pixel_widths,
+                                                    batch_size,
+                                                    self.samples_per_ray_radiance)
+            rgb_coarse = None
+
+        # Return colors for the given pixel coordinates (batch_size, 3)
+        return rgb_fine, rgb_coarse
 
 
+
+    def _step_helper(self, batch, batch_idx, purpose: Literal["train", "val"]):
+
+        # unpack batch
+        (
+            ray_origs_raw, 
+            ray_origs_pred, 
+            ray_dirs_raw, 
+            ray_dirs_pred, 
+            ray_colors_raw, 
+            img_idx,
+            pixel_widths
+        ) = batch
+
+        # Forward pass
+        ray_colors_pred_fine, ray_colors_pred_coarse = self.forward(ray_origs_pred, ray_dirs_pred)
+
+
+        # compute the loss
+        loss = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw[:,-1])
+        psnr = -10 * math.log10(float(loss.detach().item()))
+        # Log metrics
+        logs  = {f"{purpose}_loss_fine": loss,
+                    f"{purpose}_psnr": psnr,
+                    }
+
+        if self.proposal:
+            loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors_raw[:,-1])
+            loss = loss + loss_coarse
+            logs[f"{purpose}_loss_coarse"] = loss_coarse
+
+        self.log_dict(logs)
+
+        return loss
+
+
+
+# TODO Not done - Torben fixme pretty please.
+class NerfInterpolationNerfacc(NerfInterpolationBase):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.transmittance_estimator = nerfacc.PropNetEstimator()
 
     def _create_proposal_forward(
         self, 
@@ -360,7 +562,7 @@ class NerfInterpolation(pl.LightningModule):
             """
             # Calculate positions to sample (n_rays, n_samples, 3)
 
-            sample_pos, sample_dir = self._compute_positions(ray_origs, ray_dirs, (t_starts + t_ends)/2)
+            sample_pos, sample_dir = self._compute_positions(ray_origs, ray_dirs,  t_starts, t_ends)
             sample_dist = t_ends - t_starts
 
             # Ungroup samples by ray (for the model)
@@ -411,7 +613,7 @@ class NerfInterpolation(pl.LightningModule):
             """
 
             # Compute the positions for the given t values
-            sample_pos, sample_dir = self._compute_positions(ray_origs, ray_dirs, (t_starts + t_ends)/2)
+            sample_pos, sample_dir = self._compute_positions(ray_origs, ray_dirs,  t_starts, t_ends)
             sample_dist = t_ends - t_starts
 
             # Ungroup samples by ray (for the model)
@@ -446,7 +648,7 @@ class NerfInterpolation(pl.LightningModule):
         return forward
 
 
-    def forward_nerfacc(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor, dict]:
+    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor, dict]:
         """
         Forward pass of the model.
         Given the ray origins and directions, compute the rgb values for the given rays.
@@ -461,18 +663,26 @@ class NerfInterpolation(pl.LightningModule):
             depth: Tensor of shape (n_rays, 1) - the depth values of the given rays
             extras: Dict - extra intermediate calculation data, e.g. transmittance
         """
-        # Estimate positions to sample
-        t_starts, t_ends = self.transmittance_estimator.sampling(
-            prop_sigma_fns=[self._create_proposal_forward(ray_origs, ray_dirs)], 
-            prop_samples=[self.proposal_samples_per_ray],
-            num_samples=self.radiance_samples_per_ray,
-            n_rays=ray_origs.shape[0],
-            near_plane=self.near_sphere_normalized,
-            far_plane=self.far_sphere_normalized,
-            sampling_type="lindisp",
-            stratified=self.training,
-            requires_grad=th.is_grad_enabled()
-        )
+
+        if self.proposal:
+            # Estimate positions to sample
+            t_starts, t_ends = self.transmittance_estimator.sampling(
+                prop_sigma_fns=[self._create_proposal_forward(ray_origs, ray_dirs)], 
+                prop_samples=[self.samples_per_ray_proposal],
+                num_samples=self.samples_per_ray_radiance,
+                n_rays=ray_origs.shape[0],
+                near_plane=self.near_sphere_normalized,
+                far_plane=self.far_sphere_normalized,
+                sampling_type="lindisp",
+                stratified=self.training,
+                requires_grad=th.is_grad_enabled()
+            )
+        else:
+            t_starts, t_ends = self._sample_t_stratified_uniform(ray_origs.shape[0],
+                                                                 self.samples_per_ray_radiance,
+                                                                 self.uniform_sampling_strategy,
+                                                                 self.uniform_sampling_offset_size)
+
 
         # Sample colors and densities
         rgb, opacity, depth, extras = nerfacc.rendering(
@@ -490,70 +700,6 @@ class NerfInterpolation(pl.LightningModule):
         #  and the extras Dict
         return rgb, opacity, depth, extras
 
-
-
-
-    def forward_original(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
-        """
-        Forward pass of the model.
-        Given the ray origins and directions, compute the rgb values for the given rays.
-
-        Parameters:
-        -----------
-            ray_origs: Tensor of shape (batch_size, 3) - camera position, i.e. origin in camera coordinates
-            ray_dirs: Tensor of shape (batch_size, 3) - direction vectors (unit vectors) of the viewing directions
-
-        Returns:
-        --------
-            rgb_fine: Tensor of shape (batch_size, 3) - the rgb values for the given rays using fine model (the actual prediction)
-            rgb_coarse: Tensor of shape (batch_size, 3) - the rgb values for the given rays using coarse model (only used for the loss - not the rendering)
-        """
-
-        # Amount of pixels to render
-        batch_size = ray_origs.shape[0]
-        
-        
-        if self.proposal:
-            ### Coarse sampling
-            # sample t
-            t_coarse_start, t_coarse_end = self._sample_t_stratified_uniform(batch_size, self.samples_per_ray_proposal)
-
-            #compute rgb
-            rgb_coarse, weights, sample_dist_coarse = self._compute_color(self.model_proposal,
-                                                    t_coarse_start, 
-                                                    t_coarse_end,
-                                                    ray_origs,
-                                                    ray_dirs,
-                                                    batch_size,
-                                                    self.samples_per_ray_proposal)
-        
-            ### Fine sampling
-            # Sample t
-            t_fine_start, t_fine_end = self._sample_t_pdf_weighted(t_coarse_start, weights, sample_dist_coarse, self.samples_per_ray_radiance)
-            # compute rgb
-            rgb_fine, _, _ = self._compute_color(self.model_radiance,
-                                                    t_fine_start, 
-                                                    t_fine_end,
-                                                    ray_origs,
-                                                    ray_dirs,
-                                                    batch_size,
-                                                    self.samples_per_ray_radiance)
-        else: 
-            t_fine_start, t_fine_end = self._sample_t_stratified_uniform(batch_size, self.samples_per_ray_radiance)
-
-            #compute rgb
-            rgb_fine, _, _ = self._compute_color(self.model_radiance,
-                                                    t_fine_start, 
-                                                    t_fine_end,
-                                                    ray_origs,
-                                                    ray_dirs,
-                                                    batch_size,
-                                                    self.samples_per_ray_radiance)
-            rgb_coarse = None
-
-        # Return colors for the given pixel coordinates (batch_size, 3)
-        return rgb_fine, rgb_coarse
-
     def _step_helper(self, batch, batch_idx, purpose: Literal["train", "val"]):
 
         # unpack batch
@@ -563,77 +709,20 @@ class NerfInterpolation(pl.LightningModule):
             ray_dirs_raw, 
             ray_dirs_pred, 
             ray_colors_raw, 
-            img_idx
+            img_idx,
+            pixel_widths
         ) = batch
 
         # Forward pass
-        ray_colors_pred_fine, ray_colors_pred_coarse = self(ray_origs_pred, ray_dirs_pred)
+        ray_colors_pred, ray_opacity, ray_depth, extras = self.forward(ray_origs_pred, ray_dirs_pred)
 
-
-        # compute the loss
-        loss = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw[:,-1])
-        psnr = -10 * math.log10(float(loss.detach().item()))
-        # Log metrics
-        logs  = {f"{purpose}_loss_fine": loss,
-                    f"{purpose}_psnr": psnr,
-                    }
-
+        # Calculate losses for training
+        radiance_loss = nn.functional.mse_loss(ray_colors_pred, ray_colors_raw[:, -1])
+        psnr = -10 * math.log10(float(radiance_loss.detach().item()))
         if self.proposal:
-            loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors_raw[:,-1]) #TODO fix interpolation
-            loss = loss + loss_coarse
-            logs[f"{purpose}_loss_coarse"] = loss_coarse
-
-        self.log_dict(logs)
-
+            proposal_loss = self.transmittance_estimator.compute_loss(extras["trans"])
+            loss = proposal_loss + radiance_loss
+        else:
+            loss = radiance_loss
+        # Return color prediction and losses
         return loss
-
-
-    def validation_transform_rays(self, ray_origs, ray_dirs, transform_params=None):
-        return ray_origs, ray_dirs, transform_params
-
-
-    def training_step(self, batch, batch_idx):
-        return self._step_helper(batch, batch_idx, "train")
-
-
-    def validation_step(self, batch, batch_idx):
-        return self._step_helper(batch, batch_idx, "val")
-
-
-    def configure_optimizers(self):
-        # Create optimizer and schedular 
-
-        optimizer = th.optim.Adam(
-            [
-                {"params": param_group["parameters"], "lr": param_group["learning_rate_start"]}
-                for param_group in self.param_groups
-            ]
-        )
-
-        lr_scheduler = SchedulerLeNice(
-            optimizer, 
-            start_LR=[param_group["learning_rate_start"] for param_group in self.param_groups], 
-            stop_LR= [param_group["learning_rate_stop"] for param_group in self.param_groups], 
-            number_of_steps=[param_group["learning_rate_decay_end"] for param_group in self.param_groups],
-            verbose=False
-        )
-
-    
-        lr_scheduler_config = {
-            # REQUIRED: The scheduler instance
-            "scheduler": lr_scheduler,
-            # The unit of the scheduler's step size, could also be 'step'.
-            # 'epoch' updates the scheduler on epoch end whereas 'step'
-            # updates it after a optimizer update.
-            "interval": "step",
-            # How many epochs/steps should pass between calls to
-            # `scheduler.step()`. 1 corresponds to updating the learning
-            # rate after every epoch/step.
-            "frequency": 1,
-            # If using the `LearningRateMonitor` callback to monitor the
-            # learning rate progress, this keyword can be used to specify
-            # a custom logged name
-            "name": "le_nice_lr_scheduler",
-        }
-
-        return {"optimizer": optimizer, "lr_scheduler": lr_scheduler_config}

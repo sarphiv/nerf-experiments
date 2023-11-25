@@ -96,6 +96,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             self.image_width,
         )
 
+        self.pixel_width = th.tensor(1/self.focal_length)
         
         # Load images
         (self.images,
@@ -631,7 +632,8 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             d_r.view(-1, 3)[i], 
             d_n.view(-1, 3)[i], 
             img.view(-1, len(self.gaussian_blur_sigmas), 3)[i],
-            th.tensor(self.index_to_index[img_idx])
+            th.tensor(self.index_to_index[img_idx]),
+            self.pixel_width,
         )
 
 

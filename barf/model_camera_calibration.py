@@ -10,12 +10,12 @@ from torch.optim.optimizer import Optimizer
 from dataset import DatasetOutput
 from data_module import ImagePoseDataModule
 from model_camera_extrinsics import CameraExtrinsics
-from model_interpolation import InnerModelBatchInput, NerfInterpolation
+from model_interpolation import InnerModelBatchInput, NerfInterpolationBase
 from model_interpolation_architecture import BarfPositionalEncoding
 
 
 
-class CameraCalibrationModel(NerfInterpolation):
+class CameraCalibrationModel(NerfInterpolationBase):
     def __init__(
         self, 
         n_training_images: int,
@@ -223,7 +223,8 @@ class CameraCalibrationModel(NerfInterpolation):
             ray_dirs_raw, 
             ray_dirs_noisy, 
             ray_colors_raw, 
-            img_idx
+            img_idx,
+            pixel_widths
         ) = batch
 
         # Transform rays to model prediction space
@@ -239,7 +240,8 @@ class CameraCalibrationModel(NerfInterpolation):
             ray_dirs_raw, 
             ray_dirs_pred, 
             ray_colors_raw, 
-            img_idx
+            img_idx,
+            pixel_widths
         )
 
     
@@ -264,7 +266,8 @@ class CameraCalibrationModel(NerfInterpolation):
             ray_dirs_raw, 
             ray_dirs_noisy, 
             ray_colors_raw, 
-            img_idx
+            img_idx,
+            pixel_widths
         ) = batch
 
         # Transform rays to model prediction space
@@ -281,7 +284,8 @@ class CameraCalibrationModel(NerfInterpolation):
             ray_dirs_raw, 
             ray_dirs_pred, 
             ray_colors_raw, 
-            img_idx
+            img_idx,
+            pixel_widths
         )
 
 
@@ -328,7 +332,8 @@ class CameraCalibrationModel(NerfInterpolation):
             ray_dirs_raw,
             ray_dirs_pred,
             ray_colors_raw,
-            img_idx
+            img_idx,
+            pixel_widths
         ) = batch
 
         # Find the sigma closest to the given sigma
@@ -348,7 +353,8 @@ class CameraCalibrationModel(NerfInterpolation):
             ray_dirs_raw,
             ray_dirs_pred,
             th.stack([interpolation, ray_colors_raw[:,-1]], dim=1),
-            img_idx)
+            img_idx,
+            pixel_widths)
 
 
 

@@ -22,6 +22,7 @@ class IdentityPositionalEncoding(PositionalEncoding):
 
     def forward(self, x: th.Tensor) -> th.Tensor:
         assert x.shape[1] == self.space_dimensions, f"Input shape {x.shape} does not match space dimensionality {self.space_dimensions}"
+        return x
 
 
 

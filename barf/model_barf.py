@@ -51,7 +51,8 @@ class BarfModel(CameraCalibrationModel):
             ray_dirs_raw, 
             ray_dirs_pred, 
             ray_colors_raw, 
-            img_idx
+            img_idx,
+            pixel_widths,
         ) = batch
 
         # Forward pass

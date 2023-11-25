@@ -12,10 +12,10 @@ from point_logger import LogCameraExtrinsics
 from epoch_fraction_logger import LogEpochFraction
 from model_camera_calibration import CameraCalibrationModel
 from model_interpolation_architecture import BarfPositionalEncoding, NerfModel
-from model_interpolation import NerfInterpolation
+from model_interpolation import NerfInterpolationOurs, NerfInterpolationNerfacc, uniform_sampling_strategies, integration_strategies
 from model_barf import BarfModel
 
-
+argparse.Action
 
 # High priority 
 # TODO: Script that generates runs where the plots are used for the paper 
@@ -42,6 +42,14 @@ def convert_iterations_to_epochs(iterations: int, batch_size: int, dataset_size_
 
 if __name__ == "__main__":
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--uniform_sampling_strategy", type=str, default="stratified_uniform")
+    parser.add_argument("--integration_strategy", type=str, default="middle")
+    parser.add_argument("--uniform_sampling_offset_size", type=float, default=-1.)
+    parser.add_argument("--use_proposal", action=argparse.BooleanOptionalAction, default=True)
+
+    args = parser.parse_args()
+
     # Set seeds
     pl.seed_everything(1337)
 
@@ -50,14 +58,14 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="testing new architecture",
+        name=f"testing integration/sample_strats - proposal={args.use_proposal}, {args.uniform_sampling_strategy}, {args.integration_strategy}, {args.uniform_sampling_offset_size}",
     )
 
 
     # Set up data module
     BATCH_SIZE = 1024*2
-    NUM_WORKERS = 4
-    IMAGE_SIZE = 60
+    NUM_WORKERS = 3
+    IMAGE_SIZE = 400
     # IMAGE_SIZE = 400
     SIGMAS_FOR_BLUR = [0.0]
     
@@ -97,8 +105,8 @@ if __name__ == "__main__":
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
                 logging_start=0.002,
-                delay_start=1/2,
-                # delay_start=1/16,
+                # delay_start=1/2,
+                delay_start=1/16,
                 delay_end=1.,
                 delay_taper=5.0,
                 train_image_names=["r_1", "r_23"],
@@ -123,8 +131,8 @@ if __name__ == "__main__":
                 logging_interval="step"
             ),
             ModelCheckpoint(
-                filename='ckpt_epoch={epoch:02d}-val_loss={val_loss:.2f}',
-                every_n_epochs=2,
+                filename='ckpt_epoch={epoch:02d}-val_loss={val_loss:.3e}',
+                every_n_epochs=1,
                 save_top_k=-1,
             ),
             # dm.get_dataset_blur_scheduler_callback(
@@ -168,26 +176,36 @@ if __name__ == "__main__":
         learning_rate_stop=1e-4,
         learning_rate_decay_end=200000,
     )
+    if args.use_proposal:
+        model_proposal = NerfModel(
+            n_hidden=4,
+            hidden_dim=256,
+            delayed_direction=True,
+            delayed_density=False,
+            n_segments=2,
+            position_encoder=position_encoder,
+            direction_encoder=direction_encoder,
+            learning_rate_start=5e-4,
+            learning_rate_stop=1e-4,
+            learning_rate_decay_end=200000,
+        )
+        samples_per_ray_proposal=32,
 
-    model_proposal = NerfModel(
-        n_hidden=4,
-        hidden_dim=256,
-        delayed_direction=True,
-        delayed_density=False,
-        n_segments=2,
-        position_encoder=position_encoder,
-        direction_encoder=direction_encoder,
-        learning_rate_start=5e-4,
-        learning_rate_stop=1e-4,
-        learning_rate_decay_end=200000,
-    )
+    else:
+        model_proposal=None
+        samples_per_ray_proposal=0,
 
-
-    model = NerfInterpolation(
+    model = NerfInterpolationOurs(
         near_sphere_normalized=2.,
         far_sphere_normalized=8.,
-        samples_per_ray_radiance=124,
-        samples_per_ray_proposal=64,
+        samples_per_ray_radiance=96,
+        samples_per_ray_proposal=32,
+        uniform_sampling_strategy="stratified_uniform",
+        uniform_sampling_offset_size=0.,
+        integration_strategy="left",
+        # uniform_sampling_strategy=args.uniform_sampling_strategy,
+        # uniform_sampling_offset_size=args.uniform_sampling_offset_size,
+        # integration_strategy=args.integration_strategy,
         model_radiance=model_radiance,
         model_proposal=model_proposal,
     )
@@ -211,4 +229,4 @@ if __name__ == "__main__":
     # wandb_logger.watch(model, log="all")
 
     # Start training, resume from checkpoint
-    trainer.fit(model, dm)
+    trainer.fit(model, dm, ckpt_path="/work3/s204111/nerf-experiments/barf/nerf-experiments/vq9nm9vt/checkpoints/ckpt_epoch=epoch=03-val_loss=val_loss=0.00.ckpt")

@@ -9,7 +9,7 @@ from pytorch_lightning.loggers import WandbLogger #type: ignore
 from tqdm import tqdm
 
 from data_module import ImagePoseDataset
-from model_camera_calibration import NerfInterpolation
+from model_camera_calibration import NerfInterpolationBase
 
 
 # TODO: maybe fix image logger such that the model handles more of the work
@@ -120,7 +120,7 @@ class Log2dImageReconstruction(Callback):
 
 
     @th.no_grad()
-    def on_train_batch_start(self, trainer: pl.Trainer, model: NerfInterpolation, batch: th.Tensor, batch_idx: int) -> None:
+    def on_train_batch_start(self, trainer: pl.Trainer, model: NerfInterpolationBase, batch: th.Tensor, batch_idx: int) -> None:
         # Get current step
         step = trainer.current_epoch + batch_idx/trainer.num_training_batches
 
