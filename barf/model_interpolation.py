@@ -36,7 +36,6 @@ class NerfInterpolation(pl.LightningModule):
 
 
         super().__init__()
-        # self.save_hyperparameters()
 
         # Hyper parameters for the optimizer 
         self.learning_rate_start = learning_rate_start
@@ -153,9 +152,9 @@ class NerfInterpolation(pl.LightningModule):
 
         Parameters:
         -----------
-            t_coarse:           Tensor of shape (batch_size, samples_per_ray_coarse) - the t-values for the beginning of each bin
-            weights:            Tensor of shape (batch_size, samples_per_ray_coarse) (these are assumed to almost sum to 1)
-            distances_coarse:   Tensor of shape (batch_size, samples_per_ray_coarse)
+            t_coarse:           Tensor of shape (batch_size, samples_per_ray_proposal) - the t-values for the beginning of each bin
+            weights:            Tensor of shape (batch_size, samples_per_ray_proposal) (these are assumed to almost sum to 1)
+            distances_coarse:   Tensor of shape (batch_size, samples_per_ray_proposal)
         
         Returns:
         --------
@@ -164,21 +163,33 @@ class NerfInterpolation(pl.LightningModule):
         
         """
         # Initialization 
-        batch_size = t_coarse.shape[0]
+        n_samples = self.samples_per_ray_coarse + self.samples_per_ray_fine
+        batch_size, n_bins = t_coarse.shape
         device = t_coarse.device
 
         # Each segment needs weight*samples_per_ray_fine new samples plus 1 because of the coarse sample 
-        fine_samples = th.round(weights*self.samples_per_ray_fine)
-        # Rounding might cause the sum to be less than or larger than samples_per_ray_fine, so we add the difference to the largest segment (especially since weights don't sum all the way to 1)
-        fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += self.samples_per_ray_fine - fine_samples.sum(dim=1)
-        fine_samples += 1
+        fine_samples = th.floor(weights/weights.sum(dim=1, keepdim=True)*(n_samples - n_bins))
+        # fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += n_samples - fine_samples.sum(dim=1) - n_bins
+        # fine_samples += 1
+
+        fine_samples_sum = fine_samples.sum(dim=1, keepdim=True)
+        excess = n_samples - n_bins - fine_samples_sum
+        rank = fine_samples.argsort(dim=1).argsort(dim=1)
+        add_mask = (rank >= (n_bins - excess.abs()))
+        fine_samples = fine_samples + add_mask*th.sign(excess) + 1
+
+        if th.any(fine_samples < 0): raise ValueError(f"shiiiiiit is awful")
+
         fine_samples_cum_sum = th.hstack((th.zeros(batch_size, 1, device=device), fine_samples.cumsum(dim=1)))
+
+        if th.any(fine_samples_cum_sum[:, -1] != n_samples): raise ValueError(f"shiiiiiit is awful 2")
+
         
         # Instanciate the t_fine tensor and arange is used to mask the correct t values for each batch
-        arange = th.arange(self.samples_per_ray_fine + self.samples_per_ray_coarse, device=device).unsqueeze(0)
-        t_fine = th.zeros(batch_size, self.samples_per_ray_fine + self.samples_per_ray_coarse, device=device)
+        arange = th.arange(n_samples, device=device).unsqueeze(0)
+        t_fine = th.zeros(batch_size, n_samples, device=device)
 
-        for i in range(self.samples_per_ray_coarse):
+        for i in range(n_bins):
             # Pick out the samples for each segment, everything within cumsum[i] and cumsum[i+1] is in segment i because the difference is the new samples
             # This mask is for each ray in the batch 
             mask = (arange >= fine_samples_cum_sum[:, i].unsqueeze(-1)) & (arange < fine_samples_cum_sum[:, i+1].unsqueeze(-1))
@@ -187,7 +198,9 @@ class NerfInterpolation(pl.LightningModule):
             # And spread them out evenly in the segment by deviding the length of the segment with the amount of samples in that segment
             t_fine += (arange - fine_samples_cum_sum[:, i].unsqueeze(-1))*mask*distances_coarse[:, i].unsqueeze(-1)/fine_samples[:, i].unsqueeze(-1)
 
-        return self._get_intervals(t_fine)
+        t_start, t_end = self._get_intervals(t_fine)
+
+        return t_start, t_end
 
 
     def _compute_positions(self, origins: th.Tensor, directions: th.Tensor, t: th.Tensor) -> tuple[th.Tensor, th.Tensor]:

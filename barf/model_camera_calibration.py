@@ -27,6 +27,7 @@ class CameraCalibrationModel(NerfInterpolation):
         *inner_model_args, 
         **inner_model_kwargs,
     ):  
+        self.save_hyperparameters() 
         super().__init__(*inner_model_args, **inner_model_kwargs)
 
 
@@ -511,7 +512,7 @@ class SchedulerLeNice(th.optim.lr_scheduler.LRScheduler):
         # s * d^n = e <=> d = (e/s)^(1/n)
         self.decay_factors = []
         for i, _ in enumerate(optimizer.param_groups):
-            self.decay_factors.append((self.stop_LR[i] / self.start_LR[i]) ** (1 / self.number_of_steps[i]))
+            self.decay_factors.append((self.stop_LR[i] / (self.start_LR[i] + 1e-14)) ** (1 / self.number_of_steps[i]))
 
         super().__init__(optimizer,verbose=verbose)
         
