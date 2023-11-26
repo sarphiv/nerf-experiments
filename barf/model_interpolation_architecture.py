@@ -3,152 +3,10 @@ from typing import Iterator, Literal
 import torch as th
 import torch.nn as nn
 
-
-class PositionalEncoding(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.output_dim = None
-        self.space_dimensions = None
-    
-    def forward(self, x: th.Tensor) -> th.Tensor:
-        raise NotImplementedError()
-
-
-class IdentityPositionalEncoding(PositionalEncoding):
-    def __init__(self, space_dimensions: int = 3):
-        super().__init__()
-        self.output_dim = space_dimensions
-        self.space_dimensions = space_dimensions
-
-    def forward(self, x: th.Tensor) -> th.Tensor:
-        assert x.shape[1] == self.space_dimensions, f"Input shape {x.shape} does not match space dimensionality {self.space_dimensions}"
-        return x
+from positional_encodings import PositionalEncoding
 
 
 
-class FourierFeatures(PositionalEncoding):
-    def __init__(self, levels: int, scale: float = 2*th.pi, space_dimensions: int = 3): 
-        """
-        Positional encoding using Fourier features of "levels" periods. 
-        
-        """
-        super().__init__()
-
-        self.levels = levels
-        self.scale = scale
-        self.space_dimensions = space_dimensions
-        self.output_dim = levels*2*space_dimensions
-
-
-    def forward(self, x: th.Tensor) -> th.Tensor:
-        """
-        Gets the positional encoding of x for each channel.
-        x_i in [-0.5, 0.5] -> function(x_i * pi * 2^j) for function in (cos, sin) for i in [0, levels-1]
-
-        returns:
-            [cos(x), cos(2x), cos(4x) ... , cos(y), cos(2y), cos(4y) ... , cos(z), cos(2z), cos(4z) ...,
-             sin(x), sin(2x), sin(4x) ... , sin(y), sin(2y), sin(4y) ... , sin(z), sin(2z), sin(4z) ...]
-        """
-
-        assert x.shape[1] == self.space_dimensions, f"Input shape {x.shape} does not match space dimensionality {self.space_dimensions}"
-
-        scale = self.scale*(2**th.arange(self.levels, device=x.device)).repeat(x.shape[1])
-        args = x.repeat_interleave(self.levels, dim=1) * scale
-
-        return th.hstack((th.cos(args), th.sin(args)))
-
-
-
-class BarfPositionalEncoding(PositionalEncoding):
-    def __init__(self,
-                 levels: int,
-                 alpha_start: float,
-                 alpha_increase_start_epoch: float,
-                 alpha_increase_end_epoch: float,
-                 include_identity: bool = True,
-                 scale: float = 2*th.pi,
-                 space_dimensions: int = 3):
-        """
-        Positional encoding using the mask from the barf paper. 
-        """
-        super().__init__()
-        self.levels = levels
-        self.alpha_start = alpha_start
-        self.output_dim = (levels*2 + include_identity)*space_dimensions
-        self.alpha_increase_start_epoch = alpha_increase_start_epoch
-        self.alpha_increase_end_epoch = alpha_increase_end_epoch
-        self.include_identity = include_identity
-        self.scale = scale
-        self.space_dimensions = space_dimensions
-        self.register_buffer("alpha", th.tensor(float(alpha_start)))
-
-    def update_alpha(self, epoch: float) -> None:
-        """
-        Updates the alpha value of the positional encoding. 
-        """
-
-        if epoch < self.alpha_increase_start_epoch:
-            alpha = self.alpha_start
-
-        elif self.alpha_increase_start_epoch <= epoch <= self.alpha_increase_end_epoch:
-            alpha = (
-                self.alpha_start
-                + (epoch - self.alpha_increase_start_epoch)
-                * (self.levels - self.alpha_start)
-                / (self.alpha_increase_end_epoch - self.alpha_increase_start_epoch)
-            )
-
-        else:
-            alpha = float(self.levels)
-        
-        self.alpha = th.tensor(alpha, device=self.alpha.device)
-    
-
-    def compute_mask(self, alpha: th.Tensor) -> th.Tensor:
-        # init zero mask
-        mask = th.zeros((self.levels), device=alpha.device)
-
-        # identify the turning point, k where 1 > alpha - k > 0 mask 
-        idx_ramp = int(alpha)
-
-        # set ones
-        mask[:idx_ramp] = 1.
-
-        # the turning point is a cosine interpolation
-        if idx_ramp < self.levels:
-            mask[idx_ramp] = (1 - th.cos((alpha - idx_ramp) * th.pi)) / 2
-
-        # repeat for sin and for each channel
-        mask = mask.repeat(self.space_dimensions)
-    
-        return mask.view(1, -1)
-
-
-    def forward(self, x: th.Tensor) -> th.Tensor:
-        """
-        Gets the positional encoding of x for each channel.
-        x_i in [-0.5, 0.5] -> function(x_i * pi * 2^j) for function in (cos, sin) for i in [0, levels-1]
-
-        returns:
-            [cos(x), cos(2x), cos(4x) ... , cos(y), cos(2y), cos(4y) ... , cos(z), cos(2z), cos(4z) ...,
-             sin(x), sin(2x), sin(4x) ... , sin(y), sin(2y), sin(4y) ... , sin(z), sin(2z), sin(4z) ...]
-
-            if include_identity:
-                [x,y,z] is prepended to the output
-        """
-
-        assert x.shape[1] == self.space_dimensions, f"Input shape {x.shape} does not match space dimensionality {self.space_dimensions}"
-
-        scale = self.scale*(2**th.arange(self.levels, device=x.device)).repeat(self.space_dimensions)
-        args = x.repeat_interleave(self.levels, dim=1) * scale
-
-        mask = self.compute_mask(self.alpha)
-
-        if self.include_identity:
-            return th.hstack((x, mask*th.cos(args), mask*th.sin(args)))
-        else:
-            return th.hstack((mask*th.cos(args), mask*th.sin(args)))
-        
 
 class NerfBaseModel(nn.Module):
     def __init__(self):
@@ -236,10 +94,13 @@ class NerfModel(NerfBaseModel):
     def forward(self,
                 pos: th.Tensor,
                 dir: th.Tensor, 
+                pixel_width: th.Tensor,
+                t_start: th.Tensor,
+                t_end: th.Tensor,
                 ) -> tuple[th.Tensor, th.Tensor]:
 
-        pos = self.position_encoder(pos)
-        dir = self.direction_encoder(dir)
+        pos = self.position_encoder.forward(pos, dir, pixel_width, t_start, t_end)
+        dir = self.direction_encoder.forward(dir)
 
         # Apply the model segments with relu activation between segments 
         z = th.zeros((pos.shape[0], 0), device=pos.device)

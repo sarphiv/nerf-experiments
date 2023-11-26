@@ -11,9 +11,11 @@ from image_logger import Log2dImageReconstruction
 from point_logger import LogCameraExtrinsics
 from epoch_fraction_logger import LogEpochFraction
 from model_camera_calibration import CameraCalibrationModel
-from model_interpolation_architecture import BarfPositionalEncoding, NerfModel
+from model_interpolation_architecture import NerfModel
+from positional_encodings import BarfPositionalEncoding, IntegratedFourierFeatures
 from model_interpolation import NerfInterpolationOurs, NerfInterpolationNerfacc, uniform_sampling_strategies, integration_strategies
 from model_barf import BarfModel
+from model_mip import MipNeRF
 
 argparse.Action
 
@@ -47,8 +49,12 @@ if __name__ == "__main__":
     parser.add_argument("--integration_strategy", type=str, default="middle")
     parser.add_argument("--uniform_sampling_offset_size", type=float, default=-1.)
     parser.add_argument("--use_proposal", action=argparse.BooleanOptionalAction, default=True)
-
     args = parser.parse_args()
+    # print(args)
+    print(f"testing integration/sample_strats - proposal={args.use_proposal}, {args.uniform_sampling_strategy}, {args.integration_strategy}, {args.uniform_sampling_offset_size}")
+
+    quit()
+    exit()
 
     # Set seeds
     pl.seed_everything(1337)
@@ -58,15 +64,16 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name=f"testing integration/sample_strats - proposal={args.use_proposal}, {args.uniform_sampling_strategy}, {args.integration_strategy}, {args.uniform_sampling_offset_size}",
+        name="testing mip nerf",
+        # name=f"testing integration/sample_strats - proposal={args.use_proposal}, {args.uniform_sampling_strategy}, {args.integration_strategy}, {args.uniform_sampling_offset_size}",
     )
 
 
     # Set up data module
     BATCH_SIZE = 1024*2
     NUM_WORKERS = 3
+    # IMAGE_SIZE = 200
     IMAGE_SIZE = 400
-    # IMAGE_SIZE = 400
     SIGMAS_FOR_BLUR = [0.0]
     
     dm = ImagePoseDataModule(
@@ -147,14 +154,17 @@ if __name__ == "__main__":
     )
 
 
-    position_encoder = BarfPositionalEncoding(levels=10,
-                                                # alpha_start=0,
-                                                alpha_start=10,
-                                                alpha_increase_start_epoch=1.28,
-                                                alpha_increase_end_epoch=6.4,
-                                                include_identity=True,
-                                                scale=1.
-                                                )
+    position_encoder = IntegratedFourierFeatures(levels=10, 
+                                                 scale=1.,
+                                                 include_identity=True)
+    # position_encoder = BarfPositionalEncoding(levels=10,
+    #                                             # alpha_start=0,
+    #                                             alpha_start=10,
+    #                                             alpha_increase_start_epoch=1.28,
+    #                                             alpha_increase_end_epoch=6.4,
+    #                                             include_identity=True,
+    #                                             scale=1.
+    #                                             )
     direction_encoder = BarfPositionalEncoding(levels=4,
                                                     alpha_start=4,
                                                     # alpha_start=0,
@@ -164,7 +174,7 @@ if __name__ == "__main__":
                                                     scale=1.
                                                     )
 
-    model_radiance = NerfModel(
+    model_radiance_and_proposal = NerfModel(
         n_hidden=4,
         hidden_dim=256,
         delayed_direction=True,
@@ -176,38 +186,40 @@ if __name__ == "__main__":
         learning_rate_stop=1e-4,
         learning_rate_decay_end=200000,
     )
-    if args.use_proposal:
-        model_proposal = NerfModel(
-            n_hidden=4,
-            hidden_dim=256,
-            delayed_direction=True,
-            delayed_density=False,
-            n_segments=2,
-            position_encoder=position_encoder,
-            direction_encoder=direction_encoder,
-            learning_rate_start=5e-4,
-            learning_rate_stop=1e-4,
-            learning_rate_decay_end=200000,
-        )
-        samples_per_ray_proposal=32,
+    # if args.use_proposal:
+    #     model_proposal = NerfModel(
+    #         n_hidden=4,
+    #         hidden_dim=256,
+    #         delayed_direction=True,
+    #         delayed_density=False,
+    #         n_segments=2,
+    #         position_encoder=position_encoder,
+    #         direction_encoder=direction_encoder,
+    #         learning_rate_start=5e-4,
+    #         learning_rate_stop=1e-4,
+    #         learning_rate_decay_end=200000,
+    #     )
+    #     samples_per_ray_proposal=32,
 
-    else:
-        model_proposal=None
-        samples_per_ray_proposal=0,
+    # else:
+    #     model_proposal=None
+    #     samples_per_ray_proposal=0,
 
-    model = NerfInterpolationOurs(
+    model = MipNeRF(
         near_sphere_normalized=2.,
         far_sphere_normalized=8.,
-        samples_per_ray_radiance=96,
-        samples_per_ray_proposal=32,
+        samples_per_ray_radiance=256,
+        samples_per_ray_proposal=64,
         uniform_sampling_strategy="stratified_uniform",
-        uniform_sampling_offset_size=0.,
-        integration_strategy="left",
+        uniform_sampling_offset_size=-1.,
+        integration_strategy="middle",
+        # samples_per_ray_radiance=256,
+        # samples_per_ray_proposal=64,
         # uniform_sampling_strategy=args.uniform_sampling_strategy,
         # uniform_sampling_offset_size=args.uniform_sampling_offset_size,
         # integration_strategy=args.integration_strategy,
-        model_radiance=model_radiance,
-        model_proposal=model_proposal,
+        model_radiance=model_radiance_and_proposal,
+        model_proposal=model_radiance_and_proposal,
     )
 
     # # # Set up model
@@ -229,4 +241,4 @@ if __name__ == "__main__":
     # wandb_logger.watch(model, log="all")
 
     # Start training, resume from checkpoint
-    trainer.fit(model, dm, ckpt_path="/work3/s204111/nerf-experiments/barf/nerf-experiments/vq9nm9vt/checkpoints/ckpt_epoch=epoch=03-val_loss=val_loss=0.00.ckpt")
+    trainer.fit(model, dm)#, ckpt_path="/work3/s204111/nerf-experiments/barf/nerf-experiments/vq9nm9vt/checkpoints/ckpt_epoch=epoch=03-val_loss=val_loss=0.00.ckpt")

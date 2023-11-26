@@ -368,7 +368,7 @@ class NerfInterpolationOurs(NerfInterpolationBase):
                             t_end: th.Tensor,
                             ray_origs: th.Tensor,
                             ray_dirs: th.Tensor,
-                            # pixel_widths: th.Tensor,
+                            pixel_width: th.Tensor,
                             batch_size: int,
                             samples_per_ray: int) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
         
@@ -395,16 +395,20 @@ class NerfInterpolationOurs(NerfInterpolationBase):
         """
         # Compute the positions for the given t values
         sample_pos, sample_dir = self._compute_positions(ray_origs, ray_dirs, t_start, t_end)
+        sample_pixel_width = pixel_width.repeat(1, samples_per_ray)
         sample_dist = t_end - t_start
 
+
         # Ungroup samples by ray (for the model)
+        sample_pixel_width = sample_pixel_width.view(batch_size * samples_per_ray, 1)
         sample_pos = sample_pos.view(batch_size * samples_per_ray, 3)
         sample_dir = sample_dir.view(batch_size * samples_per_ray, 3)
+        sample_t_start = t_start.view(batch_size * samples_per_ray, 1)
+        sample_t_end = t_end.view(batch_size * samples_per_ray, 1)
         
-        # sample_pixel_widths = pixel_widths.repeat(1, samples_per_ray).view(batch_size * samples_per_ray, 1)
-        
+
         # Evaluate density and color at sample positions
-        sample_density, sample_color = model.forward(sample_pos, sample_dir)
+        sample_density, sample_color = model.forward(sample_pos, sample_dir, sample_pixel_width, sample_t_start, sample_t_end)
 
         if th.isnan(sample_density).any(): warnings.warn("Density is NaN")
         if th.isnan(sample_color).any(): warnings.warn("Color is NaN")
@@ -420,7 +424,7 @@ class NerfInterpolationOurs(NerfInterpolationBase):
         return rgb, weights, sample_dist
 
 
-    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor, pixel_width: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
         Forward pass of the model.
         Given the ray origins and directions, compute the rgb values for the given rays.
@@ -429,6 +433,7 @@ class NerfInterpolationOurs(NerfInterpolationBase):
         -----------
             ray_origs: Tensor of shape (batch_size, 3) - camera position, i.e. origin in camera coordinates
             ray_dirs: Tensor of shape (batch_size, 3) - direction vectors (unit vectors) of the viewing directions
+            pixel_width: Tensor of shape (batch_size, 3) - pixel widths at distance 1 from the camera
 
         Returns:
         --------
@@ -454,7 +459,7 @@ class NerfInterpolationOurs(NerfInterpolationBase):
                                                     t_coarse_end,
                                                     ray_origs,
                                                     ray_dirs,
-                                                    # pixel_widths,
+                                                    pixel_width,
                                                     batch_size,
                                                     self.samples_per_ray_proposal)
         
@@ -467,7 +472,7 @@ class NerfInterpolationOurs(NerfInterpolationBase):
                                                     t_fine_end,
                                                     ray_origs,
                                                     ray_dirs,
-                                                    # pixel_widths,
+                                                    pixel_width,
                                                     batch_size,
                                                     self.samples_per_ray_radiance)
         else: 
@@ -482,7 +487,7 @@ class NerfInterpolationOurs(NerfInterpolationBase):
                                                     t_fine_end,
                                                     ray_origs,
                                                     ray_dirs,
-                                                    # pixel_widths,
+                                                    pixel_width,
                                                     batch_size,
                                                     self.samples_per_ray_radiance)
             rgb_coarse = None
@@ -502,11 +507,11 @@ class NerfInterpolationOurs(NerfInterpolationBase):
             ray_dirs_pred, 
             ray_colors_raw, 
             img_idx,
-            pixel_widths
+            pixel_width
         ) = batch
 
         # Forward pass
-        ray_colors_pred_fine, ray_colors_pred_coarse = self.forward(ray_origs_pred, ray_dirs_pred)
+        ray_colors_pred_fine, ray_colors_pred_coarse = self.forward(ray_origs_pred, ray_dirs_pred, pixel_width)
 
 
         # compute the loss
@@ -523,6 +528,10 @@ class NerfInterpolationOurs(NerfInterpolationBase):
             logs[f"{purpose}_loss_coarse"] = loss_coarse
 
         self.log_dict(logs)
+
+        if loss.isnan():
+            loss = th.tensor(1., requires_grad=True)
+            warnings.warn("loss was nan - no optimization step performed")
 
         return loss
 
@@ -710,7 +719,7 @@ class NerfInterpolationNerfacc(NerfInterpolationBase):
             ray_dirs_pred, 
             ray_colors_raw, 
             img_idx,
-            pixel_widths
+            pixel_width
         ) = batch
 
         # Forward pass

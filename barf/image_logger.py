@@ -155,7 +155,8 @@ class Log2dImageReconstruction(Callback):
             data_loader = DataLoader(
                 dataset=TensorDataset(
                     origins, 
-                    directions
+                    directions,
+                    dataset.pixel_width*th.ones(origins.shape[0], 1)
                 ),
                 batch_size=self.batch_size,
                 num_workers=self.num_workers,
@@ -167,10 +168,11 @@ class Log2dImageReconstruction(Callback):
             rgb = th.empty((dataset.image_batch_size, 3), dtype=cast(th.dtype, model.dtype))
             i = 0
             
-            for ray_origs, ray_dirs in tqdm(data_loader, desc="Predicting RGB values", leave=False):
+            for ray_origs, ray_dirs, pixel_width in tqdm(data_loader, desc="Predicting RGB values", leave=False):
                 # Prepare for model prediction
                 ray_origs = ray_origs.to(model.device)
                 ray_dirs = ray_dirs.to(model.device)
+                pixel_width = pixel_width.to(model.device)
 
                 # Transform origins to model space
                 ray_origs, ray_dirs, transform_params = model.validation_transform_rays(ray_origs, ray_dirs, transform_params)
@@ -179,7 +181,7 @@ class Log2dImageReconstruction(Callback):
                 batch_size = ray_origs.shape[0]
                 
                 # Predict RGB values
-                rgb[i:i+batch_size, :] = model(ray_origs, ray_dirs)[0].clip(0, 1).cpu()
+                rgb[i:i+batch_size, :] = model.forward(ray_origs, ray_dirs, pixel_width)[0].clip(0, 1).cpu()
             
                 # Update write head
                 i += batch_size
@@ -208,7 +210,8 @@ class Log2dImageReconstruction(Callback):
             data_loader = DataLoader(
                 dataset=TensorDataset(
                     origins_noisy, 
-                    directions_noisy
+                    directions_noisy,
+                    dataset.pixel_width*th.ones(origins.shape[0], 1)
                 ),
                 batch_size=self.batch_size,
                 num_workers=self.num_workers,
@@ -221,10 +224,11 @@ class Log2dImageReconstruction(Callback):
             transform_params = None
             i = 0
             
-            for ray_origs, ray_dirs in tqdm(data_loader, desc="Predicting RGB values", leave=False):
+            for ray_origs, ray_dirs, pixel_width in tqdm(data_loader, desc="Predicting RGB values", leave=False):
                 # Prepare for model prediction
                 ray_origs = ray_origs.to(model.device)
                 ray_dirs = ray_dirs.to(model.device)
+                pixel_width = pixel_width.to(model.device)
 
                 # Transform origins to model space
                 ray_origs, ray_dirs, _, _ = model.camera_extrinsics(index, ray_origs, ray_dirs)
@@ -233,7 +237,7 @@ class Log2dImageReconstruction(Callback):
                 batch_size = ray_origs.shape[0]
                 
                 # Predict RGB values
-                model_out = model(ray_origs, ray_dirs)[0]
+                model_out = model.forward(ray_origs, ray_dirs, pixel_width)[0]
                 rgb[i:i+batch_size, :] = model_out.clip(0, 1).cpu()
             
                 # Update write head

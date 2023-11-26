@@ -11,7 +11,7 @@ from dataset import DatasetOutput
 from data_module import ImagePoseDataModule
 from model_camera_extrinsics import CameraExtrinsics
 from model_interpolation import InnerModelBatchInput, NerfInterpolationBase
-from model_interpolation_architecture import BarfPositionalEncoding
+from positional_encodings import BarfPositionalEncoding
 
 
 
@@ -188,12 +188,12 @@ class CameraCalibrationModel(NerfInterpolationBase):
         #               (provided by datamodule and fed to camera extrinsics)
         dataset = cast(ImagePoseDataModule, self.trainer.datamodule).dataset_train
         # NOTE (lauge): Get the original indices of the images - to be passed to camera_extrinsics
+        # maybe wrong if dataset.index_to_index.values() are not in the right order (dictionaries are dumb)
         img_idxs = list(dataset.index_to_index.values())
         img_idxs = th.tensor(img_idxs, device=self.device, dtype=th.int32)
         origs_raw = dataset.camera_origins.to(self.device)
         origs_noisy = dataset.camera_origins_noisy.to(self.device)
         origs_pred, _ = self.camera_extrinsics.forward_origins(img_idxs, origs_noisy)
-
 
         # Align raw space to predicted model space
         post_transform_params = self.kabsch_algorithm(origs_raw, origs_pred)
@@ -205,8 +205,8 @@ class CameraCalibrationModel(NerfInterpolationBase):
 
     def validation_transform(self, batch: DatasetOutput) -> DatasetOutput:
         """
-        Takes in a validation batch and transforms the noisy rays to the predicting space
-        using the validation_transform_rays() method.
+        Takes in a validation batch and transforms the raw rays (ground truth poses)
+        to the predicting space using the validation_transform_rays() method.
         
         Parameters:
         -----------
@@ -224,7 +224,7 @@ class CameraCalibrationModel(NerfInterpolationBase):
             ray_dirs_noisy, 
             ray_colors_raw, 
             img_idx,
-            pixel_widths
+            pixel_width
         ) = batch
 
         # Transform rays to model prediction space
@@ -241,7 +241,7 @@ class CameraCalibrationModel(NerfInterpolationBase):
             ray_dirs_pred, 
             ray_colors_raw, 
             img_idx,
-            pixel_widths
+            pixel_width
         )
 
     
@@ -267,7 +267,7 @@ class CameraCalibrationModel(NerfInterpolationBase):
             ray_dirs_noisy, 
             ray_colors_raw, 
             img_idx,
-            pixel_widths
+            pixel_width
         ) = batch
 
         # Transform rays to model prediction space
@@ -285,7 +285,7 @@ class CameraCalibrationModel(NerfInterpolationBase):
             ray_dirs_pred, 
             ray_colors_raw, 
             img_idx,
-            pixel_widths
+            pixel_width
         )
 
 
@@ -333,7 +333,7 @@ class CameraCalibrationModel(NerfInterpolationBase):
             ray_dirs_pred,
             ray_colors_raw,
             img_idx,
-            pixel_widths
+            pixel_width
         ) = batch
 
         # Find the sigma closest to the given sigma
@@ -354,7 +354,7 @@ class CameraCalibrationModel(NerfInterpolationBase):
             ray_dirs_pred,
             th.stack([interpolation, ray_colors_raw[:,-1]], dim=1),
             img_idx,
-            pixel_widths)
+            pixel_width)
 
 
 

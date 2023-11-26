@@ -11,7 +11,7 @@ from image_logger import Log2dImageReconstruction
 from point_logger import LogCameraExtrinsics
 from epoch_fraction_logger import LogEpochFraction
 from model_camera_calibration import CameraCalibrationModel
-from model_interpolation_architecture import BarfPositionalEncoding
+from positional_encodings import BarfPositionalEncoding
 
 
 
