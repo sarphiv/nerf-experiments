@@ -158,10 +158,12 @@ class IntegratedFourierFeatures(FourierFeatures):
         levels: int,
         scale: float = 2*th.pi,
         include_identity = True,
+        distribute_variance: Optional[bool] = False,
     ):
         super().__init__(levels, scale, 3)
         self.include_identity = include_identity
         self.output_dim = (levels*2 + include_identity)*self.space_dimensions
+        self.distribute_variance = distribute_variance
 
     def forward(self,
                 pos: th.Tensor,
@@ -195,15 +197,32 @@ class IntegratedFourierFeatures(FourierFeatures):
 
         scale = 4**th.arange(self.levels, device=pos.device).repeat(space_dim) # [4,16,4,16,4,16]
 
-        # calculate that diagonal
-        diag_Sigma = sigma_t_sq*dir**2 + sigma_r_sq*(1-dir**2/th.sum(dir**2, dim=1, keepdim=True)) # eq 16
 
-        # repeat and multiply by 4**i
-        tmp = diag_Sigma.repeat_interleave(self.levels, dim=1) # with levels = 2 we get [x,x,y,y,z,z] ... times batch size
-        diag_Sigma_gamma = tmp*scale # = [4x, 16x, 4y, ... ] times batch size.
+        if self.distribute_variance:
+            Sigma = (sigma_t_sq + sigma_r_sq * 2)/space_dim*scale
+            weight = th.exp(-Sigma/2)
 
-        # compute positional encoding
-        weight = th.exp(-diag_Sigma_gamma/2) # eq 14
+        else:
+            # calculate that diagonal
+            diag_Sigma = sigma_t_sq*dir**2 + sigma_r_sq*(1-dir**2/th.sum(dir**2, dim=1, keepdim=True)) # eq 16
+
+            # repeat and multiply by 4**i
+            tmp = diag_Sigma.repeat_interleave(self.levels, dim=1) # with levels = 2 we get [x,x,y,y,z,z] ... times batch size
+            diag_Sigma_gamma = tmp*scale # = [4x, 16x, 4y, ... ] times batch size.
+
+            # compute positional encoding
+            weight = th.exp(-diag_Sigma_gamma/2) # eq 14
+
+
+        # # calculate that diagonal
+        # diag_Sigma = sigma_t_sq*dir**2 + sigma_r_sq*(1-dir**2/th.sum(dir**2, dim=1, keepdim=True)) # eq 16
+
+        # # repeat and multiply by 4**i
+        # tmp = diag_Sigma.repeat_interleave(self.levels, dim=1) # with levels = 2 we get [x,x,y,y,z,z] ... times batch size
+        # diag_Sigma_gamma = tmp*scale # = [4x, 16x, 4y, ... ] times batch size.
+
+        # # compute positional encoding
+        # weight = th.exp(-diag_Sigma_gamma/2) # eq 14
 
         # call self.super.forward
         pe = super(IntegratedFourierFeatures, self).forward(pos_mu)

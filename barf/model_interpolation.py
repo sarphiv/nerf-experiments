@@ -2,6 +2,7 @@ from typing import Literal, Callable, Optional
 from itertools import chain
 import warnings
 import math
+import os
 
 import torch as th
 import torch.nn as nn
@@ -170,6 +171,16 @@ class NerfInterpolationBase(pl.LightningModule):
 
         return self._get_intervals(t_coarse)
     
+    # def _sample_t_pdf_weighted(self, t_coarse: th.Tensor, weights: th.Tensor, distances_coarse: th.Tensor, n_samples: int) ->  tuple[th.Tensor, th.Tensor]:
+    #     batch_size, n_bins = t_coarse.shape
+    #     device = t_coarse.device
+    #     pdf = weights/weights.sum(dim=1, keepdim=True)
+    #     cdf = pdf.cumsum(dim=1)
+    #     u = th.linspace(0,1,n_samples - n_bins, device=device).unsqueeze(0)
+    #     idx = th.searchsorted(cdf, u.repeat(batch_size, 1))
+
+
+
 
     def _sample_t_pdf_weighted(self, t_coarse: th.Tensor, weights: th.Tensor, distances_coarse: th.Tensor, n_samples: int) ->  tuple[th.Tensor, th.Tensor]:
         """
@@ -193,20 +204,44 @@ class NerfInterpolationBase(pl.LightningModule):
         device = t_coarse.device
 
         # Each segment needs weight*samples_per_ray_fine new samples plus 1 because of the coarse sample 
-        fine_samples_raw = th.round(weights*(n_samples - n_bins))
+        fine_samples = th.floor(weights/weights.sum(dim=1, keepdim=True)*(n_samples - n_bins))
+        # fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += n_samples - fine_samples.sum(dim=1) - n_bins
+        # fine_samples += 1
+
+        fine_samples_sum = fine_samples.sum(dim=1, keepdim=True)
+        excess = n_samples - n_bins - fine_samples_sum
+        rank = fine_samples.argsort(dim=1).argsort(dim=1)
+        add_mask = (rank >= (n_bins - excess.abs()))
+        fine_samples = fine_samples + add_mask*th.sign(excess) + 1
 
 
-        # # Rounding might cause the sum to be less than or larger than samples_per_ray_fine (especially since weights don't sum all the way to 1)
-        # New way of distributing the excess created by rounding:
-        fine_samples = (fine_samples_raw/fine_samples_raw.sum(dim=1, keepdim=True)*(n_samples - n_bins)).round()
-        fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += n_samples - fine_samples.sum(dim=1) - n_bins
-        fine_samples += 1
-        if th.any(fine_samples <= 0):
-            warnings.warn(f"couldn't sample exactly {n_samples} with pdf sampling - using _sample_t_stratified_uniform instead")
-            t_start, t_end = self._sample_t_stratified_uniform(batch_size, n_samples, "equidistant", 0.)
+        fine_samples_cum_sum = th.hstack((th.zeros(batch_size, 1, device=device), fine_samples.cumsum(dim=1)))
 
-        else:
-            fine_samples_cum_sum = th.hstack((th.zeros(batch_size, 1, device=device), fine_samples.cumsum(dim=1)))
+
+        sample_pdf_succeeded = False
+        for i in range(5):
+            if th.any(fine_samples < 0) or th.any(fine_samples_cum_sum[:, -1] != n_samples):
+                if i == 0:
+                    save_dict = {
+                        "t_coarse": t_coarse, 
+                        "weights": weights, 
+                        "distances_coarse": distances_coarse, 
+                        "n_samples": n_samples
+                        }
+                    dirpath = os.path.join(self.trainer.logger.experiment.dir, f"pdf_sampling_snapshot_{self.trainer.global_step}")
+                    th.save(save_dict, dirpath)
+                    print(f"pdf sampling didn't work as expected - trying again. See {dirpath}")
+                
+                fine_samples_sum = fine_samples.sum(dim=1, keepdim=True)
+                excess = n_samples - n_bins - fine_samples_sum
+                rank = fine_samples.argsort(dim=1).argsort(dim=1)
+                add_mask = (rank >= (n_bins - excess.abs()))
+                fine_samples = fine_samples + add_mask*th.sign(excess) + 1
+            else:
+                sample_pdf_succeeded = True
+                break
+
+        if sample_pdf_succeeded:
             
             # Instanciate the t_fine tensor and arange is used to mask the correct t values for each batch
             arange = th.arange(n_samples, device=device).unsqueeze(0)
@@ -222,6 +257,10 @@ class NerfInterpolationBase(pl.LightningModule):
                 t_fine += (arange - fine_samples_cum_sum[:, i].unsqueeze(-1))*mask*distances_coarse[:, i].unsqueeze(-1)/fine_samples[:, i].unsqueeze(-1)
 
             t_start, t_end = self._get_intervals(t_fine)
+        
+        else:
+            print("pdf_sampling failed after 5 tries - using _sample_t_stratified_uniform instead")
+            t_start, t_end = self._sample_t_stratified_uniform(batch_size, n_samples, "equidistant", -1)
 
         return t_start, t_end
 
@@ -410,8 +449,8 @@ class NerfInterpolationOurs(NerfInterpolationBase):
         # Evaluate density and color at sample positions
         sample_density, sample_color = model.forward(sample_pos, sample_dir, sample_pixel_width, sample_t_start, sample_t_end)
 
-        if th.isnan(sample_density).any(): warnings.warn("Density is NaN")
-        if th.isnan(sample_color).any(): warnings.warn("Color is NaN")
+        if th.isnan(sample_density).any(): print("Density is NaN")
+        if th.isnan(sample_color).any(): print("Color is NaN")
         
         # Group samples by ray
         sample_density = sample_density.view(batch_size, samples_per_ray)
@@ -515,7 +554,7 @@ class NerfInterpolationOurs(NerfInterpolationBase):
 
 
         # compute the loss
-        loss = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw[:,-1])
+        loss = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw[:, 0])
         psnr = -10 * math.log10(float(loss.detach().item()))
         # Log metrics
         logs  = {f"{purpose}_loss_fine": loss,
@@ -523,7 +562,7 @@ class NerfInterpolationOurs(NerfInterpolationBase):
                     }
 
         if self.proposal:
-            loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors_raw[:,-1])
+            loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors_raw[:, 0])
             loss = loss + loss_coarse
             logs[f"{purpose}_loss_coarse"] = loss_coarse
 
@@ -735,3 +774,4 @@ class NerfInterpolationNerfacc(NerfInterpolationBase):
             loss = radiance_loss
         # Return color prediction and losses
         return loss
+    

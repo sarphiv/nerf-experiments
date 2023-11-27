@@ -2,6 +2,7 @@ import os
 from copy import copy
 from typing import Any, Optional, Literal, cast, Union
 from itertools import product
+import warnings
 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import LambdaCallback
@@ -30,6 +31,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
                                                            # ANSWER: has already been done: if sigma is less than 0.25 no blur is applied
         validation_fraction: float = 1.0,
         validation_fraction_shuffle: Literal["disabled", "random"] | int = "disabled",
+        verbose=False,
         *dataloader_args, **dataloader_kwargs
     ):
         """Initialize the data module.
@@ -72,6 +74,8 @@ class ImagePoseDataModule(pl.LightningDataModule):
         self.validation_fraction = validation_fraction
         self.validation_fraction_shuffle = validation_fraction_shuffle
 
+        self.verbose = verbose
+
         # Store data loader arguments
         self.dataloader_args = dataloader_args
         self.dataloader_kwargs = dataloader_kwargs
@@ -103,6 +107,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
             translation_noise_sigma=self.translation_noise_sigma,
             noise_seed=None if self.camera_noise_seed is None else self.camera_noise_seed + hash(purpose),
             gaussian_blur_sigmas = self.gaussian_blur_sigmas,
+            verbose=self.verbose
         )
 
         return dataset
@@ -250,78 +255,136 @@ class ImagePoseDataModule(pl.LightningDataModule):
         )
 
 
+    def get_blurred_pixel_colors(self, batch: tuple, sigma: float) -> tuple:
+        """
+        Compute the interpolation of the blurred pixel colors
+        to get the blurred pixel color used for training, while also
+        outputting the original pixel color.
 
-    # def _get_camera_center_rays(self, dataset: ImagePoseDataset, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
-    #     """Get camera center rays from dataset. Rays are ordered by camera index.
+        Parameters:
+        -----------
+            batch: InnerModelBatchInput - the batch of data to transform
+            one of the elements is ray_colors of shape (N, n_sigmas, 3)
+            sigma: float - the sigma to use for the interpolation
         
-    #     Args:
-    #         dataset (ImagePoseDataset): Dataset to get camera center rays from.
-    #         device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
+        Returns:
+        -----------
+            batch: InnerModelBatchInput - the transformed batch of data
+            now ray_colors is of shape (N, 2, 3)
 
-    #     Returns:
-    #         tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]: Raw and noisy camera center rays (origins, directions).
-    #     """
-    #     # Get indices to access corners of image
-    #     corner_idx = list(zip(*product((0, dataset.image_height-1), range(dataset.image_width))))
+        
+        Details:
+        --------
 
-    #     def get_center_ray(
-    #         origins_store: dict[str, th.Tensor], 
-    #         directions_store: dict[str, th.Tensor]
-    #     ) -> tuple[th.Tensor, th.Tensor]:
-    #         # Retrieve camera focal point
-    #         origins = th.vstack([origin[0, 0] for origin in origins_store.values()])
-    #         origins.to()
+        The batch contains 6 different elements.
+        One of the elements contains the ray_colors (this is
+        what it is called in _step_helper() etc.).
+        ray_colors is a Tensor of shape (N, n_sigmas, 3), where
+        N is the number of rays in the batch, and n_sigmas is the number
+        of sigmas used for the blurring. 
 
-    #         # Retrieve image corners and take their mean to get optical center ray (normalized)
-    #         directions = th.stack([direction[corner_idx] for direction in directions_store.values()])
-    #         directions = directions.mean(dim=1)
-    #         directions = directions / th.norm(directions, dim=1, keepdim=True)
+        This method only modifies the ray_colors element of the batch.
+        It is modified to have shape (N, 2, 3), where 
+        ray_colors[:, 1, :] are the original pixel colors, and
+        ray_colors[:, 0, :] are the blurred pixel colors.
 
-    #         # If device given, move to device
-    #         if device is not None:
-    #             origins = origins.to(device)
-    #             directions = directions.to(device)
-
-    #         # Return center rays for each image
-    #         return origins, directions
+        
+        """
 
 
-    #     # Return raw and noisy camera center rays
-    #     return (
-    #         get_center_ray(dataset.origins_raw, dataset.directions_raw), 
-    #         get_center_ray(dataset.origins_noisy, dataset.directions_noisy)
-    #     )
+        # Unpack batch
+        (
+            ray_origs_raw,
+            ray_origs_pred,
+            ray_dirs_raw,
+            ray_dirs_pred,
+            ray_colors_raw,
+            img_idx,
+            pixel_width
+        ) = batch
 
 
-    # def train_camera_center_rays(self, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
-    #     """Get camera center rays from training dataset. Rays are ordered by camera index.
+        if sigma <= 0.25:
+            batch = (ray_origs_raw,
+                    ray_origs_pred,
+                    ray_dirs_raw,
+                    ray_dirs_pred,
+                    th.stack([ray_colors_raw[:,-1], ray_colors_raw[:,-1]], dim=1),
+                    img_idx,
+                    pixel_width)
+            
+        elif sigma >= max(self.gaussian_blur_sigmas):
+            batch = (ray_origs_raw,
+                    ray_origs_pred,
+                    ray_dirs_raw,
+                    ray_dirs_pred,
+                    th.stack([ray_colors_raw[:,0], ray_colors_raw[:,-1]], dim=1),
+                    img_idx,
+                    pixel_width)
+            
+            if sigma > max(self.gaussian_blur_sigmas): warnings.warn(f"Tried to get blur with sigma {sigma} but used maximal possible: {max(self.gaussian_blur_sigmas)}.")
 
-    #     Args:
-    #         device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
+        else:
+            # Find the sigma closest to the given sigma
+            index_low = 0
+            for index_high, s in enumerate(self.gaussian_blur_sigmas):
+                if s < sigma: break
+                index_low = index_high  
+            
+            # ls_1 + (1-l)s_2 = s <=> l = (s - s_2) / (s_1 - s_2)
+            interpolation_coefficient = (sigma - self.gaussian_blur_sigmas[index_high]) / (self.gaussian_blur_sigmas[index_low] - self.gaussian_blur_sigmas[index_high] + 1e-8)
+            
+            # Make interpolation 
+            interpolation = ray_colors_raw[:,index_low] * (interpolation_coefficient) + ray_colors_raw[:,index_high] * (1-interpolation_coefficient)
+            
+            batch = (ray_origs_raw,
+                ray_origs_pred,
+                ray_dirs_raw,
+                ray_dirs_pred,
+                th.stack([interpolation, ray_colors_raw[:,-1]], dim=1),
+                img_idx,
+                pixel_width)
+        
+        return batch
 
-    #     Returns:
-    #         tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]: Raw and noisy camera center rays (origins, directions).
-    #     """
-    #     return self._get_camera_center_rays(self.dataset_train, device)
+if __name__ == "__main__":
 
-    # def val_camera_center_rays(self, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
-    #     """Get camera center rays from training dataset. Rays are ordered by camera index.
+    import matplotlib.pyplot as plt
+    from tqdm import tqdm
 
-    #     Args:
-    #         device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
+    dm = ImagePoseDataModule(
+        image_width=400,
+        image_height=400,
+        space_transform_scale=1.,
+        space_transform_translate=th.Tensor([0,0,0]),
+        scene_path="../data/lego",
+        verbose=True,
+        validation_fraction=0.02,
+        validation_fraction_shuffle=1234,
+        gaussian_blur_sigmas = [16, 4, 1, 0],
+        rotation_noise_sigma = 0,#.15,
+        translation_noise_sigma = 0,#.15,
+        batch_size=10000,
+        num_workers=2,
+        shuffle=False,
+        pin_memory=True,
+    )
 
-    #     Returns:
-    #         tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]: Raw and noisy camera center rays (origins, directions).
-    #     """
-    #     return self._get_camera_center_rays(self.dataset_val, device)
+    dm.setup("fit")
 
-    # def test_camera_center_rays(self, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
-    #     """Get camera center rays from training dataset. Rays are ordered by camera index.
+    sigmas = [0,1,2,3,4,5,10,16]
 
-    #     Args:
-    #         device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
+    output = []
 
-    #     Returns:
-    #         tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]: Raw and noisy camera center rays (origins, directions).
-    #     """
-    #     return self._get_camera_center_rays(self.dataset_test, device)
+    for s in sigmas:
+        print(s)
+        output.append([])
+        for batch_og in tqdm(dm.val_dataloader(), desc="plotting images"):
+            batch = dm.get_blurred_pixel_colors(batch_og, s)
+            output[-1].append(batch[4][:,0])
+        output[-1] = th.cat(tuple(output[-1]), 0).view(-1, dm.image_height, dm.image_width, 3)
+    
+    for i, img in enumerate(range(output[0].shape[0])):
+        for j, s in enumerate(sigmas):
+            plt.imsave(f"skydmig_{i}_{s}.png", output[j][i].detach().numpy())
+
