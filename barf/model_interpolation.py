@@ -300,7 +300,7 @@ class NerfInterpolationBase(pl.LightningModule):
         return positions, directions
 
 
-    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor, pixel_width: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         raise NotImplementedError("forward must be implemented")
 
 
