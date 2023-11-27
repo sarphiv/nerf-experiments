@@ -80,6 +80,15 @@ class ImagePoseDataModule(pl.LightningDataModule):
         self.dataloader_args = dataloader_args
         self.dataloader_kwargs = dataloader_kwargs
 
+    @property
+    def n_training_images(self):
+        if hasattr(self, "dataset_train"):
+            return self.dataset_train.n_images
+        else:
+            images_path = os.path.join(self.scene_path, "train").replace("\\", "/")
+            return len(os.listdir(images_path))
+
+
     @staticmethod
     def _worker_init_fn(worker_id):
         os.sched_setaffinity(0, range(os.cpu_count())) 

@@ -50,7 +50,7 @@ class NerfModel(NerfBaseModel):
             delayed_direction: bool - if true then the direction is only feed to the network at the last layers
             n_segments: int - the number of segments of the network where the position is feed into it
         """
-        super().__init__()
+        NerfBaseModel.__init__(self)
         self.n_hidden = n_hidden
         self.hidden_dim = hidden_dim
         self.delayed_direction = delayed_direction

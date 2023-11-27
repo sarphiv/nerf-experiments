@@ -10,8 +10,9 @@ from torch.optim.optimizer import Optimizer
 from dataset import DatasetOutput
 from data_module import ImagePoseDataModule
 from model_camera_extrinsics import CameraExtrinsics
-from model_interpolation import InnerModelBatchInput, NerfInterpolationBase
+from model_interpolation import InnerModelBatchInput, NerfInterpolationBase, uniform_sampling_strategies, integration_strategies
 from positional_encodings import BarfPositionalEncoding
+from model_interpolation_architecture import NerfModel
 
 
 
@@ -21,12 +22,32 @@ class CameraCalibrationModel(NerfInterpolationBase):
         n_training_images: int,
         camera_learning_rate_start: float,
         camera_learning_rate_stop: float,
-        camera_learning_rate_decay_end: int = -1,
+        camera_learning_rate_decay_end: int,
+
+        near_sphere_normalized: float,
+        far_sphere_normalized: float,
+        model_radiance: NerfModel,
+        samples_per_ray_radiance: int,
+
+        model_proposal: NerfModel|None = None,
+        samples_per_ray_proposal: int = 0,
+
         max_gaussian_sigma: float = 0.0,
-        *base_model_args, 
-        **base_model_kwargs,
+        uniform_sampling_strategy: uniform_sampling_strategies = "stratified_uniform",
+        uniform_sampling_offset_size: float = 0.,
+        integration_strategy: integration_strategies = "middle",
     ):  
-        super().__init__(*base_model_args, **base_model_kwargs)
+        NerfInterpolationBase.__init__(self,
+            near_sphere_normalized=near_sphere_normalized,
+            far_sphere_normalized=far_sphere_normalized,
+            model_radiance=model_radiance,
+            samples_per_ray_radiance=samples_per_ray_radiance,
+            uniform_sampling_strategy=uniform_sampling_strategy,
+            uniform_sampling_offset_size=uniform_sampling_offset_size,
+            integration_strategy=integration_strategy,
+            model_proposal=model_proposal,
+            samples_per_ray_proposal=samples_per_ray_proposal,
+        )
 
         # Create camera calibration model
         self.camera_extrinsics = CameraExtrinsics(n_training_images,
@@ -154,6 +175,8 @@ class CameraCalibrationModel(NerfInterpolationBase):
 
     def compute_post_transform_params(
             self,
+            from_raw_to_pred = True,
+            return_origs = False,
             ) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
         """
         Computes the transform params (R, t, c) used for transforming
@@ -187,17 +210,22 @@ class CameraCalibrationModel(NerfInterpolationBase):
         #               (provided by datamodule and fed to camera extrinsics)
         dataset = cast(ImagePoseDataModule, self.trainer.datamodule).dataset_train
         # NOTE (lauge): Get the original indices of the images - to be passed to camera_extrinsics
-        # maybe wrong if dataset.index_to_index.values() are not in the right order (dictionaries are dumb)
-        img_idxs = list(dataset.index_to_index.values())
+        img_idxs = list([dataset.index_to_index[idx] for idx in range(dataset.n_images)])
         img_idxs = th.tensor(img_idxs, device=self.device, dtype=th.int32)
         origs_raw = dataset.camera_origins.to(self.device)
         origs_noisy = dataset.camera_origins_noisy.to(self.device)
         origs_pred, _ = self.camera_extrinsics.forward_origins(img_idxs, origs_noisy)
 
         # Align raw space to predicted model space
-        post_transform_params = self.kabsch_algorithm(origs_raw, origs_pred)
+        if from_raw_to_pred:
+            post_transform_params = self.kabsch_algorithm(origs_raw, origs_pred)
+        else:
+            post_transform_params = self.kabsch_algorithm(origs_pred, origs_raw)
 
-        return post_transform_params
+        if return_origs:
+            return post_transform_params, origs_raw, origs_pred
+        else:
+            return post_transform_params
 
     ##############################################################
     # Batch transformations
@@ -287,3 +315,11 @@ class CameraCalibrationModel(NerfInterpolationBase):
             pixel_width
         )
 
+
+    def compute_pose_error(self):
+
+        # Align the predicted model space to
+        (R, t, c), origs_raw, origs_pred = self.compute_post_transform_params(from_raw_to_pred=False, return_origs=True)
+        origs_pred_aligned = th.matmul(R.unsqueeze(0), origs_pred.unsqueeze(2)).squeeze(2)*c + t
+        error = (((origs_raw - origs_pred_aligned)**2).sum(dim=1)**0.5).mean()
+        return error

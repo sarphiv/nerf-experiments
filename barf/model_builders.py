@@ -12,7 +12,7 @@ from point_logger import LogCameraExtrinsics
 from epoch_fraction_logger import LogEpochFraction
 from model_camera_calibration import CameraCalibrationModel
 from model_interpolation_architecture import NerfModel
-from positional_encodings import BarfPositionalEncoding, IntegratedFourierFeatures
+from positional_encodings import BarfPositionalEncoding, IntegratedFourierFeatures, IntegratedBarfFourierFeatures
 from model_interpolation import NerfInterpolationOurs, NerfInterpolationNerfacc, uniform_sampling_strategies, integration_strategies
 from model_barf import BarfModel
 from model_mip import MipNeRF, MipBarf
@@ -127,18 +127,34 @@ def mip_barf_builder(
     max_gaussian_sigma=None,
     n_training_images=None,
     distribute_variance=True,
+    alpha_start_pos=None,
+    alpha_start_dir=None,
+    alpha_increase_start_epoch=1.28,
+    alpha_increase_end_epoch=6.4,
 ): 
-    
+    alpha_start_pos = alpha_start_pos if alpha_start_pos is not None else fourier_levels_pos
+    alpha_start_dir = alpha_start_dir if alpha_start_dir is not None else fourier_levels_dir
+
     if n_training_images is None: raise ValueError("n_training_images must be specified")
 
-    position_encoder = IntegratedFourierFeatures(levels=fourier_levels_pos,
-                                                scale=scale,
-                                                include_identity=include_identity,
-                                                distribute_variance=distribute_variance
-                                                )
+    position_encoder = IntegratedBarfFourierFeatures(
+        levels=fourier_levels_pos,
+        alpha_start=alpha_start_pos,
+        alpha_increase_start_epoch=alpha_increase_start_epoch,
+        alpha_increase_end_epoch=alpha_increase_end_epoch,
+        include_identity=include_identity,
+        scale=scale,
+        distribute_variance=distribute_variance,
+    )
+
+    # position_encoder = IntegratedFourierFeatures(levels=fourier_levels_pos,
+    #                                             scale=scale,
+    #                                             include_identity=include_identity,
+    #                                             distribute_variance=distribute_variance
+    #                                             )
 
     direction_encoder = BarfPositionalEncoding(levels=fourier_levels_dir,
-                                                    alpha_start=fourier_levels_dir,
+                                                    alpha_start=alpha_start_dir,
                                                     alpha_increase_start_epoch=1.28,
                                                     alpha_increase_end_epoch=6.4,
                                                     include_identity=include_identity,
@@ -157,22 +173,6 @@ def mip_barf_builder(
         learning_rate_stop=learning_rate_stop,
         learning_rate_decay_end=learning_rate_decay_end,
     )
-
-    if samples_per_ray_proposal > 0:
-        model_proposal = NerfModel(
-            n_hidden=n_hidden,
-            hidden_dim=hidden_dim,
-            delayed_direction=delayed_direction,
-            delayed_density=delayed_density,
-            n_segments=n_segments,
-            position_encoder=position_encoder,
-            direction_encoder=direction_encoder,
-            learning_rate_start=learning_rate_start,
-            learning_rate_stop=learning_rate_stop,
-            learning_rate_decay_end=learning_rate_decay_end,
-        )
-    else:
-        model_proposal=None
 
 
     model = MipBarf(
@@ -195,8 +195,8 @@ def mip_barf_builder(
     return model
 
 
-
 if __name__ == "__main__":
+    exit()
 
     # parser = argparse.ArgumentParser()
     # parser.add_argument("--uniform_sampling_strategy", type=str, default="stratified_uniform")

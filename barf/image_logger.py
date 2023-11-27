@@ -142,10 +142,10 @@ class Log2dImageReconstruction(Callback):
         # Store reconstructed images on CPU
         val_images = []
 
-        if hasattr(model, "current_gaussian_sigma"):
-            pixel_width_factor = max(model.current_gaussian_sigma, 1)
+        if hasattr(model, "pixel_width_scalar"):
+            pixel_width_scalar = model.pixel_width_scalar
         else:
-            pixel_width_factor = 1
+            pixel_width_scalar = 1
 
         transform_params = None
         
@@ -162,7 +162,7 @@ class Log2dImageReconstruction(Callback):
                 dataset=TensorDataset(
                     origins, 
                     directions,
-                    dataset.pixel_width*th.ones(origins.shape[0], 1)*pixel_width_factor
+                    dataset.pixel_width*th.ones(origins.shape[0], 1)*pixel_width_scalar
                 ),
                 batch_size=self.batch_size,
                 num_workers=self.num_workers,
@@ -217,7 +217,7 @@ class Log2dImageReconstruction(Callback):
                 dataset=TensorDataset(
                     origins_noisy, 
                     directions_noisy,
-                    dataset.pixel_width*th.ones(origins.shape[0], 1)*pixel_width_factor
+                    dataset.pixel_width*th.ones(origins.shape[0], 1)*pixel_width_scalar
                 ),
                 batch_size=self.batch_size,
                 num_workers=self.num_workers,

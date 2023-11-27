@@ -75,7 +75,7 @@ class NerfInterpolationBase(pl.LightningModule):
 
     ):  
         
-        super().__init__()
+        pl.LightningModule.__init__(self)
 
         self.save_hyperparameters(
             ignore=["model_radiance", "model_proposal",]
@@ -580,7 +580,7 @@ class NerfInterpolationOurs(NerfInterpolationBase):
 class NerfInterpolationNerfacc(NerfInterpolationBase):
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super(NerfInterpolationNerfacc).__init__(*args, **kwargs)
         self.transmittance_estimator = nerfacc.PropNetEstimator()
 
     def _create_proposal_forward(

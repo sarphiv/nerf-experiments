@@ -22,15 +22,11 @@ argparse.Action
 # Low priority
 # TODO: Fix image logger - see that file
 # TODO: Remove all the runs in WANDB (davids are gone)
-# TODO: Use decay of learning rate - Check if it works in the bottom of model_camera_calibration - for camera extrinsics go as default from 1e-3 to 1e-5. For normal nerf from 5e-4 to 1e-4 
 # TODO: dataset.py: Rewrite datamodule to save the transformed images as (blurred images e.g)
 #       such that it can be easily read when instantiating a dataset with sigmas that
 #       have already been calculated once. This will save a lot of time during startup of a run.
 #       May not be a good idea tho, as it would require a lot of memory to store all the images??
-# TODO: We should try to run an experiment where we simulate BARF,
-#       but without our space transformation to the unit sphere.
-# TODO: Run experiment where we use the so3_to_SO3 from BARF - see Lie_barf.py
-#       
+
 
 # Converter that takes iterations to epochs to adjust alpha
 def convert_iterations_to_epochs(iterations: int, batch_size: int, dataset_size_samples: int) -> float:
@@ -38,6 +34,32 @@ def convert_iterations_to_epochs(iterations: int, batch_size: int, dataset_size_
 
 
 if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--camera_origin_noise_sigma", type=float, default=0)
+    # parser.add_argument("--camera_origin_noise_sigma", type=float, default=0.15)
+    parser.add_argument("--camera_rotation_noise_sigma", type=float, default=0)
+    # parser.add_argument("--camera_rotation_noise_sigma", type=float, default=0.15)
+    parser.add_argument("--alpha_start_pos", type=float, default=8.4)
+    parser.add_argument("--alpha_start_dir", type=float, default=0)
+    parser.add_argument("--blur_sigma_start", type=float, default=20)
+    parser.add_argument("--optimize_camera", action=argparse.BooleanOptionalAction, default=True)
+    args = parser.parse_args()
+    # print(args)
+    print(f"mip barf ")
+    # Set up data module
+    BATCH_SIZE = 1024*2
+    NUM_WORKERS = 3
+    # IMAGE_SIZE = 200
+    IMAGE_SIZE = 400
+    # IMAGE_SIZE = 40
+    # SIGMAS_FOR_BLUR = [0.]
+    # SIGMAS_FOR_BLUR = (2**th.flip(th.linspace(-1, 4, 10), dims=(0,))).tolist() + [0]
+    SIGMAS_FOR_BLUR = [20, 0]
+    # SIGMAS_FOR_BLUR = [4, 3, 2, 1, 0.]
+
+    # quit()
+    # exit()
 
     # Set seeds
     pl.seed_everything(1337)
@@ -47,21 +69,9 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="mip blur"
+        name="testing mip barf",
+        # name=f"testing integration/sample_strats - proposal={args.use_proposal}, {args.uniform_sampling_strategy}, {args.integration_strategy}, {args.uniform_sampling_offset_size}",
     )
-
-
-    # Set up data module
-    BATCH_SIZE = 1024*1
-    NUM_WORKERS = 3
-    # IMAGE_SIZE = 200
-    IMAGE_SIZE = 400
-    # IMAGE_SIZE = 40
-    # SIGMAS_FOR_BLUR = [0.]
-    SIGMAS_FOR_BLUR = [16, 0.]
-    # SIGMAS_FOR_BLUR = [16, 8, 4, 2, 1, 0.5, 0.]
-    # SIGMAS_FOR_BLUR = [4, 3, 2, 1, 0.]
-
     
     dm = ImagePoseDataModule(
         image_width=IMAGE_SIZE,
@@ -73,8 +83,8 @@ if __name__ == "__main__":
         validation_fraction=0.06,
         validation_fraction_shuffle=1234,
         gaussian_blur_sigmas = SIGMAS_FOR_BLUR,
-        rotation_noise_sigma = 0,#.15,
-        translation_noise_sigma = 0,#.15,
+        rotation_noise_sigma = args.camera_origin_noise_sigma,
+        translation_noise_sigma = args.camera_rotation_noise_sigma,
         batch_size=BATCH_SIZE,
         num_workers=NUM_WORKERS,
         shuffle=True,
@@ -138,13 +148,14 @@ if __name__ == "__main__":
     # model = nerf_interpolation_builder()
 
     model = mip_barf_builder(
-        start_gaussian_sigma=15,
-        camera_learning_rate_start=0,
-        camera_learning_rate_stop=0,
-        camera_learning_rate_decay_end=-1,
+        start_gaussian_sigma=args.blur_sigma_start,
+        camera_learning_rate_start=1e-3 if args.optimize_camera else 0.,
+        camera_learning_rate_stop=1e-5 if args.optimize_camera else 0.,
+        camera_learning_rate_decay_end=200000,
         distribute_variance=True,
         n_training_images=dm.n_training_images,
-
+        alpha_start_pos=args.alpha_start_pos,
+        alpha_start_dir=args.alpha_start_dir,
     )
 
     trainer.fit(model, dm)#, ckpt_path="/work3/s204111/nerf-experiments/barf/nerf-experiments/vq9nm9vt/checkpoints/ckpt_epoch=epoch=03-val_loss=val_loss=0.00.ckpt")
