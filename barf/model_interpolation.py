@@ -60,7 +60,7 @@ class SchedulerLeNice(th.optim.lr_scheduler.LRScheduler):
 
 
 
-class NerfInterpolationBase(pl.LightningModule):
+class NerfInterpolation(pl.LightningModule):
     def __init__(
         self, 
         near_sphere_normalized: float,
@@ -204,15 +204,19 @@ class NerfInterpolationBase(pl.LightningModule):
         device = t_coarse.device
 
         # Each segment needs weight*samples_per_ray_fine new samples plus 1 because of the coarse sample 
-        fine_samples = th.floor(weights/weights.sum(dim=1, keepdim=True)*(n_samples - n_bins))
+        weights_rescaled = weights/weights.sum(dim=1, keepdim=True)
+        fine_samples_raw = weights_rescaled*(n_samples - n_bins)
+        fine_samples = th.floor(fine_samples_raw)
+        fine_samples_errors = fine_samples_raw - fine_samples
+
         # fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += n_samples - fine_samples.sum(dim=1) - n_bins
         # fine_samples += 1
 
         fine_samples_sum = fine_samples.sum(dim=1, keepdim=True)
         excess = n_samples - n_bins - fine_samples_sum
-        rank = fine_samples.argsort(dim=1).argsort(dim=1)
-        add_mask = (rank >= (n_bins - excess.abs()))
-        fine_samples = fine_samples + add_mask*th.sign(excess) + 1
+        error_rank = fine_samples_errors.argsort(dim=1).argsort(dim=1)
+        add_mask = (error_rank >= (n_bins - excess))
+        fine_samples = fine_samples + add_mask + 1
 
 
         fine_samples_cum_sum = th.hstack((th.zeros(batch_size, 1, device=device), fine_samples.cumsum(dim=1)))
@@ -234,9 +238,9 @@ class NerfInterpolationBase(pl.LightningModule):
                 
                 fine_samples_sum = fine_samples.sum(dim=1, keepdim=True)
                 excess = n_samples - n_bins - fine_samples_sum
-                rank = fine_samples.argsort(dim=1).argsort(dim=1)
-                add_mask = (rank >= (n_bins - excess.abs()))
-                fine_samples = fine_samples + add_mask*th.sign(excess) + 1
+                error_rank = fine_samples_errors.argsort(dim=1).argsort(dim=1)
+                add_mask = (error_rank >= (n_bins - excess))
+                fine_samples = fine_samples + add_mask + 1
             else:
                 sample_pdf_succeeded = True
                 break
@@ -300,67 +304,6 @@ class NerfInterpolationBase(pl.LightningModule):
         return positions, directions
 
 
-    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor, pixel_width: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
-        raise NotImplementedError("forward must be implemented")
-
-
-    def validation_transform_rays(self, ray_origs, ray_dirs, transform_params=None):
-        return ray_origs, ray_dirs, transform_params
-
-
-    def _step_helper(self, batch, batch_idx, purpose: Literal["train", "val"]):
-        raise NotImplementedError
-
-
-    def training_step(self, batch, batch_idx):
-        return self._step_helper(batch, batch_idx, "train")
-
-
-    def validation_step(self, batch, batch_idx):
-        return self._step_helper(batch, batch_idx, "val")
-
-
-    def configure_optimizers(self):
-        # Create optimizer and schedular 
-
-        optimizer = th.optim.Adam(
-            [
-                {"params": param_group["parameters"], "lr": param_group["learning_rate_start"]}
-                for param_group in self.param_groups
-            ]
-        )
-
-        lr_scheduler = SchedulerLeNice(
-            optimizer, 
-            start_LR=[param_group["learning_rate_start"] for param_group in self.param_groups], 
-            stop_LR= [param_group["learning_rate_stop"] for param_group in self.param_groups], 
-            number_of_steps=[param_group["learning_rate_decay_end"] for param_group in self.param_groups],
-            verbose=False
-        )
-
-    
-        lr_scheduler_config = {
-            # REQUIRED: The scheduler instance
-            "scheduler": lr_scheduler,
-            # The unit of the scheduler's step size, could also be 'step'.
-            # 'epoch' updates the scheduler on epoch end whereas 'step'
-            # updates it after a optimizer update.
-            "interval": "step",
-            # How many epochs/steps should pass between calls to
-            # `scheduler.step()`. 1 corresponds to updating the learning
-            # rate after every epoch/step.
-            "frequency": 1,
-            # If using the `LearningRateMonitor` callback to monitor the
-            # learning rate progress, this keyword can be used to specify
-            # a custom logged name
-            "name": "le_nice_lr_scheduler",
-        }
-
-        return {"optimizer": optimizer, "lr_scheduler": lr_scheduler_config}
-
-
-
-class NerfInterpolationOurs(NerfInterpolationBase):
 
     def _render_rays(self, densities: th.Tensor, colors: th.Tensor, distances: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
         """
@@ -576,8 +519,59 @@ class NerfInterpolationOurs(NerfInterpolationBase):
 
 
 
+    def validation_transform_rays(self, ray_origs, ray_dirs, transform_params=None):
+        return ray_origs, ray_dirs, transform_params
+
+
+
+    def training_step(self, batch, batch_idx):
+        return self._step_helper(batch, batch_idx, "train")
+
+
+    def validation_step(self, batch, batch_idx):
+        return self._step_helper(batch, batch_idx, "val")
+
+
+    def configure_optimizers(self):
+        # Create optimizer and schedular 
+
+        optimizer = th.optim.Adam(
+            [
+                {"params": param_group["parameters"], "lr": param_group["learning_rate_start"]}
+                for param_group in self.param_groups
+            ]
+        )
+
+        lr_scheduler = SchedulerLeNice(
+            optimizer, 
+            start_LR=[param_group["learning_rate_start"] for param_group in self.param_groups], 
+            stop_LR= [param_group["learning_rate_stop"] for param_group in self.param_groups], 
+            number_of_steps=[param_group["learning_rate_decay_end"] for param_group in self.param_groups],
+            verbose=False
+        )
+
+    
+        lr_scheduler_config = {
+            # REQUIRED: The scheduler instance
+            "scheduler": lr_scheduler,
+            # The unit of the scheduler's step size, could also be 'step'.
+            # 'epoch' updates the scheduler on epoch end whereas 'step'
+            # updates it after a optimizer update.
+            "interval": "step",
+            # How many epochs/steps should pass between calls to
+            # `scheduler.step()`. 1 corresponds to updating the learning
+            # rate after every epoch/step.
+            "frequency": 1,
+            # If using the `LearningRateMonitor` callback to monitor the
+            # learning rate progress, this keyword can be used to specify
+            # a custom logged name
+            "name": "le_nice_lr_scheduler",
+        }
+
+        return {"optimizer": optimizer, "lr_scheduler": lr_scheduler_config}
+
 # TODO Not done - Torben fixme pretty please.
-class NerfInterpolationNerfacc(NerfInterpolationBase):
+class NerfInterpolationNerfacc(NerfInterpolation):
 
     def __init__(self, *args, **kwargs):
         super(NerfInterpolationNerfacc).__init__(*args, **kwargs)

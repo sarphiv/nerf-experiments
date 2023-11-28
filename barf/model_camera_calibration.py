@@ -10,13 +10,13 @@ from torch.optim.optimizer import Optimizer
 from dataset import DatasetOutput
 from data_module import ImagePoseDataModule
 from model_camera_extrinsics import CameraExtrinsics
-from model_interpolation import InnerModelBatchInput, NerfInterpolationBase, uniform_sampling_strategies, integration_strategies
+from model_interpolation import InnerModelBatchInput, NerfInterpolation, uniform_sampling_strategies, integration_strategies
 from positional_encodings import BarfPositionalEncoding
 from model_interpolation_architecture import NerfModel
 
 
 
-class CameraCalibrationModel(NerfInterpolationBase):
+class CameraCalibrationModel(NerfInterpolation):
     def __init__(
         self, 
         n_training_images: int,
@@ -37,7 +37,7 @@ class CameraCalibrationModel(NerfInterpolationBase):
         uniform_sampling_offset_size: float = 0.,
         integration_strategy: integration_strategies = "middle",
     ):  
-        NerfInterpolationBase.__init__(self,
+        NerfInterpolation.__init__(self,
             near_sphere_normalized=near_sphere_normalized,
             far_sphere_normalized=far_sphere_normalized,
             model_radiance=model_radiance,

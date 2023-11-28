@@ -17,15 +17,16 @@ argparse.Action
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--uniform_sampling_strategy", type=str, default="stratified_uniform")
+    parser.add_argument("--uniform_sampling_strategy", type=str, default="equidistant")
     parser.add_argument("--integration_strategy", type=str, default="middle")
     parser.add_argument("--uniform_sampling_offset_size", type=float, default=-1.)
+    parser.add_argument("--seed", type=int, default=1337)
     args = parser.parse_args()
     # print(args)
     print(f"testing integration/sample_strats - {args.uniform_sampling_strategy}, {args.integration_strategy}, {args.uniform_sampling_offset_size}")
 
     # Set seeds
-    pl.seed_everything(1337)
+    pl.seed_everything(args.seed)
 
 
     # Set up weights and biases logger
@@ -62,7 +63,7 @@ if __name__ == "__main__":
         pin_memory=True,
     )
 
-    dm.setup("fit")
+    # dm.setup("fit")
 
 
     # Set up trainer

@@ -12,15 +12,15 @@ tmp_scripts_path   = "/work3/s204111/nerf-experiments/bsub_scripts"
 
 # sampling tests
 main_file          = "run_sampling_test.py"
-argument_iterables = [uniform_sampling_strategies.__args__, integration_strategies.__args__, [0, -1]]
+argument_iterables = [uniform_sampling_strategies.__args__[::-1], integration_strategies.__args__, [0, -1], [12312,422,1114,2]]
 
-def executer(sampling_strat, int_strat, offset):
-    return f"python {main_file} --uniform_sampling_strategy={sampling_strat} --integration_strategy={int_strat} --uniform_sampling_offset_size={offset}"
+def executer(sampling_strat, int_strat, offset, seed):
+    return f"python {main_file} --uniform_sampling_strategy={sampling_strat} --integration_strategy={int_strat} --uniform_sampling_offset_size={offset} --seed={seed}"
 
 
-# mip barf
-main_file        = "run_mip_blur_test.py"
-argument_iterables = [[]]
+# # mip barf
+# main_file        = "run_mip_blur_test.py"
+# argument_iterables = [[]]
 
 
 

@@ -13,7 +13,7 @@ from epoch_fraction_logger import LogEpochFraction
 from model_camera_calibration import CameraCalibrationModel
 from model_interpolation_architecture import NerfModel
 from positional_encodings import BarfPositionalEncoding, IntegratedFourierFeatures, IntegratedBarfFourierFeatures
-from model_interpolation import NerfInterpolationOurs, NerfInterpolationNerfacc, uniform_sampling_strategies, integration_strategies
+from model_interpolation import NerfInterpolation, NerfInterpolationNerfacc, uniform_sampling_strategies, integration_strategies
 from model_barf import BarfModel
 from model_mip import MipNeRF, MipBarf
 
@@ -88,7 +88,7 @@ def nerf_interpolation_builder(
 
 
     # # Set up model
-    model = NerfInterpolationOurs(
+    model = NerfInterpolation(
         near_sphere_normalized=near_sphere_normalized,
         far_sphere_normalized=far_sphere_normalized,
         samples_per_ray_radiance=samples_per_ray_radiance,
@@ -415,7 +415,7 @@ if __name__ == "__main__":
     #     # model_proposal=model_proposal,
     # )
 
-    model = NerfInterpolationOurs(
+    model = NerfInterpolation(
         
     )
 
