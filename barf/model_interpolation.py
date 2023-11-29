@@ -141,7 +141,7 @@ class NerfInterpolation(pl.LightningModule):
         ).unsqueeze(0).repeat(batch_size, 1)
         
         # Perturb sample positions to be anywhere in each interval
-        t_coarse += th.rand_like(t_coarse, device=self.device) * interval_size
+        t_coarse += th.rand((batch_size, 1), device=self.device) * interval_size
 
         return self._get_intervals(t_coarse)
     
@@ -153,9 +153,9 @@ class NerfInterpolation(pl.LightningModule):
 
         Parameters:
         -----------
-            t_coarse:           Tensor of shape (batch_size, samples_per_ray_coarse) - the t-values for the beginning of each bin
-            weights:            Tensor of shape (batch_size, samples_per_ray_coarse) (these are assumed to almost sum to 1)
-            distances_coarse:   Tensor of shape (batch_size, samples_per_ray_coarse)
+            t_coarse:           Tensor of shape (batch_size, samples_per_ray_proposal) - the t-values for the beginning of each bin
+            weights:            Tensor of shape (batch_size, samples_per_ray_proposal) (these are assumed to almost sum to 1)
+            distances_coarse:   Tensor of shape (batch_size, samples_per_ray_proposal)
         
         Returns:
         --------
@@ -164,21 +164,30 @@ class NerfInterpolation(pl.LightningModule):
         
         """
         # Initialization 
-        batch_size = t_coarse.shape[0]
+        batch_size, n_bins = t_coarse.shape
         device = t_coarse.device
+        total_samples = self.samples_per_ray_fine + n_bins 
 
         # Each segment needs weight*samples_per_ray_fine new samples plus 1 because of the coarse sample 
-        fine_samples = th.round(weights*self.samples_per_ray_fine)
-        # Rounding might cause the sum to be less than or larger than samples_per_ray_fine, so we add the difference to the largest segment (especially since weights don't sum all the way to 1)
-        fine_samples[th.arange(batch_size), th.argmax(fine_samples, dim=1)] += self.samples_per_ray_fine - fine_samples.sum(dim=1)
-        fine_samples += 1
-        fine_samples_cum_sum = th.hstack((th.zeros(batch_size, 1, device=device), fine_samples.cumsum(dim=1)))
+        weights_rescaled = weights/weights.sum(dim=1, keepdim=True)
+        fine_samples_raw = weights_rescaled*(total_samples - n_bins) # Get the number of extra fine samples for each bin 
+        fine_samples = th.floor(fine_samples_raw)                    # Floor to get an under estimate 
+        fine_samples_errors = fine_samples_raw - fine_samples        # Get how much each bin needs an extra sample 
+        excess = total_samples - n_bins - fine_samples.sum(dim=1, keepdim=True)# Find how many more samples needs to be in added in the different bins
         
-        # Instanciate the t_fine tensor and arange is used to mask the correct t values for each batch
-        arange = th.arange(self.samples_per_ray_fine + self.samples_per_ray_coarse, device=device).unsqueeze(0)
-        t_fine = th.zeros(batch_size, self.samples_per_ray_fine + self.samples_per_ray_coarse, device=device)
+        # Place the excess samples in the correct bins 
+        error_rank = fine_samples_errors.argsort(dim=1).argsort(dim=1)  # Get the rank of the errors
+        add_mask = (error_rank >= (n_bins - excess)) # We have n_bins and the excess' highest ranks needs 1 more. Those are taken by comparing ranks to n_bins - excess
+        fine_samples = fine_samples + add_mask + 1 # Add mask and the coarse samples to each bin 
 
-        for i in range(self.samples_per_ray_coarse):
+        # We need to know how many samples have been before the k'th bin 
+        fine_samples_cum_sum = th.hstack((th.zeros(batch_size, 1, device=device), fine_samples.cumsum(dim=1)))
+
+        # Instanciate the t_fine tensor and arange is used to mask the correct t values for each batch
+        arange = th.arange(total_samples, device=device).unsqueeze(0)
+        t_fine = th.zeros(batch_size, total_samples, device=device)
+
+        for i in range(n_bins):
             # Pick out the samples for each segment, everything within cumsum[i] and cumsum[i+1] is in segment i because the difference is the new samples
             # This mask is for each ray in the batch 
             mask = (arange >= fine_samples_cum_sum[:, i].unsqueeze(-1)) & (arange < fine_samples_cum_sum[:, i+1].unsqueeze(-1))
@@ -187,7 +196,14 @@ class NerfInterpolation(pl.LightningModule):
             # And spread them out evenly in the segment by deviding the length of the segment with the amount of samples in that segment
             t_fine += (arange - fine_samples_cum_sum[:, i].unsqueeze(-1))*mask*distances_coarse[:, i].unsqueeze(-1)/fine_samples[:, i].unsqueeze(-1)
 
-        return self._get_intervals(t_fine)
+        # If against all odds there are any zeroes in t_fine, we replace them with the far sphere
+        if (t_fine == 0).any():
+            t_fine[t_fine == 0] = self.far_sphere_normalized
+            print(f"There were zeroes in t_fine?{weights}")
+
+        t_start, t_end = self._get_intervals(t_fine)
+        
+        return t_start, t_end
 
 
     def _compute_positions(self, origins: th.Tensor, directions: th.Tensor, t: th.Tensor) -> tuple[th.Tensor, th.Tensor]:

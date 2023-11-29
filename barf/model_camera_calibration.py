@@ -160,6 +160,8 @@ class CameraCalibrationModel(NerfInterpolation):
 
     def compute_post_transform_params(
             self,
+            from_raw_to_pred: bool = True,
+            return_origs: bool = False,
             ) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
         """
         Computes the transform params (R, t, c) used for transforming
@@ -199,10 +201,15 @@ class CameraCalibrationModel(NerfInterpolation):
         origs_noisy = dataset.camera_origins_noisy.to(self.device)
         origs_pred, _ = self.camera_extrinsics.forward_origins(img_idxs, origs_noisy)
 
-
         # Align raw space to predicted model space
-        post_transform_params = self.kabsch_algorithm(origs_raw, origs_pred)
-
+        if from_raw_to_pred:
+            post_transform_params = self.kabsch_algorithm(origs_raw, origs_pred)
+        else: 
+            post_transform_params = self.kabsch_algorithm(origs_pred, origs_raw)
+        
+        # For computing pose errors
+        if return_origs:
+            return post_transform_params, origs_raw, origs_pred
         return post_transform_params
 
     ##############################################################
@@ -367,6 +374,19 @@ class CameraCalibrationModel(NerfInterpolation):
             return sigma
 
 
+    def compute_pose_error(self):
+        """
+        Helper function that computes the pose error distances
+        """
+        # Get transformation from pred to raw space
+        (R, t, c), origs_raw, origs_pred = self.compute_post_transform_params(from_raw_to_pred=False, return_origs=True)
+        # Transform preds to raw 
+        origs_pred_aligned = th.matmul(R, origs_pred.unsqueeze(2)).squeeze(2)*c + t
+        # Compute error
+        error = (((origs_raw - origs_pred_aligned)**2).sum(dim=1)**0.5).mean()
+        return error
+    
+
     ##############################################################
     # helper methods for the lightning module methods
 
@@ -415,20 +435,27 @@ class CameraCalibrationModel(NerfInterpolation):
             loss = loss_fine + loss_coarse
 
             # Log metrics
-            self.log_dict({f"{purpose}_loss_fine": loss_fine,
+            log_dict = {f"{purpose}_loss_fine": loss_fine,
                         f"{purpose}_loss_coarse": loss_coarse,
                         f"{purpose}_psnr": psnr,
                         "alpha": self.position_encoder.alpha.item(),
                         "sigma": sigma.item(),
-                        })
+                        }
         else:
             loss = loss_fine
-            self.log_dict({f"{purpose}_loss_fine": loss_fine,
+            log_dict = {f"{purpose}_loss_fine": loss_fine,
                         f"{purpose}_psnr": psnr,
                         "alpha": self.position_encoder.alpha.item(),
                         "sigma": sigma.item(),
-                        })
+                        }
+            
+        if purpose == "val" and batch_idx == 0:
+            # Compute pose error
+            pose_error = self.compute_pose_error()
+            log_dict[f"{purpose}_pose_error"] = pose_error
 
+        # Log metrics
+        self.log_dict(log_dict)
         
         return loss
 

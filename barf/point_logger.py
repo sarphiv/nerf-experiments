@@ -125,14 +125,16 @@ class LogCameraExtrinsics(Callback):
         data_module = cast(ImagePoseDataModule, trainer.datamodule) # type: ignore
         
         
-        # Get camera raw and noisy center origs and directions
+        # Get camera raw and noisy center origs and directions #TODO do this by storing them in the below command
         camera_origs_raw = data_module.dataset_train.camera_origins.to(model.device)
         camera_dirs_raw = data_module.dataset_train.camera_directions.to(model.device)
         camera_origs_noisy = data_module.dataset_train.camera_origins_noisy.to(model.device)
         camera_dirs_noisy = data_module.dataset_train.camera_directions_noisy.to(model.device)
 
         # Transform the raw centers to nerf coordinates 
-        camera_origs_raw, camera_dirs_raw, _ = model.validation_transform_rays(camera_origs_raw, camera_dirs_raw)
+        # camera_origs_raw, camera_dirs_raw, _ = model.validation_transform_rays(camera_origs_raw, camera_dirs_raw)
+        (R, t, c) = model.compute_post_transform_params(from_raw_to_pred=False)
+        # (R, t, c), camera_origs_raw, camera_origs_pred = model.compute_post_transform_params(from_raw_to_pred=False, return_origs=True) # TODO don't do double work
         
         # Transform noisy centers origins and directions to nerf coordinates 
         camera_origs_pred, camera_dirs_pred, _, _ = model.camera_extrinsics.forward(
@@ -140,6 +142,10 @@ class LogCameraExtrinsics(Callback):
             camera_origs_noisy, 
             camera_dirs_noisy
         )
+
+        # Transform these predictions back to the original coordinates
+        camera_origs_pred = th.matmul(R, camera_origs_pred.unsqueeze(-1)).squeeze(-1)*c + t
+        camera_dirs_pred = th.matmul(R, camera_dirs_noisy.unsqueeze(-1)).squeeze(-1)*c
 
         # Scale directions to be visible
         camera_dirs_raw *= self.ray_direction_length
@@ -155,8 +161,10 @@ class LogCameraExtrinsics(Callback):
         origins_raw_colors = blue.repeat(n_images, 1) # th.hstack((th.ones(n_images, 2, device=model.device) * 255, th.zeros(n_images, 1, device=model.device)))
         
         # NOTE: Red is wrong everything, green is correct origin, blue is correct direction
-        # NOTE: See that everything that is outside one standard deviation of the original origins are red, and within a standard devition we graduate from green to red
-        origins_pred_errors = th.norm(camera_origs_raw - camera_origs_pred, dim=1).view(-1, 1) / th.std(camera_origs_raw, dim=0).norm()
+        # relic : # NOTE: See that everything that is outside one standard deviation of the original origins are red, and within a standard devition we graduate from green to red
+        # origins_pred_errors = th.norm(camera_origs_raw - camera_origs_pred, dim=1).view(-1, 1) / th.std(camera_origs_raw, dim=0).norm()
+        # NOTE: A point is red if it is one 10'th of the maximum distance between any two points away from the original point cloud
+        origins_pred_errors = th.norm(camera_origs_raw - camera_origs_pred, dim=1).view(-1, 1)* 10 / th.cdist(camera_origs_raw, camera_origs_raw).max()
         origins_pred_errors = origins_pred_errors.clip(0, 1)
         origins_pred_colors = red * origins_pred_errors + green*(1- origins_pred_errors) #th.hstack((origins_pred_errors, 255 - origins_pred_errors, th.zeros(n_images, 1, device=model.device)))
 
