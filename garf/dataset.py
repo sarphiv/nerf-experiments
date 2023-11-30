@@ -4,15 +4,21 @@ import pathlib
 import math
 import sys
 from typing import Callable, Optional, cast
+import copy
+from tqdm import tqdm
 
 import torch as th
 from torch.utils.data import Dataset
 import torchvision as tv
+from PIL import Image, ImageFilter
+
+from model_camera_extrinsics import CameraExtrinsics
+
 
 
 # Type alias for dataset output
-#  (origin_raw, origin_noisy, direction_raw, direction_noisy, pixel_color_raw, pixel_color_blur, pixel_relative_blur, image_index)
-DatasetOutput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor, th.Tensor, th.Tensor, th.Tensor, th.Tensor]
+#  (origin_raw, origin_noisy, direction_raw, direction_noisy, pixel_color_raw, image_index)
+DatasetOutput = tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor, th.Tensor, th.Tensor]
 
 
 class ImagePoseDataset(Dataset[DatasetOutput]):
@@ -27,34 +33,47 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         rotation_noise_sigma: float=1.0,
         translation_noise_sigma: float=1.0,
         noise_seed: Optional[int]=None,
-        gaussian_blur_kernel_size: int=40,
-        gaussian_blur_relative_sigma_start: float=0.,
-        gaussian_blur_relative_sigma_decay: float=1.
+        gaussian_blur_sigmas: list[float]=[0.0], # NOTE: the last element is reserved for the original image (0.0)
+        verbose: bool=False, 
     ) -> None:
         """Loads images, camera info, and generates rays for each pixel in each image.
         
-        Args:
-            image_width (int): Width to resize images to.
-            image_height (int): Height to resize images to.
-            images_path (str): Path to the image directory.
-            camera_info_path (str): Path to the camera info file.
-            space_transform_scale (Optional[float], optional): Scale parameter for the space transform. Defaults to None, which auto-calculates based on max distance.
-            space_transform_translate (Optional[th.Tensor], optional): Translation parameter for the space transform. Defaults to None, which auto-calculates the mean.
-            rotation_noise_sigma (float, optional): Sigma parameter for the rotation noise in radians. Defaults to 1.0.
-            translation_noise_sigma (float, optional): Sigma parameter for the translation noise. Defaults to 1.0.
-            noise_seed (Optional[int], optional): Seed for the noise generator. Defaults to None.
-            gaussian_blur_kernel_size (int, optional): Size of the gaussian blur kernel. Defaults to 5.
-            gaussian_blur_relative_sigma_start (float, optional): Initial sigma parameter for the gaussian blur. Set to 0 to disable. Defaults to 0..
-            gaussian_blur_relative_sigma_decay (float, optional): Decay factor for the gaussian blur sigma. Defaults to 1..
+        Parameters:
+        -----------
+            * `image_width` `(int)`: Width to resize images to.
+            * `image_height` `(int)`: Height to resize images to.
+            * `images_path` `(str)`: Path to the image directory.
+            * `camera_info_path` `(str)`: Path to the camera info file.
+            * `space_transform_scale` `(Optional[float], optional)`:
+                Scale parameter for the space transform. Defaults to None, which auto-calculates based on max distance.
+                The distances in the original dataset (as read from `camera_info_path`) are devided by this parameter
+                to obtain the used dataset. See details below.
+            * `space_transform_translate` `(Optional[th.Tensor(3)], optional)`: Translation parameter for the space transform.
+                The original camera positions in the dataset are translated by the negated version of this parameter.
+                Defaults to `None`, which auto-calculates the mean camera pose and then moves it to the origin.
+                See details below.
+            * `rotation_noise_sigma` `(float, optional)`: Sigma parameter for the rotation noise in radians. Defaults to 1.0.
+            * `translation_noise_sigma` `(float, optional)`: Sigma parameter for the translation noise. Defaults to 1.0.
+            * `noise_seed` `(Optional[int], optional)`: Seed for the noise generator. Defaults to None.
+            * `sigmas` `(list[float], optional)`: List of sigmas/radii for the gaussian smoothing. Defaults to [0.0], which means no smoothing.
+            * `verbose` `(bool, optional)`: Whether to print progress. Defaults to False.
+        
+        Details:
+        --------
+        `space_transform_scale` and `space_transform_translate` are used to transform the camera to world matrices such that the cameras are centered.
+        However, it uses the convention, where the input is actually the inverse of the transformation that is applied to the camera to world matrices.
+        This means, that, camera_poses_original = space_transform_scale * camera_poses_transformed + space_transform_translate,
+        where camera_poses_original is the original camera to world matrices, and camera_poses_transformed is the transformed camera to world matrices.
+
         """
         super().__init__()
-        # Verify parameters
-        if gaussian_blur_kernel_size % 2 == 0:
-            raise ValueError("Gaussian blur kernel size must be odd.")
 
+        def print_verbose(msg: str) -> None:
+            if verbose:
+                print(msg)
 
         # Store image dimensions
-        self.image_height, self.image_width = image_width, image_height
+        self.image_height, self.image_width = image_height, image_width
         self.image_batch_size = self.image_width * self.image_height
 
         # Store paths
@@ -66,117 +85,218 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         self.rotation_noise_sigma = rotation_noise_sigma
         self.translation_noise_sigma = translation_noise_sigma
         self.noise_seed = noise_seed
-
-        # Store gaussian blur parameters
-        self.gaussian_blur_kernel_size = gaussian_blur_kernel_size
-        self.gaussian_blur_relative_sigma_start = gaussian_blur_relative_sigma_start
-        self.gaussian_blur_relative_sigma_decay = gaussian_blur_relative_sigma_decay
-        self.gaussian_blur_relative_sigma_current = self.gaussian_blur_relative_sigma_start
+        self.gaussian_blur_sigmas = gaussian_blur_sigmas
 
 
-
-        # Load images
-        self.images = self._load_images(
-            self.images_path, 
-            self.image_width, 
-            self.image_height
-        )
+        print_verbose("Loading camera info...")
 
         # Load camera info
-        self.focal_length, self.camera_to_world = self._load_camera_info(
+        self.focal_length, self.camera_to_worlds = ImagePoseDataset._load_camera_info(
             self.camera_info_path, 
-            self.image_width
+            self.image_width,
+        )
+
+        
+        # Load images
+        (self.images,
+         self.image_name_to_index,
+         self.image_index_to_name,
+         self.index_to_index,
+         self.n_images) = ImagePoseDataset._load_images(
+            self.images_path, 
+            self.image_height,
+            self.image_width, 
+            self.gaussian_blur_sigmas,
+            verbose,
         )
 
         # Transform camera to world matrices
         (
-            self.camera_to_world, 
+            self.camera_to_worlds, 
             self.space_transform_scale, 
-            self.space_transform_translate
-        ) = self._transform_camera_to_world(
-            self.camera_to_world, 
+            self.space_transform_translate,
+        ) = ImagePoseDataset._transform_camera_to_world(
+            self.camera_to_worlds, 
             space_transform_scale,
-            space_transform_translate
+            space_transform_translate,
+            self.image_index_to_name,
+            self.n_images
         )
 
+        print_verbose("Generating rays...")
 
-        # Get gaussian blur kernel
-        self.gaussian_blur_kernel = self._get_gaussian_blur_kernel(
-            self.gaussian_blur_kernel_size,
-            self.gaussian_blur_relative_sigma_current,
-            max(self.image_height, self.image_width)
-        )
+        # Store the origins of the cameras and the direction their center is facing
+        self.camera_origins, self.camera_directions = ImagePoseDataset._get_cam_origs_and_directions(self.camera_to_worlds)
 
-
-        # Get raw rays for each pixel in each image
-        self.origins_raw, self.directions_raw = self._get_raw_rays(
-            self.camera_to_world, 
-            self.image_width, 
-            self.image_height, 
-            self.focal_length
-        )
+        # Create mesh grid for the directions 
+        meshgrid = ImagePoseDataset._get_directions_meshgrid(self.image_height, self.image_width, self.focal_length)
         
-        # Get (artificially) noisy rays for each pixel in each image
-        self.origins_noisy, self.directions_noisy = self._get_noisy_rays(
-            self.origins_raw,
-            self.directions_raw,
+        # Transform the unit directions to a direction for each camera
+        self.ray_origins, self.ray_directions = ImagePoseDataset._meshgrid_to_world(meshgrid, self.camera_to_worlds)
+        
+        print_verbose("Applying noise...")
+
+        # Apply noise to get the input data for the model (both rays origins and directions and the centers)
+        (
+            self.camera_origins_noisy,
+            self.camera_directions_noisy,
+            self.ray_origins_noisy,
+            self.ray_directions_noisy,
+        ) = ImagePoseDataset._apply_noise(
+            self.camera_origins,
+            self.camera_directions,
+            self.ray_origins,
+            self.ray_directions,
             self.rotation_noise_sigma,
             self.translation_noise_sigma,
             self.noise_seed
         )
+        
+        print_verbose("Done loading data!")
+        
+        # NOTE: This is only for bug fixing (to see that validation transform works)
+        # self._screw_up_original_camera_poses_for_testing_validation_transform_in_CameraCalibrationModel()
 
+    ######### static methods ###############
 
-        # Store dataset output
-        self.dataset = [
-            (
-                camera_to_world, 
-                self.origins_raw[image_name],
-                self.origins_noisy[image_name],
-                self.directions_raw[image_name], 
-                self.directions_noisy[image_name],
-                self.images[image_name]
-            ) 
-            for image_name, camera_to_world in self.camera_to_world.items()
-        ]
+    @staticmethod
+    def _load_images(images_path: str,
+                     image_height: int,
+                     image_width,
+                     sigmas: list[float],
+                     verbose=False
+                     ) -> tuple[th.Tensor, dict[str, int], dict[int, str], dict[int, int], int]: 
+        """
+        Opens and returns the desired images (with gaussian smoothing applied). 
+        Each image is resized, alpha is converted to white, gaussian smoothing is applied,
+        channels are permuted and it is converted to a tensor. 
 
+        Parameters:
+        -----------
+            * `images_path`: str - path to the directory containing the images
+            * `img_height`: int - height of the images
+            * `img_width`: int - width of the images
+            * `sigmas`: list[float] - list of sigmas/radii for the gaussian smoothing
+        
+        Returns:
+        --------
+            * `images`: `th.Tensor(N, H, W, n_sigmas, 3)` - the images, where
+                N is the number of images,
+                H is the height of the images,
+                W is the width of the images, and 
+                n_sigmas is the number of sigmas/radii for the gaussian smoothing.
+            * `image_name_to_index`: `dict[str, int]` - a dict that maps from image name
+                to the index of the corresponding image in images.
+            * `image_index_to_name`: `dict[int, str]` - a dict that maps from the index
+                of an image in images to the corresponding image name.
+            * `index_to_index`: `dict[int, int]` - a dict that maps from the index of an image
+                in images to the original index of the image in the original dataset.
+                (see Details below)
+            * `n_images`: int - the number of images in the dataset.
+        
+        Details
+        -------
+        The `index_to_index` dict is used for subsetting the dataset.
+        It is a dict that is used to get the index of an image in the origina dataset
+        from its index in the current subset of the original dataset:
+         * Key: image index in current subset of original dataset, i.e. and integer in [0, n_images_in_current_dataset)
+         * Value: the original index of the image, i.e. an integer in [0, n_train_images_originally)
 
+        The reason for this is that we need to be able to remember the original index of the image
+        when we subset the dataset, so that we can get the correct camera extrinsics
+        I.e this dict is only strictly necassary for training images.
+        it is made specifically for the image logger for logging training images.
 
-    def _load_images(self, image_dir_path, image_width, image_height) -> dict[str, th.Tensor]:
-        # Transform image to correct format
-        transform = cast(
-            Callable[[th.Tensor], th.Tensor], 
-            tv.transforms.Compose([
-                # Convert to float
-                tv.transforms.Lambda(lambda img: img.float() / 255.),
-                # Resize image
-                tv.transforms.Resize(
-                    (image_height, image_width), 
-                    interpolation=tv.transforms.InterpolationMode.BICUBIC, 
-                    antialias=True # type: ignore
-                ),
-                # Transform alpha to white background (removes alpha too)
-                tv.transforms.Lambda(lambda img: img[-1] * img[:3] + (1 - img[-1])),
-                # Permute channels to (H, W, C)
-                # WARN: This is against the convention of PyTorch.
-                #  Doing it to enable easier batching of rays.
-                tv.transforms.Lambda(lambda img: img.permute(1, 2, 0))
-            ])
-        )
+        """
 
-        # Open RGBA image
-        read = lambda path: tv.io.read_image(
-            os.path.join(image_dir_path, path), 
-            tv.io.ImageReadMode.RGB_ALPHA
-        )
+        image_names_raw = os.listdir(images_path)
+        image_names = [pathlib.PurePath(path).stem for path in image_names_raw]
+        image_name_to_index = {name: i for i, name in enumerate(image_names)}
+        image_index_to_name = {i: name for i, name in enumerate(image_names)}
+        n_images = len(image_names)
+        index_to_index = {i: i for i in range(n_images)}
 
-        # Load each image, transform, and store
-        return {
-            pathlib.PurePath(path).stem: transform(read(path))
-            for path in os.listdir(image_dir_path) 
-        }
+        # Load the images as PIL.Image's 
+        if verbose: iterator = tqdm(image_names_raw, desc="Loading images")
+        else: iterator = image_names_raw
+        images = [Image.open(os.path.join(images_path, path)) for path in iterator]
 
+        # Resize each image 
+        images = [img.resize((image_width, image_height), Image.BILINEAR) for img in images]
 
-    def _load_camera_info(self, camera_info_path: str, image_width: int) -> tuple[float, dict[str, th.Tensor]]:
+        # Convert alpha to white background
+        white_image = Image.new("RGBA", (image_width, image_height), (255, 255, 255, 255))
+        images = [Image.alpha_composite(white_image, img).convert('RGB') for img in images]
+
+        # Apply gaussian smoothing
+        if verbose: iterator = tqdm(images, desc="Applying gaussian blur")
+        else: iterator = images
+        images = [ImagePoseDataset.gaussian_blur(img, sigmas) for img in iterator]
+
+        # Convert to tensor
+        PIL_to_tensor = tv.transforms.ToTensor()
+        if verbose: iterator = tqdm(images, desc="Converting to tensor")
+        else: iterator = images
+        images = th.stack([th.stack([PIL_to_tensor(img) for img in imgs]) for imgs in iterator]) # shape is (N, n_sigmas, 3, H, W)
+
+        # Permute channels to (N, H, W, n_sigmas, C) for each image
+        images = images.permute(0, 3, 4, 1, 2)
+        # images = th[imgs.permute(2, 3, 0, 1) for imgs in images]
+
+        # Store all images in one Tensor(N, H, W, n_sigmas, 3)
+        # images = th.stack(images, dim=0)
+
+        return images, image_name_to_index, image_index_to_name, index_to_index, n_images
+
+    @staticmethod
+    def gaussian_blur(img: Image.Image, sigmas: list[float], min_sigma = 0.25) -> list[Image.Image]:
+        """
+        Apply gaussian blurring to the image with the given sigmas.
+        """
+        imgs = [] 
+
+        # Apply gaussian smoothing
+        for sigma in sigmas:
+            if sigma > min_sigma: imgs.append(img.filter(ImageFilter.GaussianBlur(radius=sigma)))
+            else: imgs.append(img)
+
+        return imgs
+
+    @staticmethod
+    def _load_camera_info(camera_info_path: str, image_width: int) -> tuple[float, dict[str, th.Tensor]]:
+        """
+        Loads the camera info from cameras found in the given directory.
+        Returns the focal length and a dict that maps from image name to camera to world matrix.
+
+        Parameters:
+        -----------
+            * `camera_info_path`: `str` - path to the camera info file
+            * `image_width`: `int` - width of the images
+        
+        Returns:
+        --------
+            * `focal_length`: `float` - the focal length of the camera.\\
+                NOTE: Don't know if focal length is the correct word,
+                but here it is the distance from the camera to the plane
+                that satisfies that the intersections of two neighboring
+                camera rays are exactly distance 1 apart.
+            * `camera_to_worlds`: `dict[str, th.Tensor(4,4)]` - a dict
+                that maps from image name to the camera to world matrix
+
+        """
+        def _process_c2w(c2w, path) -> th.Tensor:
+            c2w = th.tensor(c2w)
+            if not th.allclose(c2w[-1, -1], th.tensor(1.)):
+                raise ValueError(f"camera_to_world matrices are expected to have scale 1, found {c2w[-1, -1].item()} in {path}")
+            c2w_iden = th.matmul(c2w[:3, :3], c2w[:3, :3].T)
+            identity = th.eye(3)
+
+            if not th.allclose(c2w_iden, identity, atol=2e-6, rtol=0.):
+                raise ValueError(f"camera_to_world matrices are expected to be orthogonal, found error {(c2w_iden - identity).abs().max()} in {path}") 
+
+            return c2w
+
+ 
         # Read info file
         camera_data = json.loads(open(camera_info_path).read())
         
@@ -184,21 +304,52 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         focal_length = image_width / 2 / math.tan(camera_data["camera_angle_x"] / 2)
         # Get camera to world matrices
         # NOTE: Projections are scaled to have scale 1
-        camera_to_world: dict[str, th.Tensor] = { 
-            pathlib.PurePath(path).stem: th.tensor(camera_to_world) / camera_to_world[-1][-1]
+        camera_to_worlds: dict[str, th.Tensor] = {
+            pathlib.PurePath(path).stem: _process_c2w(c2w, path)
             for frame in camera_data["frames"] 
-            for path, rotation, camera_to_world in [frame.values()] 
+            for path, rotation, c2w in [frame.values()] 
         }
 
         # Return focal length and camera to world matrices
-        return focal_length, camera_to_world
+        return focal_length, camera_to_worlds
 
+    @staticmethod
+    def _transform_camera_to_world(camera_to_worlds: dict[str, th.Tensor],
+                                   space_transform_scale: Optional[float],
+                                   space_transform_translate: Optional[th.Tensor],
+                                   image_index_to_name: dict[int, str],
+                                   n_images: int,
+                                   ) -> tuple[th.Tensor, float, th.Tensor]:
+    
+        """
+        Transform the camera to world matrices such that the cameras are centered,
+        or according to the given space transform parameters.
+        Return the transformed camera to world matrices as one tensor, the scale and translation parameters.
 
-    def _transform_camera_to_world(self, camera_to_world: dict[str, th.Tensor], space_transform_scale: Optional[float], space_transform_translate: Optional[th.Tensor]) -> tuple[dict[str, th.Tensor], float, th.Tensor]:
+        Parameters:
+        ----------
+            * `camera_to_worlds`: `dict[str, th.Tensor(4,4)]` - a dict that maps from image name to the camera to world matrix
+            * `space_transform_scale`: `Optional[float]` - the scale parameter for the space transform
+            * `space_transform_translate`: `Optional[th.Tensor(3)]` - the translation parameter for the space transform
+            * `name_to_image_index`: `dict[str, int]` - a dict that maps from image name to the index of the image in the dataset
+            * `n_images`: `int` - the number of images in the dataset
+        
+        Returns:
+        --------
+            * `camera_to_worlds`: `th.Tensor(N, 4, 4)` - the camera to world matrices, where
+                N is the number of images in the dataset
+            * `space_transform_scale`: `float` - the scale parameter for the space transform
+            * `space_transform_translate`: `th.Tensor(3)` - the translation parameter for the space transform
+        """
         # If space transform is not given, initialize transform parameters from data
         # NOTE: Assuming camera_to_world has scale 1
-        camera_positions = th.stack(tuple(camera_to_world.values()))[:, :3, -1] 
 
+        camera_to_world_raw = th.stack(tuple(camera_to_worlds.values()))
+        camera_positions = camera_to_world_raw[:, :3, -1] # (N, 3)
+        
+        if not th.allclose(camera_to_world_raw[:, -1, -1], th.ones(n_images)):
+            raise ValueError("camera_to_worlds matrices are expected to have scale 1")
+        
         # If no scale is given, initialize to 3*the maximum distance of any two cameras
         if space_transform_scale is None:
             space_transform_scale = 3*th.cdist(camera_positions, camera_positions, compute_mode="donot_use_mm_for_euclid_dist").max().item()
@@ -216,19 +367,79 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         scale_matrix = th.ones((4, 4))
         scale_matrix[:-1, -1] = space_transform_scale
 
-        # Move origin to average position of all cameras and scale world coordinates by the 3*the maximum distance of any two cameras
+        # Move origin to average position of all cameras and scale world coordinates
+        # by the 3*the maximum distance of any two cameras
+
+        camera_to_worlds_output = th.stack(
+            [
+                (camera_to_worlds[image_index_to_name[index]] - translate_matrix)/scale_matrix
+                for index in range(n_images)
+            ],
+            dim = 0
+        )
+
         return (
-            { 
-                image_name: (camera_to_world - translate_matrix)/scale_matrix
-                for image_name, camera_to_world 
-                in camera_to_world.items() 
-            },
+            camera_to_worlds_output,
             space_transform_scale,
-            space_transform_translate
+            space_transform_translate,
         )
 
 
-    def _get_raw_rays(self, camera_to_world: dict[str, th.Tensor], image_width: int, image_height: int, focal_length: float) -> tuple[dict[str, th.Tensor], dict[str, th.Tensor]]:
+    @staticmethod
+    def _get_cam_origs_and_directions(camera_to_worlds: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+        """Store the origins of the cameras and the direction their center is facing
+        
+        Parameters:
+        -----------
+            * `camera_to_worlds`: `Tensor(N, 4, 4)` - the camera to world matrices, where
+                N is the number of images in the dataset
+        
+        Returns:
+        --------
+            * `camera_origins`: `Tensor(N, 3)` - the origins of the cameras
+            * `camera_directions`: `Tensor(N, 3)` - the direction the cameras are facing - i.e. the direction 
+            vector corresponding to the center of the image.
+        
+        """
+
+        camera_origins = camera_to_worlds[:, :3, 3] # th.stack([c2w[:3, 3] for c2w in camera_to_worlds.values()], dim=0)
+        camera_directions = th.matmul(camera_to_worlds[:, :3, :3], th.tensor([0,0,-1.]).view(1,3,1)).squeeze(-1) # th.stack([th.tensor([0., 0., -1.])@c2w[:3, :3].T for c2w in camera_to_worlds.values()], dim=0)# old code: 
+
+        return camera_origins, camera_directions
+
+    @staticmethod
+    def _get_directions_meshgrid(image_height: int, image_width: int, focal_length: float) -> th.Tensor:
+        """
+        Create direction vectors in camera coordinates whose lines intersect with the image plane at the pixel centers.
+
+        Creates a generic meshgrid of directions that can be transformed to be the direction for any
+        camera by applying the camera to world matrix.
+        Returns the meshgrid flattened to (H*W, 3).
+
+        Parameters:
+        -----------
+            * `image_height`: `int` - height of the images (H)
+            * `image_width`: `int` - width of the images (W)
+            * `focal_length`: `float` - the focal length of the camera (see description of focal length in `_load_camera_info()`)
+        
+
+        Returns:
+        --------
+            * `directions`: `th.Tensor(H*W, 3)` - normalised direction vectors flattened to (H*W, 3) - one row for each pixel in the image.
+
+        Details:
+        --------
+        It uses the convention that the camera is looking in the negative z direction,
+        and that direction vectors are normalized (norm 2 = 1).
+        Furthermore, the convention is that the top left corner of the image plane is positioned
+        at (-image_width/2, image_height/2, -focal_length) in camera coordinates, and
+        the bottom right corner is positioned at (image_width/2, -image_height/2, -focal_length).
+        The order of the pixels in the meshgrid is by row, meaning that
+        the pixel at the i'th row and the j'th column of the image corresponds to the
+        (i*image_width + j)'th row of the output of this function. Which matches the order of the pixels in the image.
+        
+
+        """
         # Create unit directions (H, W, 3) in camera space
         # NOTE: Initially normalized such that z=-1 via the focal length.
         #  Camera is looking in the negative z direction.
@@ -241,153 +452,137 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         directions = th.stack((x, y, -th.ones_like(x)), dim=-1)
         directions /= th.norm(directions, p=2, dim=-1, keepdim=True)
 
-        # Return rays keyed by image
+        return directions.view(-1,3)
+
+    @staticmethod
+    def _meshgrid_to_world(meshgrid: th.Tensor, camera_to_worlds: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+        """
+        Transform from the unit meshgrid of directions to a direction for each camera by multiplying with the camera to world matrix.
+        Returns the origins and directions of all rays in the dataset.
+
+        Parameters:
+        ---------
+            * `meshgrid`: `Tensor(H*W, 3)`, output from `_get_directions_meshgrid()`
+            * `camera_to_worlds`: `Tensor(N, 4, 4)` - the camera to world matrices, where
+                N is the number of images in the dataset
+                
+        Returns:
+        ---------
+            * `ray_origins`: `Tensor(N, H*W, 3)`
+            * `ray_directions`: `Tensor(N, H*W, 3)`
+
+        Details:
+        --------
+        NOTE: The final calculation matches the two dimensions that are not shared with an "empty" dimension: 
+              camera_to_worlds: (N, 4, 4)   -> unsqueeze(1)                     -> (N, 1, 4, 4)
+
+              meshgrid:         (H*W, 3)    -> unsqueeze(0) and unsqueeze(-1)   -> (1, H*W, 3, 1) (we only use the rotation part of the camera_to_worlds matrix)
+
+              Hence the output is (N, H*W, 3, 1) -> squeeze(-1)                 -> (N, H*W, 3)
+        """
         return (
-            # Origins: Key by image and get focal points directly from camera to world projection
-            {
-                image_name: camera_to_world[:3, 3].expand_as(directions)
-                for image_name, camera_to_world in camera_to_world.items()
-            },
-            # Directions: Key by image and get directions directly from camera to world projection
-            # Rotate directions (H, W, 3) to world via R (3, 3).
-            #  Denote dir (row vector) as one of the directions in the directions tensor.
-            #  Then R @ dir.T = (dir @ R.T).T. 
-            #  This would yield a column vector as output. 
-            #  To get a row vector as output again, simply omit the last transpose.
-            #  The inside of the parenthesis on the right side 
-            #  is conformant for matrix multiplication with the directions tensor.
-            # NOTE: Assuming scale of projection matrix is 1
-            { 
-                image_name: directions @ camera_to_world[:3, :3].T
-                for image_name, camera_to_world in camera_to_world.items()
-            }
+            camera_to_worlds[:, :3, 3].unsqueeze(1).repeat(1, meshgrid.shape[0],1),
+            th.matmul(camera_to_worlds[:, :3, :3].unsqueeze(1), meshgrid.unsqueeze(0).unsqueeze(-1)).squeeze(-1) 
         )
 
+    @staticmethod
+    def _apply_noise(camera_origins: th.Tensor,
+                     camera_directions: th.Tensor,
+                     ray_origins: th.Tensor,
+                     ray_directions: th.Tensor,
+                     rotation_noise_sigma: th.Tensor,
+                     translation_noise_sigma: th.Tensor,
+                     noise_seed: Optional[int]=None,
+                     ) -> tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]:
+        """ 
+        Apply noise to the camera origins (a translate) and to the directions (a rotation)
 
-    def _get_noisy_rays(self, origins: dict[str, th.Tensor], directions: dict[str, th.Tensor], rotation_noise_sigma: Optional[float], translation_noise_sigma: Optional[float], noise_seed: Optional[int]) -> tuple[dict[str, th.Tensor], dict[str, th.Tensor]]:
-        # Get amount of cameras
-        n_cameras = len(origins)
-        
-        # Instantiate random number generator
-        rng = th.Generator()
+        Returns
+        -------
+            * `camera_origins_noisy`: `Tensor(N, 3)` - the noisy camera origins
+            * `camera_directions_noisy`: `Tensor(N, 3)` - the noisy camera directions
+            * `ray_origins_noisy`: `Tensor(N, H*W, 3)` - the noisy ray origins
+            * `ray_directions_noisy`: `Tensor(N, H*W, 3)` - the noisy ray directions
+        """
+
+        # Set seed for noise generator
+        noise_generator = th.Generator()
         if noise_seed is not None:
-            rng.manual_seed(noise_seed)
+            noise_generator.manual_seed(noise_seed)
 
+        # Create N random rotation matrices with the given noise level 
+        rotation_noise = CameraExtrinsics.so3_to_SO3(
+            th.randn((len(camera_origins), 3, 1), generator=noise_generator)*rotation_noise_sigma,
+        )
 
-        # Get random rotation amount in radians
-        thetas = th.randn((n_cameras, 1, 1), generator=rng) * rotation_noise_sigma
-
-        # Get random rotation axis
-        # NOTE: This is a random point on the unit sphere
-        # WARN: Technically a division by zero can happen.
-        #  This is however mitigated by applying the Ostrich algorithm :)
-        axes = th.randn((n_cameras, 3, 1), generator=rng)
-        axes /= th.norm(axes, p=2, dim=1, keepdim=True)
+        # NOTE: This is the old code, but I didn't wanna remove it yes
+        # rotation_noise = th.matrix_exp(th.cross(
+        #     -th.eye(3).view(1, 3, 3), 
+        #     th.randn((len(self.images), 3, 1), generator=noise_generator)*rotation_noise_sigma,
+        #     dim=1
+        # ))
         
-        # Get rotation matrices via exponential map from lie algebra so(3) -> SO(3)
-        so3 = th.cross(
-            -th.eye(3).view(1, 3, 3), 
-            thetas * axes,
-            dim=1
-        )
+        # Create N random translation vectors with the given noise level
+        translation_noise = th.randn((len(camera_origins), 3), generator=noise_generator)*translation_noise_sigma
 
-        rotations = th.matrix_exp(so3)
+        # Apply translations 
+        camera_origins_noisy    = camera_origins    + translation_noise
+        ray_origins_noisy       = ray_origins       + translation_noise.unsqueeze(1) 
+        
+        # Apply rotations 
+        camera_directions_noisy = th.matmul(rotation_noise, camera_directions.unsqueeze(-1)).squeeze(-1)
+        ray_directions_noisy    = th.matmul(rotation_noise.unsqueeze(1), ray_directions.unsqueeze(-1)).squeeze(-1)
 
+        return camera_origins_noisy, camera_directions_noisy, ray_origins_noisy, ray_directions_noisy
 
-        # Get random translation amount
-        translations = th.randn((n_cameras, 3), generator=rng) * translation_noise_sigma
+    ######### instance methods ###############
 
+    def subset_dataset(self, image_indices: th.Tensor | list[int|str]):
+        """
+        Subset data by image indices.
 
-        # Return rays keyed by image
-        return (
-            # Origins: Key by image and move focal point
-            {
-                image_name: origins + trans
-                for (image_name, origins), trans in zip(origins.items(), translations)
-            },
-            # Directions: Key by image and get directions directly from camera to world projection
-            # Rotate directions (H, W, 3) via R (3, 3).
-            #  Denote dir (row vector) as one of the directions in the directions tensor.
-            #  Then R @ dir.T = (dir @ R.T).T. 
-            #  This would yield a column vector as output. 
-            #  To get a row vector as output again, simply omit the last transpose.
-            #  The inside of the parenthesis on the right side 
-            #  is conformant for matrix multiplication with the directions tensor.
-            { 
-                image_name: directions @ rot.T
-                for (image_name, directions), rot in zip(directions.items(), rotations)
-            }
-        )
+        image_indices can either be image names (str) or image indices (int).
 
+        Creates a copy of the dataset, and then takes out a subset on an image basis. 
+        This is a shallow copy, however the data is never changed in the dataset,
+        so it is completely safe to do this.
 
+        Parameters:
+        ----------
+            * `image_indices`: `th.Tensor(N) | list[int|str]` - list of image indices or image names to subset the dataset with.
+        
+        Returns:
+        --------
+            * `output`: `ImagePoseDataset` - the subsetted dataset - shallow copy of the original dataset.
+        """
 
-    def _get_gaussian_blur_kernel(self, kernel_size: int, relative_sigma: float, max_side_length: int) -> th.Tensor:
-        # If sigma is 0, return a Dirac delta kernel
-        if relative_sigma <= sys.float_info.epsilon:
-            kernel = th.zeros(kernel_size)
-            kernel[kernel_size//2] = 1
-        # Else, create 1D Gaussian kernel
-        # NOTE: Gaussian blur is separable, so 1D kernel can simply be applied twice
+        # Create copy 
+        output = copy.copy(self)
+
+        if isinstance(image_indices, list):
+            # Convert image names to indices
+            image_indices = [self.image_name_to_index[idx] if isinstance(idx, str) else int(idx) for idx in image_indices]
+        elif isinstance(image_indices, th.Tensor):
+            image_indices = image_indices.tolist()
         else:
-            kernel = th.linspace(-kernel_size/2, kernel_size/2, kernel_size)
-            # Calculate inplace exp(-x^2 / (2 * (relative_sigma*max_side_length)^2))
-            kernel.square_().divide_(-2 * (relative_sigma * max_side_length)**2).exp_()
-            # Normalize the kernel
-            kernel.divide_(kernel.sum())
+            raise TypeError(f"image_indices must be either a list or a tensor, but was {type(image_indices)}")
 
+        
+        # Slice each part of the dataset
+        output.camera_to_worlds = self.camera_to_worlds[image_indices]
+        output.camera_origins = self.camera_origins[image_indices]
+        output.camera_origins_noisy = self.camera_origins_noisy[image_indices]
+        output.ray_directions = self.ray_directions[image_indices]
+        output.ray_directions_noisy = self.ray_directions_noisy[image_indices]
 
-        return kernel
+        # The index corresponding to each image needs to be keept track of for camera extrinsics 
+        output.index_to_index = {i: self.index_to_index[index] for i, index in enumerate(image_indices)}
+        output.images = self.images[image_indices]
+        output.image_index_to_name = {img_idx_new: self.image_index_to_name[img_idx_old] for img_idx_new, img_idx_old in enumerate(image_indices)}
+        output.image_name_to_index = {img_name: img_idx for img_idx, img_name in output.image_index_to_name.items()} # NOTE: using that output.image_index_to_name was created in the line above
+        output.n_images = len(output.images)
 
-
-    def _get_blurred_pixel(self, img: th.Tensor, x: int, y: int, gaussian_blur_kernel: th.Tensor):
-        # NOTE: Assuming x and y are within bounds of img
-
-        # Retrive kernel dimensions
-        kernel_size = gaussian_blur_kernel.shape[0]
-        kernel_half = kernel_size//2
-
-        # Retrieve image dimensions
-        img_height, img_width = img.shape[:2]
-
-        # Calculate padding
-        left = max(kernel_half - x, 0)
-        top = max(kernel_half - y, 0)
-        right = max(kernel_half + x - (img_width-1), 0)
-        bottom = max(kernel_half + y - (img_height-1), 0)
-
-        pad = tv.transforms.Pad(
-            padding=(left, top, right, bottom), 
-            padding_mode="reflect"
-        )
-
-        # Pad image and retrieve pixel and neighbors
-        neighborhood: th.Tensor = pad(img.permute(2, 0, 1))[
-            :,
-            (top+y-kernel_half):(top+y+kernel_half)+1, 
-            (left+x-kernel_half):(left+x+kernel_half)+1,
-        ].permute(1, 2, 0)
-
-
-        # Blur y-direction and store y-column of pixel
-        # (H, W, C) -> (W, C)
-        blurred_y = (neighborhood * gaussian_blur_kernel.view(-1, 1, 1)).sum(dim=0)
-        # Blur x-direction and store pixel
-        # (W, C) -> (C)
-        blurred_pixel = (blurred_y * gaussian_blur_kernel.view(-1, 1)).sum(dim=0)
-
-        # Return blurred pixel
-        return blurred_pixel
-
-
-    def gaussian_blur_step(self) -> None:
-        # Update current variance
-        self.gaussian_blur_relative_sigma_current *= self.gaussian_blur_relative_sigma_decay
-        # Get new kernel
-        self.gaussian_blur_kernel = self._get_gaussian_blur_kernel(
-            self.gaussian_blur_kernel_size,
-            self.gaussian_blur_relative_sigma_current,
-            max(self.image_height, self.image_width)
-        )
+        return output
 
 
     def __getitem__(self, index: int) -> DatasetOutput:
@@ -395,37 +590,26 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         img_idx = index // self.image_batch_size
 
         # Get dataset via image index
-        P, o_r, o_n, d_r, d_n, img = self.dataset[img_idx]
+        # relic: P, o_r, o_n, d_r, d_n, img = self.dataset[img_idx]
+        P = self.camera_to_worlds[img_idx] # (4,4)
+        o_r = self.camera_origins[img_idx] # (3, )
+        o_n = self.camera_origins_noisy[img_idx] # (3, )
+        d_r = self.ray_directions[img_idx] # (H*W, 3)
+        d_n = self.ray_directions_noisy[img_idx] # (H*W, 3)
+        img = self.images[img_idx] # (H, W, 3)
+        
         # Get pixel index
         i = index % self.image_batch_size
-        
-        # Get raw pixel color
-        c_r = img.view(-1, 3)[i]
-
-        # If no blur, set color to current pixel
-        if self.gaussian_blur_relative_sigma_current <= sys.float_info.epsilon:
-            c_b = c_r
-        # Else, calculate color via gaussian blur
-        else:
-            c_b = self._get_blurred_pixel(
-                img, 
-                i % self.image_width, 
-                i // self.image_width, 
-                self.gaussian_blur_kernel
-            )
-
 
         return (
-            o_r.view(-1, 3)[i], 
-            o_n.view(-1, 3)[i], 
+            o_r, 
+            o_n, 
             d_r.view(-1, 3)[i], 
             d_n.view(-1, 3)[i], 
-            c_r,
-            c_b, 
-            th.tensor(self.gaussian_blur_relative_sigma_current), 
-            th.tensor(img_idx)
+            img.view(-1, len(self.gaussian_blur_sigmas), 3)[i],
+            th.tensor(self.index_to_index[img_idx])
         )
 
 
     def __len__(self) -> int:
-        return len(self.dataset) * self.image_batch_size
+        return self.n_images * self.image_batch_size

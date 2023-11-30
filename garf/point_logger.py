@@ -113,9 +113,9 @@ class LogCameraExtrinsics(Callback):
         if step < self.logging_start:
             return
 
-        # If not at the right step, return
-        if step < self.logging_milestone:
-            return
+        # # If not at the right step, return
+        # if step < self.logging_milestone:
+        #     return
 
         # Update logging milestop and log
         self.logging_milestone = step + self._get_next_delay(step)
@@ -125,42 +125,88 @@ class LogCameraExtrinsics(Callback):
         data_module = cast(ImagePoseDataModule, trainer.datamodule) # type: ignore
         
         
-        # Transform raw camera center rays into model space
-        (ray_origs_raw, ray_dirs_raw), (ray_origs_noisy, ray_dirs_noisy) = data_module.train_camera_center_rays(model.device)
-        ray_origs_raw, ray_dirs_raw, _ = model.validation_transform_rays(ray_origs_raw, ray_dirs_raw)
+        # Get camera raw and noisy center origs and directions
+        camera_origs_raw = data_module.dataset_train.camera_origins.to(model.device)
+        camera_dirs_raw = data_module.dataset_train.camera_directions.to(model.device)
+        camera_origs_noisy = data_module.dataset_train.camera_origins_noisy.to(model.device)
+        camera_dirs_noisy = data_module.dataset_train.camera_directions_noisy.to(model.device)
 
-        # Transform noisy camera center rays into model space
-        ray_origs_noisy, ray_dirs_noisy, _, _ = model.camera_extrinsics.forward(
-            th.arange(len(ray_origs_noisy), device=model.device), 
-            ray_origs_noisy, 
-            ray_dirs_noisy
+        # Transform the raw centers to nerf coordinates 
+        camera_origs_raw, camera_dirs_raw, _ = model.validation_transform_rays(camera_origs_raw, camera_dirs_raw)
+        
+        # Transform noisy centers origins and directions to nerf coordinates 
+        camera_origs_pred, camera_dirs_pred, _, _ = model.camera_extrinsics.forward(
+            list(data_module.dataset_train.index_to_index.values()), 
+            camera_origs_noisy, 
+            camera_dirs_noisy
         )
 
         # Scale directions to be visible
-        ray_dirs_raw *= self.ray_direction_length
-        ray_dirs_noisy *= self.ray_direction_length
+        camera_dirs_raw *= self.ray_direction_length
+        camera_dirs_pred *= self.ray_direction_length
+
+        n_images = data_module.dataset_train.n_images
 
         # Define colors
-        # NOTE: Yellow is the color of raw rays
-        ray_raw_colors = th.hstack((th.ones(len(ray_origs_raw), 2, device=model.device) * 255, th.zeros(len(ray_origs_raw), 1, device=model.device)))
+        # NOTE: Yellow is the color of raw centers
+        green = th.tensor([0, 255, 0], device=model.device)
+        blue = th.tensor([0, 0, 255], device=model.device)
+        red = th.tensor([255, 0, 0], device=model.device)
+        origins_raw_colors = blue.repeat(n_images, 1) # th.hstack((th.ones(n_images, 2, device=model.device) * 255, th.zeros(n_images, 1, device=model.device)))
         
         # NOTE: Red is wrong everything, green is correct origin, blue is correct direction
-        ray_noisy_errors = 255 * th.ones(len(ray_origs_noisy), 1, device=model.device) * th.norm(ray_origs_raw - ray_origs_noisy, dim=1).view(-1, 1) / th.std(ray_origs_raw, dim=0).norm()
-        ray_noisy_errors = ray_noisy_errors.clip(0, 255)
-        ray_noisy_errors = th.hstack((ray_noisy_errors, 255 - ray_noisy_errors, th.zeros(len(ray_origs_noisy), 1, device=model.device)))
+        # NOTE: See that everything that is outside one standard deviation of the original origins are red, and within a standard devition we graduate from green to red
+        origins_pred_errors = th.norm(camera_origs_raw - camera_origs_pred, dim=1).view(-1, 1) / th.std(camera_origs_raw, dim=0).norm()
+        origins_pred_errors = origins_pred_errors.clip(0, 1)
+        origins_pred_colors = red * origins_pred_errors + green*(1- origins_pred_errors) #th.hstack((origins_pred_errors, 255 - origins_pred_errors, th.zeros(n_images, 1, device=model.device)))
 
-        # TODO: Color by ray direction error too
+        # Start and stop points for the direction arrows 
+        direction_start_raw = camera_origs_raw
+        direction_start_pred = camera_origs_pred
+        direction_end_raw = camera_origs_raw + camera_dirs_raw
+        direction_end_pred = camera_origs_pred + camera_dirs_pred
 
+        # Colors for the direction arrows 
+        angle = th.arccos(th.matmul(camera_dirs_pred.unsqueeze(-2), camera_dirs_raw.unsqueeze(-1)).squeeze(-1).squeeze(-1) / (th.norm(camera_dirs_pred, dim=1) * th.norm(camera_dirs_raw, dim=1)))/th.pi
+        direction_colors_pred = angle.unsqueeze(-1) * red + (1 - angle).unsqueeze(-1) * green  
+        direction_colors_raw = blue.repeat(n_images, 1)
+
+
+        # self.logger.experiment.log({
+        #     self.metric_name: wandb.Object3D.from_numpy(
+        #         1 + camera_origs_raw.cpu().numpy().astype(float),
+        #     )
+        # })
 
         # Log images
         self.logger.experiment.log({
-            self.metric_name: wandb.Object3D.from_numpy(
-                th.vstack((
-                    th.hstack((ray_origs_raw, ray_raw_colors)),
-                    th.hstack((ray_origs_noisy, ray_noisy_errors)),
-                )).cpu().numpy()
-            )
+            self.metric_name: wandb.Object3D.from_point_cloud(
+                points=[(*p, *c) for p,c in zip(camera_origs_raw.tolist(), origins_raw_colors.tolist())]  + [(*p, *c) for p,c in zip(camera_origs_pred.tolist(), origins_pred_colors.tolist())],
+                vectors=[],
+                boxes=[]
+            ) 
         })
+        # Log images
+        # self.logger.experiment.log({
+        #     self.metric_name: wandb.Object3D.from_point_cloud(
+        #         points=[(*p, *c) for p,c in zip(camera_origs_raw.tolist(), origins_raw_colors.tolist())]  + [(*p, *c) for p,c in zip(camera_origs_pred.tolist(), origins_pred_colors.tolist())],
+                # vectors=[{"start": start, "end": end} for start, end, color in zip(direction_start_pred.tolist(),
+                #                                                                                     direction_end_pred.tolist(),
+                #                                                                                     direction_colors_pred.tolist())]
+                # + [{"start": start, "end": end} for start, end, color in zip(direction_start_raw.tolist(),
+                #                                                                              direction_end_raw.tolist(),
+                #                                                                              direction_colors_raw.tolist())],
+                # vectors=[{"start": start, "end": end, "color": color} for start, end, color in zip(direction_start_pred.tolist(),
+                #                                                                                     direction_end_pred.tolist(),
+                #                                                                                     direction_colors_pred.tolist())]
+                # + [{"start": start, "end": end, "color": color} for start, end, color in zip(direction_start_raw.tolist(),
+                #                                                                              direction_end_raw.tolist(),
+                #                                                                              direction_colors_raw.tolist())],
+        #         vectors=[],
+        #         boxes=[]
+        #     ) 
+        # })
+
 
         # self.logger.experiment.log({
         #     self.metric_name: wandb.Object3D.from_point_cloud(

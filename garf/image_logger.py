@@ -12,19 +12,31 @@ from data_module import ImagePoseDataset
 from model_camera_calibration import CameraCalibrationModel
 
 
+# TODO: maybe fix image logger such that the model handles more of the work
+#       Ideally we should just be able to ask the model for an image, with a camera to world matrix,
+#       and it should return the image.
+#       This would also make it easier to use the model for other things, like rendering a video.
+#       This should probably make use of the functions in the data module, such that we can use the
+#       as they are already implemented there. - (such as meshgrid e.g.)
+#       Ideally it should be put in the NerfInterpolation class as it is a functionality that should
+#       be model agnostic preferably.
+
+# TODO: Enable the logging of training images as well
 
 class Log2dImageReconstruction(Callback):
     def __init__(
         self, 
         wandb_logger: WandbLogger, 
         validation_image_names: list[str],
+        train_image_names: list[str],
         logging_start: float | int,
         delay_start: float | int,
         delay_end: float | int,
         delay_taper: float | int,
         reconstruction_batch_size: int,
         reconstruction_num_workers: int,
-        metric_name="val_img",
+        metric_name_val="val_img",
+        metric_name_train="train_img"
     ) -> None:
         """Log a 2D image reconstruction of the validation image.
         
@@ -60,7 +72,7 @@ class Log2dImageReconstruction(Callback):
             raise ValueError(f"reconstruction_batch_size must be positive, but is {reconstruction_batch_size}")
         if reconstruction_num_workers <= 0:
             raise ValueError(f"reconstruction_num_workers must be positive, but is {reconstruction_num_workers}")
-        if len(metric_name) == 0:
+        if len(metric_name_val) == 0:
             raise ValueError(f"metric_name must not be empty")
 
 
@@ -68,6 +80,7 @@ class Log2dImageReconstruction(Callback):
         self.logger = wandb_logger
 
         self.validation_image_names = validation_image_names
+        self.train_image_names = train_image_names
 
         self.logging_start = logging_start
         self.delay_start = delay_start
@@ -76,7 +89,8 @@ class Log2dImageReconstruction(Callback):
         
         self.batch_size = reconstruction_batch_size
         self.num_workers = reconstruction_num_workers
-        self.metric_name = metric_name
+        self.metric_name_val = metric_name_val
+        self.metric_name_train = metric_name_train
 
         # Calculate next reconstruction step
         self.reconstruction_point = self._get_next_delay(0)
@@ -126,20 +140,75 @@ class Log2dImageReconstruction(Callback):
         dataset = cast(ImagePoseDataset, trainer.datamodule.dataset_val) # type: ignore
         
         # Store reconstructed images on CPU
-        images = []
+        val_images = []
 
 
+        transform_params = None
+        
         # Reconstruct each image
         for name in tqdm(self.validation_image_names, desc="Reconstructing images", leave=False):
             # Get rays for image
-            origins = dataset.origins_raw[name].view(-1, 3)
-            directions = dataset.directions_raw[name].view(-1, 3)
+            origins = dataset.ray_origins[dataset.image_name_to_index[name]].view(-1, 3)
+            directions = dataset.ray_directions[dataset.image_name_to_index[name]].view(-1, 3)
 
             # Set up data loader for validation image
             data_loader = DataLoader(
                 dataset=TensorDataset(
                     origins, 
                     directions
+                ),
+                batch_size=self.batch_size,
+                num_workers=self.num_workers,
+                shuffle=False,
+                pin_memory=True
+            )
+
+            # Iterate over batches of rays to get RGB values
+            rgb = th.empty((dataset.image_batch_size, 3), dtype=cast(th.dtype, model.dtype))
+            i = 0
+            
+            for ray_origs, ray_dirs in tqdm(data_loader, desc="Predicting RGB values", leave=False):
+                # Prepare for model prediction
+                ray_origs = ray_origs.to(model.device)
+                ray_dirs = ray_dirs.to(model.device)
+
+                # Transform origins to model space
+                ray_origs, ray_dirs, transform_params = model.validation_transform_rays(ray_origs, ray_dirs, transform_params)
+
+                # Get size of batch
+                batch_size = ray_origs.shape[0]
+                
+                # Predict RGB values
+                rgb[i:i+batch_size, :] = model(ray_origs, ray_dirs)[0].clip(0, 1).cpu()
+            
+                # Update write head
+                i += batch_size
+
+
+            # Store image on CPU
+            # NOTE: Cannot pass tensor as channel dimension is in numpy format
+            val_images.append(rgb.view(dataset.image_height, dataset.image_width, 3).numpy())
+
+
+        # Reconstruct training images 
+        # Retrieve training dataset from trainer
+        train_dataset = cast(ImagePoseDataset, trainer.datamodule.dataset_train) # type: ignore
+        
+        # Store reconstructed images on CPU
+        train_images = []
+
+        for name in tqdm(self.train_image_names, desc="Reconstructing training images", leave=False):
+            # Get rays for image
+            idx = train_dataset.image_name_to_index[name]
+            origins_noisy = train_dataset.ray_origins_noisy[idx].view(-1, 3)
+            directions_noisy = train_dataset.ray_directions_noisy[idx].view(-1, 3)
+            index = train_dataset.index_to_index[idx] # gets the index of the image in the dataset - passed to model.camera_extrinsics.forward
+            
+            # Set up data loader for validation image
+            data_loader = DataLoader(
+                dataset=TensorDataset(
+                    origins_noisy, 
+                    directions_noisy
                 ),
                 batch_size=self.batch_size,
                 num_workers=self.num_workers,
@@ -158,14 +227,14 @@ class Log2dImageReconstruction(Callback):
                 ray_dirs = ray_dirs.to(model.device)
 
                 # Transform origins to model space
-                # TODO: The flag for inside validation_transform_rays should be implemented for performance
-                ray_origs, ray_dirs, transform_params = model.validation_transform_rays(ray_origs, ray_dirs, transform_params)
+                ray_origs, ray_dirs, _, _ = model.camera_extrinsics(index, ray_origs, ray_dirs)
 
                 # Get size of batch
                 batch_size = ray_origs.shape[0]
                 
                 # Predict RGB values
-                rgb[i:i+batch_size, :] = model(ray_origs, ray_dirs)[0].clip(0, 1).cpu()
+                model_out = model(ray_origs, ray_dirs)[0]
+                rgb[i:i+batch_size, :] = model_out.clip(0, 1).cpu()
             
                 # Update write head
                 i += batch_size
@@ -173,11 +242,16 @@ class Log2dImageReconstruction(Callback):
 
             # Store image on CPU
             # NOTE: Cannot pass tensor as channel dimension is in numpy format
-            images.append(rgb.view(dataset.image_height, dataset.image_width, 3).numpy())
+            train_images.append(rgb.view(dataset.image_height, dataset.image_width, 3).numpy())
 
 
         # Log images
         self.logger.log_image(
-            key=self.metric_name, 
-            images=images
+            key=self.metric_name_train, 
+            images=train_images
+        )
+        
+        self.logger.log_image(
+            key=self.metric_name_val, 
+            images=val_images
         )
