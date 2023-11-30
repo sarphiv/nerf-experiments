@@ -8,6 +8,8 @@ from pytorch_lightning.callbacks import Callback
 from pytorch_lightning.loggers import WandbLogger #type: ignore
 import wandb
 from tqdm import tqdm
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.pyplot as plt
 
 from data_module import ImagePoseDataModule
 from model_camera_calibration import CameraCalibrationModel
@@ -147,6 +149,12 @@ class LogCameraExtrinsics(Callback):
         camera_origs_pred = th.matmul(R, camera_origs_pred.unsqueeze(-1)).squeeze(-1)*c + t
         camera_dirs_pred = th.matmul(R, camera_dirs_noisy.unsqueeze(-1)).squeeze(-1)*c
 
+        # # For future plots we log the centers and directions in both coordinates 
+        # self.logger.experiment.dir wandb.log({"camera_origs_raw": wandb.Histogram(camera_origs_raw)})
+        # wandb.log({"camera_origs_pred": wandb.Histogram(camera_origs_pred)})
+        # wandb.log({"camera_dirs_raw": wandb.Histogram(camera_dirs_raw)})
+        # wandb.log({"camera_dirs_pred": wandb.Histogram(camera_dirs_pred)})
+
         # Scale directions to be visible
         camera_dirs_raw *= self.ray_direction_length
         camera_dirs_pred *= self.ray_direction_length
@@ -235,3 +243,31 @@ class LogCameraExtrinsics(Callback):
         #         ]
         #     )
         # })
+
+
+        # # PLOT FOR LATER 
+        # # Create a new figure
+        # fig = plt.figure()
+        # ax = fig.add_subplot(111, projection='3d')
+
+        # # Plot camera_origins_pred as points
+        # ax.scatter(camera_origs_pred[:, 0], camera_origs_pred[:, 1], camera_origs_pred[:, 2], c=origins_pred_colors)
+
+        # # Plot camera_origins_raw as points
+        # ax.scatter(camera_origs_raw[:, 0], camera_origs_raw[:, 1], camera_origs_raw[:, 2], c=origins_raw_colors)
+
+        # # Plot direction arrows
+        # for start, end, color in zip(direction_start_pred, direction_end_pred, direction_colors_pred):
+        #     ax.quiver(start[0], start[1], start[2], end[0]-start[0], end[1]-start[1], end[2]-start[2], color=color)
+
+        # for start, end, color in zip(direction_start_raw, direction_end_raw, direction_colors_raw):
+        #     ax.quiver(start[0], start[1], start[2], end[0]-start[0], end[1]-start[1], end[2]-start[2], color=color)
+
+        # # Set labels and title
+        # ax.set_xlabel('X')
+        # ax.set_ylabel('Y')
+        # ax.set_zlabel('Z')
+        # ax.set_title('Camera Origins and Directions')
+
+        # # Show the plot
+        # plt.show()

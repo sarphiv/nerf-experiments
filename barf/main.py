@@ -13,6 +13,7 @@ from epoch_fraction_logger import LogEpochFraction
 from model_camera_calibration import CameraCalibrationModel
 from model_interpolation_architecture import BarfPositionalEncoding
 
+from magic import MAGIC_NUMBER_THE_SECOND
 
 
 # High priority 
@@ -63,7 +64,7 @@ if __name__ == "__main__":
     parser.add_argument('--initial_fourier_features', type=float, default=0.0, help="Active Fourier features initially")
     parser.add_argument('--start_fourier_features_iterations', type=int, default=20000, help="Start increasing the number of fourier features after this many iterations")
     parser.add_argument('--full_fourier_features_iterations', type=int, default=100000, help="Have all fourier features after this many iterations")
-    parser.add_argument('--image_size', type=int, default=800, help="Image height and width")
+    parser.add_argument('--image_size', type=int, default=400, help="Image height and width")
     parser.add_argument('--batch_size', type=int, default=1024, help="Number of camera rays pr optimization step")
     parser.add_argument('--learning_rate_start', type=float, default=5e-4)
     parser.add_argument('--learning_rate_stop', type=float, default=1e-4)
@@ -86,19 +87,19 @@ if __name__ == "__main__":
     BATCH_SIZE = args.batch_size
     NUM_WORKERS = 8
     IMAGE_SIZE = args.image_size
-    SIGMAS_FOR_BLUR = [0.0] if not args.use_blur else [2**(2), 2**(1), 2**(0), 2**(-1), 2**(-2), 0.0]
+    SIGMAS_FOR_BLUR = [0.0] if not args.use_blur else [2**5, 2**4, 2**3, 2**(2), 2**(1), 2**(0), 2**(-1), 2**(-2), 0.0]
     
     dm = ImagePoseDataModule(
         image_width=IMAGE_SIZE,
         image_height=IMAGE_SIZE,
-        space_transform_scale=1.,
-        space_transform_translate=th.Tensor([0,0,0]),
+        # space_transform_scale=1.,
+        # space_transform_translate=th.Tensor([0,0,0]),
         scene_path="../data/lego",
         validation_fraction=0.06,
         validation_fraction_shuffle=1234,
         gaussian_blur_sigmas = SIGMAS_FOR_BLUR,
         rotation_noise_sigma = args.rotation_noise,
-        translation_noise_sigma = args.translation_noise,
+        translation_noise_sigma = args.translation_noise/MAGIC_NUMBER_THE_SECOND,
         batch_size=BATCH_SIZE,
         num_workers=NUM_WORKERS,
         shuffle=True,
@@ -174,30 +175,26 @@ if __name__ == "__main__":
                                                     alpha_start=0,
                                                     alpha_increase_start_epoch=alpha_increase_start_epoch,
                                                     alpha_increase_end_epoch=alpha_increase_end_epoch,
-                                                    include_identity=True,
-                                                    scale=1.
+                                                    include_identity=True
                                                     )
         directional_encoder = BarfPositionalEncoding(levels=4,
-                                                     alpha_start=4,
+                                                     alpha_start=0,
                                                      alpha_increase_start_epoch=alpha_increase_start_epoch,
                                                      alpha_increase_end_epoch=alpha_increase_end_epoch,
-                                                     include_identity=True,
-                                                     scale=1.
+                                                     include_identity=True
                                                      )
     else: 
         positional_encoder = BarfPositionalEncoding(levels=0,
                                                     alpha_start=0,
                                                     alpha_increase_start_epoch=alpha_increase_start_epoch,
                                                     alpha_increase_end_epoch=alpha_increase_end_epoch,
-                                                    include_identity=True,
-                                                    scale=1.
+                                                    include_identity=True
                                                     )
         directional_encoder = BarfPositionalEncoding(levels=0,
-                                                     alpha_start=4,
+                                                     alpha_start=0,
                                                      alpha_increase_start_epoch=alpha_increase_start_epoch,
                                                      alpha_increase_end_epoch=alpha_increase_end_epoch,
-                                                     include_identity=True,
-                                                     scale=1.
+                                                     include_identity=True
                                                      )
 
     # Set up model
@@ -211,8 +208,8 @@ if __name__ == "__main__":
         # camera_learning_rate_stop=args.camera_learning_rate_stop*BATCH_SIZE_MULTIPLIER,
         # camera_learning_rate_stop_step=2e+5/BATCH_SIZE_MULTIPLIER,
         camera_weight_decay=0.0,
-        near_sphere_normalized= 2, # 1/10,
-        far_sphere_normalized= 7, #1/3,
+        near_sphere_normalized= 1/10,
+        far_sphere_normalized= 1/3,
         samples_per_ray=64 + 192,
         n_hidden=args.n_hidden,
         hidden_dim=256,
