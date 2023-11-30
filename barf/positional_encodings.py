@@ -163,6 +163,8 @@ class IntegratedFourierFeatures(PositionalEncoding):
         self.include_identity = include_identity
         self.output_dim = (levels*2 + include_identity)*self.space_dimensions
         self.distribute_variance = distribute_variance
+        self.gaussian_blur_sigma =  None
+
 
 
     def forward(self,
@@ -171,7 +173,8 @@ class IntegratedFourierFeatures(PositionalEncoding):
                 pixel_width: th.Tensor,
                 t_start: th.Tensor,
                 t_end: th.Tensor,
-                include_identity: bool|None = None
+                include_identity: bool|None = None,
+                diagnose: bool = False
                 ) -> th.Tensor:
         
         include_identity = include_identity if include_identity is not None else self.include_identity 
@@ -197,6 +200,12 @@ class IntegratedFourierFeatures(PositionalEncoding):
 
         sigma_t_sq = t_delta**2/3 - (4*t_delta**4*(12*t_mu**2 - t_delta**2))/(15*(3*t_mu**2 + t_delta**2)**2) # eq 7
         sigma_r_sq = r_dot**2*(t_mu**2/4 + 5*t_delta**2/12-4*t_delta**4/(15*(3*t_mu**2+t_delta**2))) # eq 7
+
+        add_sigma = (self.gaussian_blur_sigma*pixel_width*t_mu)**2 if self.gaussian_blur_sigma > 0.25 else 0.
+
+        sigma_t_sq = sigma_t_sq + add_sigma
+        sigma_r_sq = sigma_r_sq + add_sigma
+
 
         scale = 4**th.arange(self.levels, device=pos.device).repeat(space_dim) # [4,16,4,16,4,16]
 
@@ -225,7 +234,10 @@ class IntegratedFourierFeatures(PositionalEncoding):
         if include_identity:
             ipe = th.cat((pos_mu, ipe), dim=1)
 
-        return ipe
+        if diagnose:
+            return ipe, weight, sigma_t_sq, sigma_r_sq
+        else:
+            return ipe
 
 class IntegratedBarfFourierFeatures(BarfPositionalEncoding):
 

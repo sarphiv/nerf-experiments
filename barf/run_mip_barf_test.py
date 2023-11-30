@@ -11,67 +11,57 @@ from image_logger import Log2dImageReconstruction
 from point_logger import LogCameraExtrinsics
 from epoch_fraction_logger import LogEpochFraction
 from model_builders import nerf_interpolation_builder, mip_barf_builder
-
-argparse.Action
-
-# High priority 
-# TODO: Script that generates runs where the plots are used for the paper 
-# TODO: Bug hunting
-# TODO: Write paper 
-
-# Low priority
-# TODO: Fix image logger - see that file
-# TODO: Remove all the runs in WANDB (davids are gone)
-# TODO: dataset.py: Rewrite datamodule to save the transformed images as (blurred images e.g)
-#       such that it can be easily read when instantiating a dataset with sigmas that
-#       have already been calculated once. This will save a lot of time during startup of a run.
-#       May not be a good idea tho, as it would require a lot of memory to store all the images??
-
-
-# Converter that takes iterations to epochs to adjust alpha
-def convert_iterations_to_epochs(iterations: int, batch_size: int, dataset_size_samples: int) -> float:
-    return iterations * batch_size / dataset_size_samples
+from model_camera_calibration import CameraCalibrationModel
+from model_interpolation_architecture import NerfModel
+from positional_encodings import BarfPositionalEncoding, IntegratedFourierFeatures, IntegratedBarfFourierFeatures, FourierFeatures
+from model_interpolation import NerfInterpolation, NerfInterpolationNerfacc, uniform_sampling_strategies, integration_strategies
+from model_barf import BarfModel
+from model_mip import MipNeRF, MipBarf
 
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--camera_origin_noise_sigma", type=float, default=0)
-    # parser.add_argument("--camera_origin_noise_sigma", type=float, default=0.15)
-    parser.add_argument("--camera_rotation_noise_sigma", type=float, default=0)
-    # parser.add_argument("--camera_rotation_noise_sigma", type=float, default=0.15)
-    parser.add_argument("--alpha_start_pos", type=float, default=8.4)
-    parser.add_argument("--alpha_start_dir", type=float, default=0)
-    parser.add_argument("--blur_sigma_start", type=float, default=20)
+    parser.add_argument("--camera_origin_noise_sigma", type=float, default=0.15)
+    parser.add_argument("--camera_rotation_noise_sigma", type=float, default=0.15)
+    parser.add_argument("--blur_sigma_start", type=float, default=40)
+    parser.add_argument("--seed", type=int, default=134534)
     parser.add_argument("--optimize_camera", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--pixel_width_follows_sigma", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--blur_follows_sigma", action=argparse.BooleanOptionalAction, default=False)
     args = parser.parse_args()
     # print(args)
-    print(f"mip barf ")
+    # print(f"mip that test barf runs")
+    # exit()
     # Set up data module
     BATCH_SIZE = 1024*2
     NUM_WORKERS = 3
-    # IMAGE_SIZE = 200
     IMAGE_SIZE = 400
-    # IMAGE_SIZE = 40
-    # SIGMAS_FOR_BLUR = [0.]
-    # SIGMAS_FOR_BLUR = (2**th.flip(th.linspace(-1, 4, 10), dims=(0,))).tolist() + [0]
-    SIGMAS_FOR_BLUR = [20, 0]
-    # SIGMAS_FOR_BLUR = [4, 3, 2, 1, 0.]
+    SIGMAS_FOR_BLUR = (2**th.flip(th.linspace(-1, args.blur_sigma_start**0.5, 10), dims=(0,))).tolist() + [0]
+    DECAY_END_STEP = 200000
+    DECAY_START_STEP = 20000
+
+
+
+    # BATCH_SIZE = 256 # TODO: remove 
 
     # quit()
     # exit()
 
     # Set seeds
-    pl.seed_everything(1337)
+    pl.seed_everything(args.seed)
 
 
     # Set up weights and biases logger
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="testing mip barf",
+        name=f"mipBaRF noise={args.camera_origin_noise_sigma} blur={args.blur_sigma_start if args.blur_follows_sigma else 0} pixel_width={args.blur_sigma_start}"
         # name=f"testing integration/sample_strats - proposal={args.use_proposal}, {args.uniform_sampling_strategy}, {args.integration_strategy}, {args.uniform_sampling_offset_size}",
     )
+
+    print(f"mipBaRF noise={args.camera_origin_noise_sigma} blur={args.blur_sigma_start if args.blur_follows_sigma else 0} pixel_width={args.blur_sigma_start}")
+
     
     dm = ImagePoseDataModule(
         image_width=IMAGE_SIZE,
@@ -82,16 +72,15 @@ if __name__ == "__main__":
         verbose=True,
         validation_fraction=0.06,
         validation_fraction_shuffle=1234,
-        gaussian_blur_sigmas = SIGMAS_FOR_BLUR,
+        gaussian_blur_sigmas = SIGMAS_FOR_BLUR if args.blur_follows_sigma else [0.0],
         rotation_noise_sigma = args.camera_origin_noise_sigma,
         translation_noise_sigma = args.camera_rotation_noise_sigma,
         batch_size=BATCH_SIZE,
         num_workers=NUM_WORKERS,
         shuffle=True,
         pin_memory=True,
+        camera_noise_seed=args.seed
     )
-
-    # dm.setup("fit")
 
 
     # Set up trainer
@@ -145,17 +134,48 @@ if __name__ == "__main__":
     )
 
 
-    # model = nerf_interpolation_builder()
+    position_encoder = IntegratedFourierFeatures(
+        levels=10,
+        include_identity=True,
+        scale=1.,
+        distribute_variance=True,
+    )
 
-    model = mip_barf_builder(
+    direction_encoder = BarfPositionalEncoding(0, 1, 0, 1, True)
+
+    model_radiance = NerfModel(
+        n_hidden=4,
+        hidden_dim=256,
+        delayed_direction=True,
+        delayed_density=False,
+        n_segments=2,
+        position_encoder=position_encoder,
+        direction_encoder=direction_encoder,
+        learning_rate_start=5e-4,
+        learning_rate_stop=1e-5,
+        learning_rate_decay_end=DECAY_END_STEP
+    )
+
+
+    model = MipBarf(
+        n_training_images=dm.n_training_images,
         start_gaussian_sigma=args.blur_sigma_start,
         camera_learning_rate_start=1e-3 if args.optimize_camera else 0.,
         camera_learning_rate_stop=1e-5 if args.optimize_camera else 0.,
-        camera_learning_rate_decay_end=200000,
-        distribute_variance=True,
-        n_training_images=dm.n_training_images,
-        alpha_start_pos=args.alpha_start_pos,
-        alpha_start_dir=args.alpha_start_dir,
+        camera_learning_rate_decay_end=DECAY_END_STEP,
+        max_gaussian_sigma=None,
+        near_sphere_normalized=2,
+        far_sphere_normalized=8,
+        samples_per_ray_radiance= 256,
+        samples_per_ray_proposal= 64,
+        model_radiance=model_radiance,
+        uniform_sampling_strategy = "equidistant",
+        uniform_sampling_offset_size=-1.,
+        gaussian_sigma_decay_start_step=DECAY_START_STEP,
+        gaussian_sigma_decay_end_step=DECAY_END_STEP,
+        pixel_width_follows_sigma=args.pixel_width_follows_sigma,
+        blur_follows_sigma=args.blur_follows_sigma,
     )
+
 
     trainer.fit(model, dm)#, ckpt_path="/work3/s204111/nerf-experiments/barf/nerf-experiments/vq9nm9vt/checkpoints/ckpt_epoch=epoch=03-val_loss=val_loss=0.00.ckpt")

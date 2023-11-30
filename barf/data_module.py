@@ -312,7 +312,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
             pixel_width
         ) = batch
 
-
+        # if sigma is small - no blur is applied
         if sigma <= 0.25:
             batch = (ray_origs_raw,
                     ray_origs_pred,
@@ -322,6 +322,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
                     img_idx,
                     pixel_width)
             
+        # if sigma is large - maximal blur is applied
         elif sigma >= max(self.gaussian_blur_sigmas):
             batch = (ray_origs_raw,
                     ray_origs_pred,
@@ -331,8 +332,10 @@ class ImagePoseDataModule(pl.LightningDataModule):
                     img_idx,
                     pixel_width)
             
+            # if sigma is too large - warn the user
             if sigma > max(self.gaussian_blur_sigmas): warnings.warn(f"Tried to get blur with sigma {sigma} but used maximal possible: {max(self.gaussian_blur_sigmas)}.")
 
+        # if sigma is in between - interpolate
         else:
             # Find the sigma closest to the given sigma
             index_low = 0

@@ -62,11 +62,11 @@ class BarfModel(CameraCalibrationModel):
         assert not th.isnan(ray_colors_pred_coarse).any(), "NaN values in ray_colors_pred_coarse"
 
         # compute the loss
-        loss_fine = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw[:,-1])
+        loss_fine = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw[:,-1]) # TODO fix interpolation
         psnr = -10 * th.log10(loss_fine)
 
         if self.proposal:
-            loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors_raw[:,-1]) #TODO fix interpolation
+            loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors_raw[:,-1]) # TODO fix interpolation
             loss = loss_fine + loss_coarse
 
             # Log metrics
