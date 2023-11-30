@@ -63,7 +63,7 @@ class BarfModel(CameraCalibrationModel):
 
         # compute the loss
         loss_fine = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw[:,-1]) # TODO fix interpolation
-        psnr = -10 * th.log10(loss_fine)
+        psnr = self.compute_psnr(loss_fine)
 
         if self.proposal:
             loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors_raw[:,-1]) # TODO fix interpolation

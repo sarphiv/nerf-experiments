@@ -62,7 +62,7 @@ class MipNeRF(NerfInterpolation):
 
         # compute the loss
         loss = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw[:,0])
-        psnr = -10 * math.log10(float(loss.detach().item()))
+        psnr = self.compute_psnr(loss)
         # Log metrics
         logs  = {f"{purpose}_loss_fine": loss,
                     f"{purpose}_psnr": psnr,
@@ -291,7 +291,7 @@ class MipBarf(CameraCalibrationModel):
 
         # compute the loss
         loss = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw[:,0])
-        psnr = -10 * math.log10(float(loss.detach().item()))
+        psnr = self.compute_psnr(loss)
         # Log metrics
         logs  = {f"{purpose}_loss_fine": loss,
                 f"{purpose}_psnr": psnr,
