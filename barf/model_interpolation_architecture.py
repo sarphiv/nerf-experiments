@@ -17,13 +17,15 @@ class NerfBaseModel(nn.Module):
                          parameters: Iterator,
                          learning_rate_start: float,
                          learning_rate_stop: float,
-                         learning_rate_decay_end: float
+                         learning_rate_decay_end: float,
+                         **optimizer_kwargs
                          ):
         self.param_groups.append({
-                            "parameters": parameters,
-                            "learning_rate_start": learning_rate_start,
-                            "learning_rate_stop": learning_rate_stop,
-                            "learning_rate_decay_end": learning_rate_decay_end,
+            "parameters": parameters,
+            "learning_rate_start": learning_rate_start,
+            "learning_rate_stop": learning_rate_stop,
+            "learning_rate_decay_end": learning_rate_decay_end,
+            **optimizer_kwargs
          })
         
 

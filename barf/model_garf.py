@@ -1,12 +1,13 @@
 from typing import Callable, Literal, Optional, Dict
 
 import torch as th
-import torch.nn as nn
-import pytorch_lightning as pl
+import torch.nn.functional as F
 import nerfacc
 
-from model_radiance import RadianceNetwork
-from model_proposal import ProposalNetwork
+from model_garf_radiance import RadianceNetwork
+from model_garf_proposal import ProposalNetwork
+from model_camera_calibration import CameraCalibrationModel
+from model_camera_extrinsics import CameraExtrinsics
 
 
 # Type alias for inner model batch input
@@ -14,29 +15,32 @@ from model_proposal import ProposalNetwork
 InnerModelBatchInput = tuple[th.Tensor, th.Tensor, th.Tensor]
 
 
-class GarfModel(pl.LightningModule):
+class GarfModel(CameraCalibrationModel):
     def __init__(
         self, 
-        near_plane: float,
-        far_plane: float,
-        proposal_samples_per_ray: int,
-        radiance_samples_per_ray: int,
+        n_train_images: int = 100,
+        camera_learning_rate_start: float = 1e-4,
+        camera_learning_rate_stop: float = 1e-5,
+        camera_learning_rate_decay_end: int = 10000,
+        near_plane: float = 2,
+        far_plane: float =7,
+        proposal_samples_per_ray: int = 64,
+        radiance_samples_per_ray: int = 192,
         gaussian_init_min: float = 0.0,
         gaussian_init_max: float = 1.0,
         gaussian_learning_rate_factor: float = 1.0,
-        proposal_learning_rate: float = 1e-4,
-        proposal_learning_rate_stop_epoch: int = 10,
-        proposal_learning_rate_decay: float = 0.5,
-        proposal_learning_rate_period: float = 0.4,
+        proposal_learning_rate_start: float = 1e-4,
+        proposal_learning_rate_stop: float = 1e-5,
+        proposal_learning_rate_decay_end: int = 10000, #step
         proposal_weight_decay: float = 0.0,
-        radiance_learning_rate: float = 1e-4,
-        radiance_learning_rate_stop_epoch: int = 10,
-        radiance_learning_rate_decay: float = 0.5,
-        radiance_learning_rate_period: float = 0.4,
+        radiance_learning_rate_start: float = 1e-4,
+        radiance_learning_rate_stop: float = 1e-5,
+        radiance_learning_rate_decay_end: int = 10000, #step
         radiance_weight_decay: float = 0.0,
     ):
         super().__init__()
         self.save_hyperparameters()
+
 
         # The near and far sphere distances 
         self.near_sphere_normalized = near_plane
@@ -47,45 +51,45 @@ class GarfModel(pl.LightningModule):
         # Samples per ray for radiance network for the volumetric rendering
         self.radiance_samples_per_ray = radiance_samples_per_ray
         
-        # Gaussian hyperparameters for the activation function
-        self.gaussian_init_min = gaussian_init_min
-        self.gaussian_init_max = gaussian_init_max
-        self.gaussian_learning_rate_factor = gaussian_learning_rate_factor
 
-        # Hyper parameters for the network training
-        self.proposal_learning_rate = proposal_learning_rate
-        self.proposal_learning_rate_stop_epoch = proposal_learning_rate_stop_epoch
-        self.proposal_learning_rate_decay = proposal_learning_rate_decay
-        self.proposal_learning_rate_period = proposal_learning_rate_period
-        self.proposal_weight_decay = proposal_weight_decay
-        
-        self.radiance_learning_rate = radiance_learning_rate
-        self.radiance_learning_rate_stop_epoch = radiance_learning_rate_stop_epoch
-        self.radiance_learning_rate_decay = radiance_learning_rate_decay
-        self.radiance_learning_rate_period = radiance_learning_rate_period
-        self.radiance_weight_decay = radiance_weight_decay
 
         # Proposal network estimates sampling density
         self.proposal_network = ProposalNetwork(
             gaussian_init_min=gaussian_init_min,
             gaussian_init_max=gaussian_init_max,
+            learning_rate_start=proposal_learning_rate_start,
+            learning_rate_stop=proposal_learning_rate_stop,
+            learning_rate_decay_end=proposal_learning_rate_decay_end,
+            gaussian_learning_rate_factor=gaussian_learning_rate_factor,
+            weight_decay=proposal_weight_decay
         )
 
         # Nerf network estimates colors and densities for volume rendering
         self.radiance_network = RadianceNetwork(
             gaussian_init_min=gaussian_init_min,
             gaussian_init_max=gaussian_init_max,
+            learning_rate_start=radiance_learning_rate_start,
+            learning_rate_stop=radiance_learning_rate_stop,
+            learning_rate_decay_end=radiance_learning_rate_decay_end,
+            gaussian_learning_rate_factor=gaussian_learning_rate_factor,
+            weight_decay=radiance_weight_decay
         )
 
         # Transmittance estimator
         self.transmittance_estimator = nerfacc.PropNetEstimator()
 
+        self.camera_extrinsics = CameraExtrinsics(
+            n_train_images=n_train_images,
+            learning_rate_start=camera_learning_rate_start,
+            learning_rate_stop=camera_learning_rate_stop,
+            learning_rate_decay_end=camera_learning_rate_decay_end,
+        )
 
-        # Enable manual optimization because using multiple optimizers
-        self.automatic_optimization = False
-        self._proposal_learning_rate_milestone = proposal_learning_rate_period
-        self._radiance_learning_rate_milestone = radiance_learning_rate_period
-
+        self.param_groups = [
+            param_group 
+            for model in [self.proposal_network, self.radiance_network, self.camera_extrinsics] 
+            for param_group in model.param_groups
+        ]
 
 
     def _get_positions(
@@ -252,14 +256,24 @@ class GarfModel(pl.LightningModule):
             tuple[th.Tensor, tuple[th.Tensor, th.Tensor]]: Color predictions and ordered losses for each optimizer
         """
         # Decontsruct batch
-        ray_origs, ray_dirs, ray_colors = batch
-        
+        (
+            ray_origs_raw, 
+            ray_origs_pred, 
+            ray_dirs_raw, 
+            ray_dirs_pred, 
+            ray_colors_raw, 
+            img_idx,
+            pixel_width
+        ) = batch
+
+
         # Forward pass
-        ray_colors_pred, ray_opacity, ray_depth, extras = self(ray_origs, ray_dirs)
+        ray_colors_pred, ray_opacity, ray_depth, extras = self(ray_origs_pred, ray_dirs_pred)
 
         # Calculate losses for training
-        proposal_loss = self.transmittance_estimator.compute_loss(extras["trans"])
-        radiance_loss = nn.functional.mse_loss(ray_colors_pred, ray_colors)
+        proposal_loss = self.transmittance_estimator.compute_loss(extras["trans"].detach())
+        # NOTE Not using blurred pixel colors
+        radiance_loss = F.mse_loss(ray_colors_pred, ray_colors_raw[:, 1, ...]) 
 
         # Return color prediction and losses
         return (
@@ -267,40 +281,6 @@ class GarfModel(pl.LightningModule):
             (proposal_loss, radiance_loss)
         )
 
-
-
-    def _proposal_optimizer_step(self, loss: th.Tensor):
-        self._proposal_optimizer.zero_grad()
-        self.manual_backward(loss, retain_graph=True)
-        self._proposal_optimizer.step()
-
-
-    def _radiance_optimizer_step(self, loss: th.Tensor):
-        self._radiance_optimizer.zero_grad()
-        self.manual_backward(loss, retain_graph=True)
-        self._radiance_optimizer.step()
-
-
-    def _proposal_scheduler_step(self, batch_idx: int):
-        epoch_fraction = self.trainer.current_epoch + batch_idx/self.trainer.num_training_batches
-
-        if (
-            epoch_fraction >= self._proposal_learning_rate_milestone and
-            epoch_fraction <= self.proposal_learning_rate_stop_epoch
-        ):
-            self._proposal_learning_rate_milestone += self.proposal_learning_rate_period
-            self._proposal_learning_rate_scheduler.step()
-
-
-    def _radiance_scheduler_step(self, batch_idx: int):
-        epoch_fraction = self.trainer.current_epoch + batch_idx/self.trainer.num_training_batches
-
-        if (
-            epoch_fraction >= self._radiance_learning_rate_milestone and
-            epoch_fraction <= self.radiance_learning_rate_stop_epoch
-        ):
-            self._radiance_learning_rate_milestone += self.radiance_learning_rate_period
-            self._radiance_learning_rate_scheduler.step()
 
 
     def _get_logging_losses(
@@ -314,7 +294,7 @@ class GarfModel(pl.LightningModule):
         # Calculate PSNR
         # NOTE: Cannot calculate SSIM because it relies on image patches
         # NOTE: Cannot calculate LPIPS because it relies on image patches
-        psnr = -10 * th.log10(radiance_loss)
+        psnr = self.compute_psnr(radiance_loss)
 
         # Return losses to be logged
         return {
@@ -335,16 +315,12 @@ class GarfModel(pl.LightningModule):
         Returns:
             th.Tensor: Loss
         """
+
+        batch = self.training_transform(batch)
+        
+
         # Forward pass
         _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
-
-        # Backward pass and step through each optimizer
-        self._proposal_optimizer_step(proposal_loss)
-        self._radiance_optimizer_step(radiance_loss)
-
-        # Step learning rate schedulers
-        self._proposal_scheduler_step(batch_idx)
-        self._radiance_scheduler_step(batch_idx)
 
         # Log metrics
         self.log_dict(self._get_logging_losses(
@@ -355,7 +331,7 @@ class GarfModel(pl.LightningModule):
 
 
         # Return loss
-        return radiance_loss
+        return radiance_loss + proposal_loss
 
 
     def validation_step(self, batch: InnerModelBatchInput, batch_idx: int):
@@ -368,6 +344,9 @@ class GarfModel(pl.LightningModule):
         Returns:
             th.Tensor: Loss
         """
+        
+        batch = self.validation_transform(batch)
+        
         # Forward pass
         _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
 
@@ -378,50 +357,8 @@ class GarfModel(pl.LightningModule):
             radiance_loss,
         ))
         
-        return radiance_loss
 
+        return radiance_loss + proposal_loss
 
-
-    def configure_optimizers(self):
-        # Set up proposal optimizers
-        self._proposal_optimizer = th.optim.Adam(
-            [
-                { "params": self.proposal_network.parameters_linear() },
-                {
-                    "params": self.proposal_network.parameters_gaussian(), 
-                    "lr": self.gaussian_learning_rate_factor * self.proposal_learning_rate
-                },
-            ], 
-            lr=self.proposal_learning_rate, 
-            weight_decay=self.proposal_weight_decay,
-        )
-        self._proposal_learning_rate_scheduler = th.optim.lr_scheduler.ExponentialLR(
-            self._proposal_optimizer, 
-            gamma=self.proposal_learning_rate_decay
-        )
-        
-        # Set up radiance optimizers
-        self._radiance_optimizer = th.optim.Adam(
-            [
-                { "params": self.radiance_network.parameters_linear() },
-                {
-                    "params": self.radiance_network.parameters_gaussian(), 
-                    "lr": self.gaussian_learning_rate_factor * self.radiance_learning_rate
-                },
-            ], 
-            lr=self.radiance_learning_rate, 
-            weight_decay=self.radiance_weight_decay,
-        )
-        self._radiance_learning_rate_scheduler = th.optim.lr_scheduler.ExponentialLR(
-            self._radiance_optimizer, 
-            gamma=self.radiance_learning_rate_decay
-        )
-
-
-        # Set optimizers and schedulers
-        return (
-            [self._proposal_optimizer, self._radiance_optimizer], 
-            [self._proposal_learning_rate_scheduler, self._radiance_learning_rate_scheduler]
-        )
 
 
