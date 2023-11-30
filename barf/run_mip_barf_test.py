@@ -14,7 +14,7 @@ from model_builders import nerf_interpolation_builder, mip_barf_builder
 from model_camera_calibration import CameraCalibrationModel
 from model_interpolation_architecture import NerfModel
 from positional_encodings import BarfPositionalEncoding, IntegratedFourierFeatures, IntegratedBarfFourierFeatures, FourierFeatures
-from model_interpolation import NerfInterpolation, NerfInterpolationNerfacc, uniform_sampling_strategies, integration_strategies
+from model_interpolation import NerfInterpolation, uniform_sampling_strategies, integration_strategies
 from model_barf import BarfModel
 from model_mip import MipNeRF, MipBarf
 
@@ -25,7 +25,7 @@ if __name__ == "__main__":
     parser.add_argument("--camera_origin_noise_sigma", type=float, default=0.15)
     parser.add_argument("--camera_rotation_noise_sigma", type=float, default=0.15)
     parser.add_argument("--start_blur_sigma", type=float, default=0.)
-    parser.add_argument("--start_pixel_width_sigma", type=float, default=100.)
+    parser.add_argument("--start_pixel_width_sigma", type=float, default=150.)
     parser.add_argument("--seed", type=int, default=134534)
     parser.add_argument("--optimize_camera", action=argparse.BooleanOptionalAction, default=True)
 

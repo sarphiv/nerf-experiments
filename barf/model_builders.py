@@ -13,7 +13,7 @@ from epoch_fraction_logger import LogEpochFraction
 from model_camera_calibration import CameraCalibrationModel
 from model_interpolation_architecture import NerfModel
 from positional_encodings import BarfPositionalEncoding, IntegratedFourierFeatures, IntegratedBarfFourierFeatures
-from model_interpolation import NerfInterpolation, NerfInterpolationNerfacc, uniform_sampling_strategies, integration_strategies
+from model_interpolation import NerfInterpolation, uniform_sampling_strategies, integration_strategies
 from model_barf import BarfModel
 from model_mip import MipNeRF, MipBarf
 
