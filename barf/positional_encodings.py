@@ -163,7 +163,7 @@ class IntegratedFourierFeatures(PositionalEncoding):
         self.include_identity = include_identity
         self.output_dim = (levels*2 + include_identity)*self.space_dimensions
         self.distribute_variance = distribute_variance
-        self.gaussian_blur_sigma =  None
+        self.pixel_width_sigma =  None
 
 
 
@@ -201,7 +201,7 @@ class IntegratedFourierFeatures(PositionalEncoding):
         sigma_t_sq = t_delta**2/3 - (4*t_delta**4*(12*t_mu**2 - t_delta**2))/(15*(3*t_mu**2 + t_delta**2)**2) # eq 7
         sigma_r_sq = r_dot**2*(t_mu**2/4 + 5*t_delta**2/12-4*t_delta**4/(15*(3*t_mu**2+t_delta**2))) # eq 7
 
-        add_sigma = (self.gaussian_blur_sigma*pixel_width*t_mu)**2 if self.gaussian_blur_sigma > 0.25 else 0.
+        add_sigma = (self.pixel_width_sigma*pixel_width*t_mu)**2 if self.pixel_width_sigma > 0.25 else 0.
 
         sigma_t_sq = sigma_t_sq + add_sigma
         sigma_r_sq = sigma_r_sq + add_sigma

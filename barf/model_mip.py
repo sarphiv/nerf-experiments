@@ -87,44 +87,34 @@ class MipBarf(CameraCalibrationModel):
     def __init__(self,
             model_radiance: NerfModel,
             samples_per_ray_radiance: int,
-            start_gaussian_sigma: float,
             n_training_images: int,
             camera_learning_rate_start: float,
             camera_learning_rate_stop: float,
             camera_learning_rate_decay_end: int = -1,
-            max_gaussian_sigma: float = 0.0,
             near_sphere_normalized: float = 2.,
             far_sphere_normalized: float = 8.,
             uniform_sampling_strategy: uniform_sampling_strategies = "stratified_uniform",
             uniform_sampling_offset_size: float = 0.,
             samples_per_ray_proposal: int = 0,
-            gaussian_sigma_decay_start_step: int = 0,
-            gaussian_sigma_decay_end_step: int = 0,
-            pixel_width_follows_sigma: bool = True,
-            blur_follows_sigma: bool = True,
+            sigma_decay_start_step: int = 0,
+            sigma_decay_end_step: int = 0,
+            start_blur_sigma: float = 0.,
+            start_pixel_width_sigma: float = 0.0,
             ):
         """
         mip barf model
-            * gaussian_sigma_decay_start_step: int - When to start decaying sigma (optimization step)
-            * gaussian_sigma_decay_end_step: int - when to stop decaying sigma
-            * pixel_width_follows_sigma: bool - whether or not to adjust the pixel width with gaussian sigma
-            * blur_follows_sigma: bool - wether or not to actually blur the image
-            * start_gaussian_sigma: float - the starting sigma blur value
+            * sigma_decay_start_step: int - When to start decaying sigma (optimization step)
+            * sigma_decay_end_step: int - when to stop decaying sigma
+            * start_blur_sigma: float - the starting sigma blur value
+            * start_pixel_width_sigma: float - the starting sigma pixel width value (for cone casting)
         
         Details:
         ----------
-        the gaussian sigma follows the following schedule:
+        the sigma follows the following schedule (both blur and pixel width):
 
             * current step < start step: sigma = start sigma
             * start step < current step < end step: sigma follows exponential decay from start sigma at start step down to 1/4 at stop step
             * end step < current step: sigma = 0.
-
-        pixel_width_follows_sigma and blur_follows_sigma are made to give control and make ablations possible.
-        For example if you wish to run an experiment where you only down scale positional encodings
-        accoding to the sigma schedule (gaussian_sigma_decay_start_step and gaussian_sigma_decay_end_step)
-        but not actually blur the image (similar to what barf does) - just set pixel_width_follows_sigma=True and
-        blur_follows_sigma = False.
-
 
 
 
@@ -151,7 +141,7 @@ class MipBarf(CameraCalibrationModel):
             camera_learning_rate_start=camera_learning_rate_start,
             camera_learning_rate_stop=camera_learning_rate_stop,
             camera_learning_rate_decay_end=camera_learning_rate_decay_end,
-            max_gaussian_sigma=max_gaussian_sigma,
+            max_gaussian_sigma=None,
             near_sphere_normalized=near_sphere_normalized,
             far_sphere_normalized=far_sphere_normalized,
             uniform_sampling_strategy=uniform_sampling_strategy,
@@ -162,28 +152,24 @@ class MipBarf(CameraCalibrationModel):
         
 
 
-        self.start_gaussian_sigma            = start_gaussian_sigma
-        self.gaussian_sigma_decay_start_step = gaussian_sigma_decay_start_step
-        self.gaussian_sigma_decay_end_step   = gaussian_sigma_decay_end_step
+        self.start_blur_sigma = float(start_blur_sigma)
+        self.start_pixel_width_sigma = float(start_pixel_width_sigma)
+        
+        self.sigma_decay_start_step = sigma_decay_start_step
+        self.sigma_decay_end_step   = sigma_decay_end_step
 
-        self.sigma_schedule = float(start_gaussian_sigma)
-        self.pixel_width_follows_sigma = pixel_width_follows_sigma
-        self.blur_follows_sigma = blur_follows_sigma
+        self.sigma_schedule = 1.
+
 
 
         self.param_groups = [param_group for model in [self.model_radiance, self.camera_extrinsics]
                              for param_group in model.param_groups]
 
-        self.model_radiance.position_encoder.gaussian_blur_sigma = self.current_gaussian_sigma
+        self.model_radiance.position_encoder.pixel_width_sigma = self.start_pixel_width_sigma
 
     def update_sigma_schedule(self, current_step):
         """
         update the sigma schedule
-        this value is used to infer the blur sigma and the pixel width scalar,
-        which is used to correct the pixel width in the positional encoding
-        and used to blur the image - accordin to the specifications
-        of pixel_width_follows_sigma and blur_follows_sigma.
-        see current_gaussian_sigma and pixel_width_scalar for more details.
 
         the sigma schedule follows the following schedule:
 
@@ -194,21 +180,19 @@ class MipBarf(CameraCalibrationModel):
 
         """
 
-        if self.start_gaussian_sigma <= 0.25:
-            sigma_schedule = 0.
 
-        elif current_step < self.gaussian_sigma_decay_start_step:
-            sigma_schedule = self.start_gaussian_sigma
+        if current_step < self.sigma_decay_start_step:
+            sigma_schedule = 1.
 
-        elif self.gaussian_sigma_decay_start_step <= current_step <= self.gaussian_sigma_decay_end_step:
+        elif self.sigma_decay_start_step <= current_step <= self.sigma_decay_end_step:
             sigma_schedule = (
-                self.start_gaussian_sigma * (
-                    0.25/self.start_gaussian_sigma
+                (
+                    0.25/(max(self.start_blur_sigma,self.start_pixel_width_sigma))
                 )**(
                     (
-                        self.gaussian_sigma_decay_start_step - current_step
+                        self.sigma_decay_start_step - current_step
                     )/(
-                        self.gaussian_sigma_decay_start_step - self.gaussian_sigma_decay_end_step
+                        self.sigma_decay_start_step - self.sigma_decay_end_step
                     )
                 )
 
@@ -221,36 +205,42 @@ class MipBarf(CameraCalibrationModel):
 
 
     @property
-    def current_gaussian_sigma(self):
+    def current_blur_sigma(self):
         """
         the current value of sigma to use for the gaussian blur
 
         if blur_follows_sigma is True, then the image is blurred with the
         value of sigma_schedule - otherwise not blurred
-        
         """
 
-        if self.blur_follows_sigma:
-            return self.sigma_schedule
-        else:
-            return 0.
+        sigma = self.sigma_schedule*self.start_blur_sigma
+        if sigma < 0.25: return 0.0
+        else: return sigma
+
 
     @property
-    def pixel_width_scalar(self):
-        """
-        the correction factor to multiply the pixel width with in order to
-        account for the variance introduced by the gaussian blur
-        in the mip nerf model
+    def current_pixel_width_sigma(self):
+        sigma = self.sigma_schedule*self.start_pixel_width_sigma
+        if sigma < 0.25: return 0.0
+        else: return sigma
 
-        if pixel_width_follows_sigma is True, then the pixel width passed to the
-        positional encoding is corrected - otherwise not
+    # @property
+    # def pixel_width_scalar(self):
+    #     """
+    #     DEPRECATED - just returns 1 - replaced by self.model_radiance.position_encoder.gaussian_blur_sigma
+    #     the correction factor to multiply the pixel width with in order to
+    #     account for the variance introduced by the gaussian blur
+    #     in the mip nerf model
+
+    #     if pixel_width_follows_sigma is 1, then the pixel width passed to the
+    #     positional encoding is corrected - otherwise not
         
-        """
-        return 1.
-        if self.pixel_width_follows_sigma:
-            return (12*self.sigma_schedule**2 + 1)**0.5
-        else:
-            return 1.
+    #     """
+    #     return 1.
+    #     if self.pixel_width_follows_sigma:
+    #         return (12*self.sigma_schedule**2 + 1)**0.5
+    #     else:
+    #         return 1.
 
     def _step_helper(self, batch, batch_idx, purpose: Literal['train', 'val']):
 
@@ -259,7 +249,7 @@ class MipBarf(CameraCalibrationModel):
             current_step = self.trainer.current_epoch*n_batches + batch_idx
             self.update_sigma_schedule(current_step)
 
-            self.model_radiance.position_encoder.gaussian_blur_sigma = self.current_gaussian_sigma
+            self.model_radiance.position_encoder.pixel_width_sigma = self.current_pixel_width_sigma
 
             batch = self.training_transform(batch)
         elif purpose == "val":
@@ -278,10 +268,7 @@ class MipBarf(CameraCalibrationModel):
             ray_colors_raw,
             img_idx,
             pixel_width
-        ) = cast(ImagePoseDataModule, self.trainer.datamodule).get_blurred_pixel_colors(batch, self.current_gaussian_sigma)
-
-        # correct the pixel width
-        pixel_width = pixel_width*self.pixel_width_scalar
+        ) = cast(ImagePoseDataModule, self.trainer.datamodule).get_blurred_pixel_colors(batch, self.current_blur_sigma)
 
         # compute the pose error
 
@@ -295,8 +282,9 @@ class MipBarf(CameraCalibrationModel):
         # Log metrics
         logs  = {f"{purpose}_loss_fine": loss,
                 f"{purpose}_psnr": psnr,
-                f"pixel_width_scalar": self.pixel_width_scalar,
-                f"current_gaussian_sigma": self.current_gaussian_sigma,
+                # f"pixel_width_scalar": self.pixel_width_scalar,
+                f"PE_sigma": self.model_radiance.position_encoder.pixel_width_sigma,
+                f"blur_sigma": self.current_blur_sigma,
                     }
 
         if self.proposal:
@@ -330,7 +318,7 @@ class MipBarf(CameraCalibrationModel):
     # mip_radiance = NerfModel(4, 256, True, False, 2, position_encoding, direction_encoding)
     # model = MipBarf(mip_radiance, 256, 20, 100, 0, 0, -1, samples_per_ray_proposal=20,
     #                 gaussian_sigma_decay_start_step=20, gaussian_sigma_decay_end_step=60,
-    #                 pixel_width_follows_sigma=True, blur_follows_sigma=True)
+    #                 pixel_width_follows_sigma=1, blur_follows_sigma=1)
     
 
     # for translation_noise_sigma in [0, 0.6, 4, 30]:
@@ -425,7 +413,7 @@ class MipBarf(CameraCalibrationModel):
 
     # steps = th.linspace(0, 100, 101)
     # for blur_follows_sigma in [False, True]:
-    #     for pixel_width_follows_sigma in [False, True]:
+    #     for pixel_width_follows_sigma in [0, 1]:
 
     #         model = MipBarf(mip_radiance, 256, 20, 100, 0, 0, -1, samples_per_ray_proposal=20,
     #                         gaussian_sigma_decay_start_step=20, gaussian_sigma_decay_end_step=60,

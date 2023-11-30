@@ -40,7 +40,7 @@ def convert_iterations_to_epochs(iterations: int, batch_size: int, dataset_size_
 if __name__ == "__main__":
 
     # Set seeds
-    pl.seed_everything(1337)
+    pl.seed_everything(1337, workers=True)
 
 
     # Set up weights and biases logger
