@@ -141,7 +141,9 @@ class Log2dImageReconstruction(Callback):
         
         # Store reconstructed images on CPU
         val_images = []
+        val_images_true = []
 
+        # relic
         if hasattr(model, "pixel_width_scalar"):
             pixel_width_scalar = model.pixel_width_scalar
         else:
@@ -154,6 +156,8 @@ class Log2dImageReconstruction(Callback):
             # Get rays for image
             origins = dataset.ray_origins[dataset.image_name_to_index[name]].view(-1, 3)
             directions = dataset.ray_directions[dataset.image_name_to_index[name]].view(-1, 3)
+            images = dataset.images[dataset.image_name_to_index[name]]
+            images = images.view(-1, *images.shape[2:])
 
             
 
@@ -162,7 +166,8 @@ class Log2dImageReconstruction(Callback):
                 dataset=TensorDataset(
                     origins, 
                     directions,
-                    dataset.pixel_width*th.ones(origins.shape[0], 1)*pixel_width_scalar
+                    dataset.pixel_width*th.ones(origins.shape[0], 1)*pixel_width_scalar,
+                    images
                 ),
                 batch_size=self.batch_size,
                 num_workers=self.num_workers,
@@ -172,9 +177,10 @@ class Log2dImageReconstruction(Callback):
 
             # Iterate over batches of rays to get RGB values
             rgb = th.empty((dataset.image_batch_size, 3), dtype=cast(th.dtype, model.dtype))
+            rgb_true = th.empty((dataset.image_batch_size, 3), dtype=cast(th.dtype, model.dtype))
             i = 0
             
-            for ray_origs, ray_dirs, pixel_width in tqdm(data_loader, desc="Predicting RGB values", leave=False):
+            for ray_origs, ray_dirs, pixel_width, ray_colors_true in tqdm(data_loader, desc="Predicting RGB values", leave=False):
                 # Prepare for model prediction
                 ray_origs = ray_origs.to(model.device)
                 ray_dirs = ray_dirs.to(model.device)
@@ -189,13 +195,23 @@ class Log2dImageReconstruction(Callback):
                 # Predict RGB values
                 rgb[i:i+batch_size, :] = model.forward(ray_origs, ray_dirs, pixel_width)[0].clip(0, 1).cpu()
             
+
+                # load true image
+                if hasattr(model, "current_blur_sigma"):
+                    ray_colors_true = trainer.datamodule.get_blurred_pixel_colors(
+                        (None, None, None, None, ray_colors_true, None, None), model.current_blur_sigma
+                    )[4]
+                
+
+                rgb_true[i:i+batch_size, :] = ray_colors_true[:, 0]
                 # Update write head
                 i += batch_size
 
 
             # Store image on CPU
             # NOTE: Cannot pass tensor as channel dimension is in numpy format
-            val_images.append(rgb.view(dataset.image_height, dataset.image_width, 3).numpy())
+            val_images.append(rgb.view(dataset.image_height, dataset.image_width, 3).detach().numpy())
+            val_images_true.append(rgb_true.view(dataset.image_height, dataset.image_width, 3).detach().numpy())
 
 
         # Reconstruct training images 
@@ -263,4 +279,9 @@ class Log2dImageReconstruction(Callback):
         self.logger.log_image(
             key=self.metric_name_val, 
             images=val_images
+        )
+
+        self.logger.log_image(
+            key=f"{self.metric_name_val}_target", 
+            images=val_images_true
         )

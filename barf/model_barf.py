@@ -36,6 +36,7 @@ class BarfModel(CameraCalibrationModel):
             epoch = self.trainer.current_epoch + batch_idx/n_batches
 
             self.model_radiance.position_encoder.update_alpha(epoch)
+            self.model_radiance.direction_encoder.update_alpha(epoch)
             
         elif purpose == "val": batch = self.validation_transform(batch)
 

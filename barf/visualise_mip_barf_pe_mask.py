@@ -58,7 +58,7 @@ if __name__ == "__main__":
     samples_per_rays = [128]
     pixel_width = (400 / 2 / th.tan(th.tensor(0.6911112070083618) / 2)).item()**(-1)
     for samples_per_ray in samples_per_rays:
-        for start_pixel_width_sigma in [80, 90, 100, 110, 120, 130]:
+        for start_pixel_width_sigma in range(0,50,5):
             pos = th.tensor([[1,2,3]]).float().repeat(samples_per_ray,1)
             dir = th.tensor([[1,2,3]]).float().repeat(samples_per_ray,1)
             dir = dir/th.linalg.vector_norm(dir)

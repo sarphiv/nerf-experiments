@@ -22,10 +22,12 @@ from model_mip import MipNeRF, MipBarf
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--camera_origin_noise_sigma", type=float, default=0.15)
-    parser.add_argument("--camera_rotation_noise_sigma", type=float, default=0.15)
-    parser.add_argument("--start_blur_sigma", type=float, default=0.)
-    parser.add_argument("--start_pixel_width_sigma", type=float, default=150.)
+    parser.add_argument("--camera_origin_noise_sigma", type=float, default=0.4)
+    parser.add_argument("--camera_rotation_noise_sigma", type=float, default=0.4)
+    parser.add_argument("--start_blur_sigma", type=float, default=10.)
+    parser.add_argument("--start_pixel_width_sigma", type=float, default=200,)
+    parser.add_argument("--max_blur_sigma", type=float, default = 20)
+    parser.add_argument("--n_blur_sigmas", type=int, default=2)
     parser.add_argument("--seed", type=int, default=134534)
     parser.add_argument("--optimize_camera", action=argparse.BooleanOptionalAction, default=True)
 
@@ -36,8 +38,17 @@ if __name__ == "__main__":
     # Set up data module
     BATCH_SIZE = 1024
     NUM_WORKERS = 3
-    IMAGE_SIZE = 400
-    SIGMAS_FOR_BLUR = (2**th.flip(th.linspace(-1, args.start_blur_sigma**0.5, 10), dims=(0,))).tolist() + [0] if args.start_blur_sigma > 0 else [0., 0.]
+    IMAGE_SIZE = 400 # TODO 400
+
+    if args.max_blur_sigma <= 0.25:
+        SIGMAS_FOR_BLUR = [0.0, 0.0]
+    elif args.n_blur_sigmas <= 2:
+        SIGMAS_FOR_BLUR = [args.max_blur_sigma, 0.0]
+    else:
+        SIGMAS_FOR_BLUR = (2**th.flip(th.linspace(-1, log2(args.max_blur_sigma), args.n_blur_sigmas - 1), dims=(0,))).round(decimals=2).tolist() + [0.0] 
+
+
+    print(SIGMAS_FOR_BLUR)
     DECAY_END_STEP = 200000
     DECAY_START_STEP = 20000
 
@@ -56,7 +67,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name=f"mipBaRF noise={args.camera_origin_noise_sigma} blur={args.start_blur_sigma} pixel_width={args.start_pixel_width_sigma}"
+        name=f"mipBaRF noise={args.camera_origin_noise_sigma} blur={args.start_blur_sigma} pixel_width={args.start_pixel_width_sigma} sigmas_for_blur={SIGMAS_FOR_BLUR}"
         # name=f"testing integration/sample_strats - proposal={args.use_proposal}, {args.uniform_sampling_strategy}, {args.integration_strategy}, {args.uniform_sampling_offset_size}",
     )
 
@@ -135,7 +146,7 @@ if __name__ == "__main__":
         levels=10,
         include_identity=True,
         scale=1.,
-        distribute_variance=True,
+        distribute_variance=False,
     )
 
     direction_encoder = BarfPositionalEncoding(0, 1, 0, 1, True)
