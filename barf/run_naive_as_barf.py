@@ -147,20 +147,20 @@ if __name__ == "__main__":
 
 
     position_encoder = BarfPositionalEncoding(
-        levels=10,
-        alpha_start=10,
+        levels=0,
+        alpha_start=0,
         alpha_increase_start_epoch=0,
         alpha_increase_end_epoch=0, 
-        include_identity=False,
+        include_identity=True,
         scale=1.
     )
 
     direction_encoder = BarfPositionalEncoding(
-        levels=4,
-        alpha_start=4,
+        levels=0,
+        alpha_start=0,
         alpha_increase_start_epoch=0,
         alpha_increase_end_epoch=0, 
-        include_identity=False,
+        include_identity=True,
         scale=1.
     )
 
@@ -177,20 +177,6 @@ if __name__ == "__main__":
         learning_rate_decay_end=LR_DECAY_END_STEP
     )
 
-    model_proposal = NerfModel(
-        n_hidden=4,
-        hidden_dim=256,
-        delayed_direction=True,
-        delayed_density=False,
-        n_segments=2,
-        position_encoder=position_encoder,
-        direction_encoder=direction_encoder,
-        learning_rate_start=5e-4,
-        learning_rate_stop=1e-5,
-        learning_rate_decay_end=LR_DECAY_END_STEP
-    )
-
-
     model = BarfModel(
         n_training_images=dm.n_training_images,
         camera_learning_rate_start=1e-3,
@@ -199,9 +185,8 @@ if __name__ == "__main__":
         near_sphere_normalized=2,
         far_sphere_normalized=8,
         samples_per_ray_radiance=256,
-        samples_per_ray_proposal=64,
+        samples_per_ray_proposal=0,
         model_radiance=model_radiance,
-        model_proposal=model_proposal,
         uniform_sampling_strategy = "equidistant",
         uniform_sampling_offset_size=-1.,
         max_gaussian_sigma=args.start_blur_sigma
