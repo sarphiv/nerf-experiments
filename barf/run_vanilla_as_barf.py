@@ -25,8 +25,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--camera_origin_noise_sigma", type=float, default=0.15)
     parser.add_argument("--camera_rotation_noise_sigma", type=float, default=0.15)
-    parser.add_argument("--camera_learning_rate_start", type=float, default=1e-3)
-    parser.add_argument("--camera_learning_rate_stop", type=float, default=1e-5)
+    parser.add_argument("--learn_camera", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--start_blur_sigma", type=float, default=0.)
     parser.add_argument("--n_blur_sigmas", type=int, default=10)
     parser.add_argument("--seed", type=int, default=134534)
@@ -35,9 +34,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.start_blur_sigma <= 0.25:
-        wandb_name = f"Vanilla-as-BARF translation={args.camera_origin_noise_sigma} rotation={args.camera_rotation_noise_sigma}"
+        wandb_name = f"Vanilla-as-BARF translation={args.camera_origin_noise_sigma} rotation={args.camera_rotation_noise_sigma} learn_camera={args.learn_camera}"
     else:
-        wandb_name = f"Vanilla-as-BARF translation={args.camera_origin_noise_sigma} rotation={args.camera_rotation_noise_sigma} blur={args.start_blur_sigma}"
+        wandb_name = f"Vanilla-as-BARF translation={args.camera_origin_noise_sigma} rotation={args.camera_rotation_noise_sigma} learn_camera={args.learn_camera} blur={args.start_blur_sigma}"
 
     print(args)
     # print(f"mip that test barf runs")
@@ -195,8 +194,8 @@ if __name__ == "__main__":
 
     model = BarfModel(
         n_training_images=dm.n_training_images,
-        camera_learning_rate_start=args.camera_learning_rate_start,
-        camera_learning_rate_stop=args.camera_learning_rate_stop,
+        camera_learning_rate_start=1e-3 if args.learn_camera else 0.0,
+        camera_learning_rate_stop=1e-5 if args.learn_camera else 0.0,
         camera_learning_rate_decay_end=LR_DECAY_END_STEP,
         near_sphere_normalized=2,
         far_sphere_normalized=8,
