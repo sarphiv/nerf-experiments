@@ -1,6 +1,4 @@
-from math import log2
 from dataclasses import dataclass
-from typing import Optional
 
 import pytorch_lightning as pl
 import torch as th
@@ -138,7 +136,7 @@ if __name__ == "__main__":
     epoch_fraction_to_steps = lambda epoch: int(epoch * dm.n_training_images * args.image_size**2 / args.batch_size)
 
     model = GarfModel(
-        n_training_images=dm.n_training_images,
+        n_train_images=dm.n_training_images,
         
         camera_learning_rate_start=args.camera_learning_rate_start,
         camera_learning_rate_stop=args.camera_learning_rate_stop,

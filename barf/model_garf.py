@@ -2,6 +2,7 @@ from typing import Callable, Literal, Optional, Dict
 
 import torch as th
 import torch.nn.functional as F
+import pytorch_lightning as pl
 import nerfacc
 
 from model_garf_radiance import RadianceNetwork
@@ -38,7 +39,7 @@ class GarfModel(CameraCalibrationModel):
         radiance_learning_rate_decay_end: int = 10000, #step
         radiance_weight_decay: float = 0.0,
     ):
-        super().__init__()
+        pl.LightningModule.__init__(self)
         self.save_hyperparameters()
 
 
@@ -273,7 +274,7 @@ class GarfModel(CameraCalibrationModel):
         # Calculate losses for training
         proposal_loss = self.transmittance_estimator.compute_loss(extras["trans"].detach())
         # NOTE Not using blurred pixel colors
-        radiance_loss = F.mse_loss(ray_colors_pred, ray_colors_raw[:, 1, ...]) 
+        radiance_loss = F.mse_loss(ray_colors_pred, ray_colors_raw[:, -1, ...]) 
 
         # Return color prediction and losses
         return (
