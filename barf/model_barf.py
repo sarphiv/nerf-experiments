@@ -1,9 +1,10 @@
-from typing import Literal
+from typing import Literal, cast
 
 import torch as th
 from torch import nn
 from model_camera_calibration import CameraCalibrationModel
 from model_camera_extrinsics import CameraExtrinsics
+from data_module import ImagePoseDataModule
 
 
 
@@ -41,9 +42,9 @@ class BarfModel(CameraCalibrationModel):
         elif purpose == "val": batch = self.validation_transform(batch)
 
         # # interpolate the blurred pixel colors
-        # sigma = BarfModel.get_sigma_alpha(self.position_encoder.alpha, self.max_gaussian_sigma)
-        # batch = self.get_blurred_pixel_colors(batch, self.trainer.datamodule.gaussian_blur_sigmas, sigma) 
+        sigma = BarfModel.get_sigma_alpha(self.model_radiance.position_encoder.alpha, self.max_gaussian_sigma)
 
+        batch = cast(ImagePoseDataModule, self.trainer.datamodule).get_blurred_pixel_colors(batch, sigma)
 
         # unpack batch
         (
@@ -57,33 +58,36 @@ class BarfModel(CameraCalibrationModel):
         ) = batch
 
         # Forward pass
-        ray_colors_pred_fine, ray_colors_pred_coarse = self(ray_origs_pred, ray_dirs_pred)
+        ray_colors_pred_fine, ray_colors_pred_coarse = self.forward(ray_origs_pred, ray_dirs_pred, pixel_width)
 
-        assert not th.isnan(ray_colors_pred_fine).any(), "NaN values in ray_colors_pred_fine"
-        assert not th.isnan(ray_colors_pred_coarse).any(), "NaN values in ray_colors_pred_coarse"
 
         # compute the loss
-        loss_fine = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw[:,-1]) # TODO fix interpolation
+        loss_fine = nn.functional.mse_loss(ray_colors_pred_fine, ray_colors_raw[:,0])
         psnr = self.compute_psnr(loss_fine)
+        pose_error = self.compute_pose_error()
 
         if self.proposal:
-            loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors_raw[:,-1]) # TODO fix interpolation
+            loss_coarse = nn.functional.mse_loss(ray_colors_pred_coarse, ray_colors_raw[:,0])
             loss = loss_fine + loss_coarse
 
             # Log metrics
-            self.log_dict({f"{purpose}_loss_fine": loss_fine,
+            log = {f"{purpose}_loss_fine": loss_fine,
                         f"{purpose}_loss_coarse": loss_coarse,
                         f"{purpose}_psnr": psnr,
                         "alpha": self.model_radiance.position_encoder.alpha.item(),
-                        # "sigma": sigma.item(),
-                        })
+                        "sigma": sigma.item(),
+                        pose_error: f"{purpose}_pose_error",
+                        }
         else:
             loss = loss_fine
-            self.log_dict({f"{purpose}_loss_fine": loss_fine,
+            log = {f"{purpose}_loss_fine": loss_fine,
                         f"{purpose}_psnr": psnr,
                         "alpha": self.model_radiance.position_encoder.alpha.item(),
-                        # "sigma": sigma.item(),
-                        })
+                        "sigma": sigma.item(),
+                        }
 
+        if purpose == "train": log["pose_error"] = pose_error
+
+        self.log_dict(log)
         
         return loss
