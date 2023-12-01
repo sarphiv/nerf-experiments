@@ -66,7 +66,7 @@ class CameraCalibrationModel(NerfInterpolation):
 
     # TODO: make static method.
     # TODO: maybe change convention, such that output R has shape (1, 3, 3) - makes broadcasting easier?
-    def kabsch_algorithm(self, point_cloud_from: th.Tensor, point_cloud_to: th.Tensor): 
+    def kabsch_algorithm(self, point_cloud_from: th.Tensor, point_cloud_to: th.Tensor, remove_outliers: bool=True): 
         """
         Align "point_cloud_from" to "point_cloud_to" with a matrix R and a vector t.
         align_rotation: helper function that optimizes the subproblem ||P - R@Q||^2 using SVD
@@ -132,6 +132,26 @@ class CameraCalibrationModel(NerfInterpolation):
 
         # C1_hat = R@(C2 - m2)*c + m1 = R@c*C2 + (m1 - R@c*m2) => t = m1 - R@c*m2
         t = mean_to - (th.matmul(R, mean_from.T)*c).T
+        
+        # If remove outliers, compute the transformed points and run the algorithm again
+        if remove_outliers: 
+            # Get from in to coordinates 
+            point_cloud_from_hat = th.matmul(R, point_cloud_from.unsqueeze(-1)).squeeze(-1)*c + t
+            # Get distances 
+            distances = th.linalg.norm(point_cloud_from_hat - point_cloud_to, dim=1)
+            
+            # Find the 10 % max quantile 
+            to_remove_quantile = th.quantile(distances, 0.9)
+            # Create mask that keeps smaller distances than the quantile
+            point_cloud_mask = distances < to_remove_quantile
+            
+            # Remove outliers
+            point_cloud_from = point_cloud_from[point_cloud_mask]
+            point_cloud_to = point_cloud_to[point_cloud_mask]
+            
+            # Run the algorithm again
+            R, t, c = self.kabsch_algorithm(point_cloud_from, point_cloud_to, remove_outliers=False)
+            
 
         return R, t, c
 
@@ -177,6 +197,7 @@ class CameraCalibrationModel(NerfInterpolation):
             self,
             from_raw_to_pred = True,
             return_origs = False,
+            remove_outliers = True
             ) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
         """
         Computes the transform params (R, t, c) used for transforming
@@ -218,10 +239,10 @@ class CameraCalibrationModel(NerfInterpolation):
 
         # Align raw space to predicted model space
         if from_raw_to_pred:
-            post_transform_params = self.kabsch_algorithm(origs_raw, origs_pred)
+            post_transform_params = self.kabsch_algorithm(origs_raw, origs_pred, remove_outliers=remove_outliers)
         else:
-            post_transform_params = self.kabsch_algorithm(origs_pred, origs_raw)
-
+            post_transform_params = self.kabsch_algorithm(origs_pred, origs_raw, remove_outliers=remove_outliers)
+        
         if return_origs:
             return post_transform_params, origs_raw, origs_pred
         else:

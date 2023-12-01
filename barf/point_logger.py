@@ -46,7 +46,7 @@ class LogCameraExtrinsics(Callback):
         super().__init__()
 
         # Verify arguments
-        if logging_start < 0:
+        if logging_start <= 0:
             raise ValueError(f"logging_start must be non-negative, but is {logging_start}")
         if delay_start < 0:
             raise ValueError(f"period_start must be non-negative, but is {delay_start}")
@@ -114,8 +114,8 @@ class LogCameraExtrinsics(Callback):
             return
 
         # # If not at the right step, return
-        # if step < self.logging_milestone:
-        #     return
+        if step < self.logging_milestone and step != 0:
+            return
 
         # Update logging milestop and log
         self.logging_milestone = step + self._get_next_delay(step)
@@ -155,8 +155,10 @@ class LogCameraExtrinsics(Callback):
         origins_raw_colors = blue.repeat(n_images, 1) # th.hstack((th.ones(n_images, 2, device=model.device) * 255, th.zeros(n_images, 1, device=model.device)))
         
         # NOTE: Red is wrong everything, green is correct origin, blue is correct direction
-        # NOTE: See that everything that is outside one standard deviation of the original origins are red, and within a standard devition we graduate from green to red
-        origins_pred_errors = th.norm(camera_origs_raw - camera_origs_pred, dim=1).view(-1, 1) / th.std(camera_origs_raw, dim=0).norm()
+        # relic : # NOTE: See that everything that is outside one standard deviation of the original origins are red, and within a standard devition we graduate from green to red
+        # origins_pred_errors = th.norm(camera_origs_raw - camera_origs_pred, dim=1).view(-1, 1) / th.std(camera_origs_raw, dim=0).norm()
+        # NOTE: A point is red if it is one 10'th of the maximum distance between any two points away from the original point cloud
+        origins_pred_errors = th.norm(camera_origs_raw - camera_origs_pred, dim=1).view(-1, 1)* 10 / th.cdist(camera_origs_raw, camera_origs_raw).max()
         origins_pred_errors = origins_pred_errors.clip(0, 1)
         origins_pred_colors = red * origins_pred_errors + green*(1- origins_pred_errors) #th.hstack((origins_pred_errors, 255 - origins_pred_errors, th.zeros(n_images, 1, device=model.device)))
 
