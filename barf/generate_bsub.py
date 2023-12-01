@@ -14,6 +14,23 @@ def combinations_iterator(*args):
 
 # DOCUMENTATION
 """
+This is a easy way of basing multiple bsub scripts on one template
+
+It generates multiple bsub scripts, and then it creates the file bsub_submitter.sh
+which looks like the following:
+    bsub < experiment_0
+    bsub < experiment_1
+    bsub < experiment_2
+    .
+    .
+    .
+
+then to start the experiments, run 
+    bash bsub_submitter
+
+Details:
+---------
+
 For this script to work, you must specify two variables: args_iter and executer.
 
  * args_iter:
