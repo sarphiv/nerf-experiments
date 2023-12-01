@@ -7,7 +7,6 @@ import os
 import torch as th
 import torch.nn as nn
 import pytorch_lightning as pl
-import nerfacc
 
 from model_interpolation_architecture import NerfModel, PositionalEncoding
 

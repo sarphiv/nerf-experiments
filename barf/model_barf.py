@@ -76,7 +76,7 @@ class BarfModel(CameraCalibrationModel):
                         f"{purpose}_psnr": psnr,
                         "alpha": self.model_radiance.position_encoder.alpha.item(),
                         "sigma": sigma.item(),
-                        pose_error: f"{purpose}_pose_error",
+                        f"{purpose}_pose_error": pose_error,
                         }
         else:
             loss = loss_fine
