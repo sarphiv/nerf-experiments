@@ -200,7 +200,7 @@ class GarfModel(CameraCalibrationModel):
         return forward
 
 
-    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor, Dict]:
+    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor, pixel_width: th.Tensor=None) -> tuple[th.Tensor, th.Tensor, th.Tensor, Dict]:
         """
         Forward pass of the model.
         Given the ray origins and directions, compute the rgb values for the given rays.
@@ -208,6 +208,7 @@ class GarfModel(CameraCalibrationModel):
         Args:
             ray_origs: Tensor of shape (n_rays, 3) - focal point position in world, i.e. origin in camera coordinates
             ray_dirs: Tensor of shape (n_rays, 3) - direction vectors (unit vectors) of the viewing directions
+            pixel_width: Tensor of shape (n_rays, 1) - NOT USED. the width of the pixel in world coordinates
 
         Returns:
             rgb: Tensor of shape (n_rays, 3) - the rgb values of the given rays
@@ -289,6 +290,7 @@ class GarfModel(CameraCalibrationModel):
         stage: Literal["train", "val", "test"], 
         proposal_loss: th.Tensor, 
         radiance_loss: th.Tensor, 
+        pose_error: float,
         *args, 
         **kwargs
     ) -> dict[str, th.Tensor]:
@@ -302,6 +304,7 @@ class GarfModel(CameraCalibrationModel):
             f"{stage}_proposal_loss": proposal_loss,
             f"{stage}_radiance_loss": radiance_loss,
             f"{stage}_psnr": psnr,
+            f"pose_error": pose_error,
         }
         
 
@@ -322,12 +325,16 @@ class GarfModel(CameraCalibrationModel):
 
         # Forward pass
         _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
+        
+        # Compute pose error
+        pose_error = self.compute_pose_error()
 
         # Log metrics
         self.log_dict(self._get_logging_losses(
             "train",
             proposal_loss,
             radiance_loss,
+            pose_error
         ))
 
 
