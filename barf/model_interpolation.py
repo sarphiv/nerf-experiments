@@ -578,7 +578,7 @@ class NerfInterpolation(pl.LightningModule):
                 print(f"WARN: Loss was {loss} - psnr not computed")
                 return th.nan
             else:
-                return -10 * math.log10(float(loss.detach().item()))
+                return -10 * math.log10(float(loss.cpu().detach().item()))
         except ValueError:
             print(f"WARN: Loss was {loss} and calculation crashes - psnr not computed")
             return th.nan

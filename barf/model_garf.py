@@ -300,8 +300,8 @@ class GarfModel(CameraCalibrationModel):
 
         # Return losses to be logged
         return {
-            f"{stage}_proposal_loss": proposal_loss,
-            f"{stage}_radiance_loss": radiance_loss,
+            f"{stage}_proposal_loss": proposal_loss.cpu().detach(),
+            f"{stage}_radiance_loss": radiance_loss.cpu().detach(),
             f"{stage}_psnr": psnr
         }
         
@@ -335,7 +335,7 @@ class GarfModel(CameraCalibrationModel):
         # Rate limit pose error logging
         if batch_idx % 100 == 0:
             pose_error = self.compute_pose_error() 
-            logs["pose_error"] = pose_error
+            logs["pose_error"] = pose_error.cpu().detach()
 
         # Log metrics
         self.log_dict(logs)
