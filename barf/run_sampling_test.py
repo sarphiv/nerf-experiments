@@ -57,6 +57,7 @@ if __name__ == "__main__":
         gaussian_blur_sigmas = SIGMAS_FOR_BLUR,
         rotation_noise_sigma = 0,#.15,
         translation_noise_sigma = 0,#.15,
+        camera_noise_seed=13571113,
         batch_size=BATCH_SIZE,
         num_workers=NUM_WORKERS,
         shuffle=True,

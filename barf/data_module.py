@@ -84,9 +84,12 @@ class ImagePoseDataModule(pl.LightningDataModule):
     def n_training_images(self):
         if hasattr(self, "dataset_train"):
             return self.dataset_train.n_images
+        elif hasattr(self, "_n_training_images"):
+            return self._n_training_images
         else:
             images_path = os.path.join(self.scene_path, "train").replace("\\", "/")
-            return len(os.listdir(images_path))
+            self._n_training_images = len(os.listdir(images_path))
+            return self._n_training_images
 
 
     @staticmethod

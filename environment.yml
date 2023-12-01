@@ -25,4 +25,5 @@ dependencies:
     - torchaudio
     - pytorch-lightning
     - nerfacc
+    - tyro
     - wandb
