@@ -25,6 +25,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--camera_origin_noise_sigma", type=float, default=0.15)
     parser.add_argument("--camera_rotation_noise_sigma", type=float, default=0.15)
+    parser.add_argument("--camera_learning_rate_start", type=float, default=1e-3)
+    parser.add_argument("--camera_learning_rate_stop", type=float, default=1e-5)
     parser.add_argument("--start_blur_sigma", type=float, default=0.)
     parser.add_argument("--n_blur_sigmas", type=int, default=10)
     parser.add_argument("--seed", type=int, default=134534)
@@ -179,8 +181,8 @@ if __name__ == "__main__":
 
     model = BarfModel(
         n_training_images=dm.n_training_images,
-        camera_learning_rate_start=1e-3,
-        camera_learning_rate_stop=1e-5,
+        camera_learning_rate_start=args.camera_learning_rate_start,
+        camera_learning_rate_stop=args.camera_learning_rate_stop,
         camera_learning_rate_decay_end=LR_DECAY_END_STEP,
         near_sphere_normalized=2,
         far_sphere_normalized=8,
