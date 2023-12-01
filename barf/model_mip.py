@@ -294,7 +294,7 @@ class MipBarf(CameraCalibrationModel):
 
         if ((purpose == "train" and batch_idx % 100 == 0) or (purpose == "val" and batch_idx == 0)):
             pose_error = CameraCalibrationModel.compute_pose_error(self) 
-            logs["pose_errors"] = pose_error
+            logs["pose_error"] = pose_error
         self.log_dict(logs)
 
         if loss.isnan():

@@ -178,7 +178,7 @@ if __name__ == "__main__":
         uniform_sampling_strategy = "equidistant",
         uniform_sampling_offset_size=-1.,
         sigma_decay_start_step=DECAY_START_STEP,
-        sigma_decay_end_step=DECAY_END_STEP,
+        sigma_decay_end_step=DECAY_END_STEP, #TODO fixme
         start_blur_sigma=args.start_blur_sigma,
         start_pixel_width_sigma=args.start_pixel_width_sigma,
     )
