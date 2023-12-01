@@ -46,7 +46,7 @@ class LogCameraExtrinsics(Callback):
         super().__init__()
 
         # Verify arguments
-        if logging_start <= 0:
+        if logging_start < 0:
             raise ValueError(f"logging_start must be non-negative, but is {logging_start}")
         if delay_start < 0:
             raise ValueError(f"period_start must be non-negative, but is {delay_start}")
