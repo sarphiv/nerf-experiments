@@ -2,6 +2,7 @@ from typing import Callable, Literal, Optional, Dict
 
 import torch as th
 import torch.nn.functional as F
+import pytorch_lightning as pl
 import nerfacc
 
 from model_garf_radiance import RadianceNetwork
@@ -38,7 +39,7 @@ class GarfModel(CameraCalibrationModel):
         radiance_learning_rate_decay_end: int = 10000, #step
         radiance_weight_decay: float = 0.0,
     ):
-        super().__init__()
+        pl.LightningModule.__init__(self)
         self.save_hyperparameters()
 
 
@@ -199,7 +200,7 @@ class GarfModel(CameraCalibrationModel):
         return forward
 
 
-    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor) -> tuple[th.Tensor, th.Tensor, th.Tensor, Dict]:
+    def forward(self, ray_origs: th.Tensor, ray_dirs: th.Tensor, pixel_width: th.Tensor=None) -> tuple[th.Tensor, th.Tensor, th.Tensor, Dict]:
         """
         Forward pass of the model.
         Given the ray origins and directions, compute the rgb values for the given rays.
@@ -207,6 +208,7 @@ class GarfModel(CameraCalibrationModel):
         Args:
             ray_origs: Tensor of shape (n_rays, 3) - focal point position in world, i.e. origin in camera coordinates
             ray_dirs: Tensor of shape (n_rays, 3) - direction vectors (unit vectors) of the viewing directions
+            pixel_width: Tensor of shape (n_rays, 1) - NOT USED. the width of the pixel in world coordinates
 
         Returns:
             rgb: Tensor of shape (n_rays, 3) - the rgb values of the given rays
@@ -273,7 +275,7 @@ class GarfModel(CameraCalibrationModel):
         # Calculate losses for training
         proposal_loss = self.transmittance_estimator.compute_loss(extras["trans"].detach())
         # NOTE Not using blurred pixel colors
-        radiance_loss = F.mse_loss(ray_colors_pred, ray_colors_raw[:, 1, ...]) 
+        radiance_loss = F.mse_loss(ray_colors_pred, ray_colors_raw[:, -1, ...]) 
 
         # Return color prediction and losses
         return (
@@ -287,7 +289,7 @@ class GarfModel(CameraCalibrationModel):
         self, 
         stage: Literal["train", "val", "test"], 
         proposal_loss: th.Tensor, 
-        radiance_loss: th.Tensor, 
+        radiance_loss: th.Tensor,
         *args, 
         **kwargs
     ) -> dict[str, th.Tensor]:
@@ -298,9 +300,9 @@ class GarfModel(CameraCalibrationModel):
 
         # Return losses to be logged
         return {
-            f"{stage}_proposal_loss": proposal_loss,
-            f"{stage}_radiance_loss": radiance_loss,
-            f"{stage}_psnr": psnr,
+            f"{stage}_proposal_loss": proposal_loss.cpu().detach(),
+            f"{stage}_radiance_loss": radiance_loss.cpu().detach(),
+            f"{stage}_psnr": psnr
         }
         
 
@@ -322,12 +324,21 @@ class GarfModel(CameraCalibrationModel):
         # Forward pass
         _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
 
-        # Log metrics
-        self.log_dict(self._get_logging_losses(
+
+        # Get logging losses
+        logs = self._get_logging_losses(
             "train",
             proposal_loss,
-            radiance_loss,
-        ))
+            radiance_loss
+        )
+        
+        # Rate limit pose error logging
+        if batch_idx % 100 == 0:
+            pose_error = self.compute_pose_error() 
+            logs["pose_error"] = pose_error.cpu().detach()
+
+        # Log metrics
+        self.log_dict(logs)
 
 
         # Return loss
@@ -350,13 +361,22 @@ class GarfModel(CameraCalibrationModel):
         # Forward pass
         _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
 
-        # Log metrics
-        self.log_dict(self._get_logging_losses(
+
+        # Get logging losses
+        logs = self._get_logging_losses(
             "val",
             proposal_loss,
-            radiance_loss,
-        ))
-        
+            radiance_loss
+        )
+
+        # Rate limit pose error logging
+        if batch_idx == 0:
+            pose_error = self.compute_pose_error() 
+            logs["pose_error"] = pose_error
+
+        # Log metrics
+        self.log_dict(logs)
+
 
         return radiance_loss + proposal_loss
 
