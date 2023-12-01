@@ -289,8 +289,7 @@ class GarfModel(CameraCalibrationModel):
         self, 
         stage: Literal["train", "val", "test"], 
         proposal_loss: th.Tensor, 
-        radiance_loss: th.Tensor, 
-        pose_error: float,
+        radiance_loss: th.Tensor,
         *args, 
         **kwargs
     ) -> dict[str, th.Tensor]:
@@ -303,8 +302,7 @@ class GarfModel(CameraCalibrationModel):
         return {
             f"{stage}_proposal_loss": proposal_loss,
             f"{stage}_radiance_loss": radiance_loss,
-            f"{stage}_psnr": psnr,
-            f"pose_error": pose_error,
+            f"{stage}_psnr": psnr
         }
         
 
@@ -325,17 +323,22 @@ class GarfModel(CameraCalibrationModel):
 
         # Forward pass
         _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
-        
-        # Compute pose error
-        pose_error = self.compute_pose_error()
 
-        # Log metrics
-        self.log_dict(self._get_logging_losses(
+
+        # Get logging losses
+        logs = self._get_logging_losses(
             "train",
             proposal_loss,
-            radiance_loss,
-            pose_error
-        ))
+            radiance_loss
+        )
+        
+        # Rate limit pose error logging
+        if batch_idx % 100 == 0:
+            pose_error = self.compute_pose_error() 
+            logs["pose_error"] = pose_error
+
+        # Log metrics
+        self.log_dict(logs)
 
 
         # Return loss
@@ -358,13 +361,22 @@ class GarfModel(CameraCalibrationModel):
         # Forward pass
         _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
 
-        # Log metrics
-        self.log_dict(self._get_logging_losses(
+
+        # Get logging losses
+        logs = self._get_logging_losses(
             "val",
             proposal_loss,
-            radiance_loss,
-        ))
-        
+            radiance_loss
+        )
+
+        # Rate limit pose error logging
+        if batch_idx == 0:
+            pose_error = self.compute_pose_error() 
+            logs["pose_error"] = pose_error
+
+        # Log metrics
+        self.log_dict(logs)
+
 
         return radiance_loss + proposal_loss
 
