@@ -164,8 +164,11 @@ class Log2dImageReconstruction(Callback):
             samples_per_center_ray = 100
 
             ##### log and visualize the center ray of the image
-            center_ray_origin = dataset.camera_origins[dataset.image_name_to_index[name]].to(model.device)
-            center_ray_direction = dataset.camera_directions[dataset.image_name_to_index[name]].to(model.device)
+            center_ray_origin = dataset.camera_origins[dataset.image_name_to_index[name]].to(model.device).view(1, 3)
+            center_ray_direction = dataset.camera_directions[dataset.image_name_to_index[name]].to(model.device).view(1, 3)
+
+            ray_origs, ray_dirs, transform_params = model.validation_transform_rays(center_ray_origin, center_ray_direction, None)
+
 
             near = model.near_sphere_normalized
             far = model.far_sphere_normalized
