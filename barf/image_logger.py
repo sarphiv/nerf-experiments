@@ -1,6 +1,12 @@
 from typing import cast
 from math import tanh, log, sqrt
 
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
+import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
+
+import numpy as np
 import torch as th
 from torch.utils.data import DataLoader, TensorDataset
 import pytorch_lightning as pl
@@ -143,11 +149,7 @@ class Log2dImageReconstruction(Callback):
         val_images = []
         val_images_true = []
 
-        # relic
-        if hasattr(model, "pixel_width_scalar"):
-            pixel_width_scalar = model.pixel_width_scalar
-        else:
-            pixel_width_scalar = 1
+        ray_plots = []
 
         transform_params = None
         
@@ -159,14 +161,84 @@ class Log2dImageReconstruction(Callback):
             images = dataset.images[dataset.image_name_to_index[name]]
             images = images.view(-1, *images.shape[2:])
 
+            samples_per_center_ray = 100
+
+            ##### log and visualize the center ray of the image
+            center_ray_origin = dataset.camera_origins[dataset.image_name_to_index[name]].to(model.device)
+            center_ray_direction = dataset.camera_directions[dataset.image_name_to_index[name]].to(model.device)
+
+            near = model.near_sphere_normalized
+            far = model.far_sphere_normalized
+            samples_per_ray = model.samples_per_ray_radiance
+            sample_bin_width = (far - near)/samples_per_ray
+
+            # Compute the t values for the center ray
+            center_ray_t_start = th.linspace(near, far, samples_per_center_ray, device=model.device)
+            center_ray_t_end = center_ray_t_start + sample_bin_width
+
+            # # Compute the positions for the given t values
+            sample_pos, sample_dir = NerfInterpolation._compute_positions(model, center_ray_origin.view(1,3), center_ray_direction.view(1,3), center_ray_t_start.view(1,-1), center_ray_t_end.view(1,-1))
+            sample_pixel_width = dataset.pixel_width*th.ones(sample_pos.shape[1], 1, device=model.device)
+
+
+            # Evaluate density and color at sample positions
+            sample_density, sample_color = model.model_radiance.forward(sample_pos.squeeze(), sample_dir.squeeze(), sample_pixel_width, center_ray_t_start.unsqueeze(1), center_ray_t_start.unsqueeze(1))
+
+            # make a Figure and attach it to a canvas.
+            fig = Figure(figsize=(5, 4), dpi=300)
+            # fig = plt.figure()
+            canvas = FigureCanvasAgg(fig)
+
+            # Do some plotting here
+            ax = fig.add_subplot(111)
+
+            x = center_ray_t_start.view(-1).cpu().detach().numpy()
+            col = sample_color.view(-1, 3).cpu().detach().numpy()
+            y = sample_density.view(-1).cpu().detach().numpy()
+
+            bin_width = (far - near)/samples_per_center_ray
+            # Plot vertical bars with adjusted width
+            for xi, color in zip(x, col):
+                ax.bar(xi, max(y)*1.1, color=color, alpha=1., align='edge', width=bin_width*1.1)
+
+            # Plot the density graph
+            ax.plot(x, y, color='black', markersize=0.3, label = "Volumetric density")
+
+
+            # where some data has already been plotted to ax
+            handles, labels = ax.get_legend_handles_labels()
+
+            # manually define a new patch 
+            patch = mpatches.Patch(color=[100/255,75/255,0/255], label='Color')
+
+            # handles is a list, so append manual patch
+            handles.append(patch) 
+
+
+            ax.set_xlabel("t")
+            ax.set_ylabel("density")
+            ax.legend(handles=handles)
+            ax.set_title("Density and color predictions along the center ray")
+
+            # Retrieve a view on the renderer buffer
+            canvas.draw()
+            buf = canvas.buffer_rgba()
+            # convert to a NumPy array
+            X = np.asarray(buf)
+
+            # Store image on CPU
+            ray_plots.append(X)       
             
+            ##### end of ray plot
+
+            #### log and visualize the image
 
             # Set up data loader for validation image
             data_loader = DataLoader(
                 dataset=TensorDataset(
                     origins, 
                     directions,
-                    dataset.pixel_width*th.ones(origins.shape[0], 1)*pixel_width_scalar,
+                    dataset.pixel_width*th.ones(origins.shape[0], 1),
                     images
                 ),
                 batch_size=self.batch_size,
@@ -233,7 +305,7 @@ class Log2dImageReconstruction(Callback):
                 dataset=TensorDataset(
                     origins_noisy, 
                     directions_noisy,
-                    dataset.pixel_width*th.ones(origins.shape[0], 1)*pixel_width_scalar
+                    dataset.pixel_width*th.ones(origins.shape[0], 1)
                 ),
                 batch_size=self.batch_size,
                 num_workers=self.num_workers,
@@ -284,4 +356,8 @@ class Log2dImageReconstruction(Callback):
         self.logger.log_image(
             key=f"{self.metric_name_val}_target", 
             images=val_images_true
+        )
+        self.logger.log_image(
+            key=f"{self.metric_name_val}_center_ray", 
+            images=ray_plots
         )
