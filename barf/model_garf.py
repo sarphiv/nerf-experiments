@@ -277,6 +277,14 @@ class GarfModel(CameraCalibrationModel):
         # NOTE Not using blurred pixel colors
         radiance_loss = F.mse_loss(ray_colors_pred, ray_colors_raw[:, -1, ...]) 
 
+        if proposal_loss.isnan() or proposal_loss.isinf():
+            proposal_loss = th.tensor(1., requires_grad=True)
+            warnings.warn("proposal loss was nan or inf - no optimization step performed")
+
+        if radiance_loss.isnan() or radiance_loss.isinf():
+            radiance_loss = th.tensor(1., requires_grad=True)
+            warnings.warn("radiance loss was nan or inf - no optimization step performed")
+
         # Return color prediction and losses
         return (
             ray_colors_pred,

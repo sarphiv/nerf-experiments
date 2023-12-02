@@ -38,24 +38,33 @@ class SchedulerLeNice(th.optim.lr_scheduler.LRScheduler):
         # Solve: start : s, end : e, decay : d, number of epochs : n 
         # s * d^n = e <=> d = (e/s)^(1/n)
         self.decay_factors = []
+        self.log_decay_factors = []
         for i, _ in enumerate(optimizer.param_groups):
-            if self.number_of_steps is None or self.number_of_steps[i] in [0, None] or self.start_LR[i] == 0: decay_factor = 1.
-            else: decay_factor = (self.stop_LR[i] / self.start_LR[i]) ** (1 / self.number_of_steps[i])
+            if self.number_of_steps is None or self.number_of_steps[i] in [0, None] or self.start_LR[i] == 0:
+                decay_factor = 1.
+                log_decay_factor = 0.
+            else:
+                decay_factor = (self.stop_LR[i] / self.start_LR[i]) ** (1 / self.number_of_steps[i])
+                log_decay_factor = 1/self.number_of_steps[i] * (math.log(self.stop_LR[i]) - math.log(self.start_LR[i]))
+
             self.decay_factors.append(decay_factor)
+            self.log_decay_factors.append(log_decay_factor)
 
         super().__init__(optimizer,verbose=verbose)
         
     def get_lr(self):
         # Original function 
-        if not self._get_lr_called_within_step:
-            warnings.warn("To get the last learning rate computed by the scheduler, "
-                          "please use `get_last_lr()`.", UserWarning)
+        return self._get_closed_form_lr()
+        # if not self._get_lr_called_within_step:
+        #     warnings.warn("To get the last learning rate computed by the scheduler, "
+        #                   "please use `get_last_lr()`.", UserWarning)
 
-        # Update lr for each individually 
-        return [(group['lr'] * self.decay_factors[i] if self._step_count < self.number_of_steps[i] else group["lr"]) for i, group in enumerate(self.optimizer.param_groups)]
+        # # Update lr for each individually 
+        # return [(group['lr'] * self.decay_factors[i] if self._step_count < self.number_of_steps[i] else group["lr"]) for i, group in enumerate(self.optimizer.param_groups)]
 
     def _get_closed_form_lr(self):
-        return [base_lr * self.decay_factors[i] ** min(self._step_count, self.number_of_steps[i]) for i, base_lr in enumerate(self.start_LR)]
+        # return [base_lr * self.decay_factors[i] ** min(self._step_count, self.number_of_steps[i]) for i, base_lr in enumerate(self.start_LR)]
+        return [base_lr * math.exp(self.log_decay_factors[i] * min(self._step_count, self.number_of_steps[i])) for i, base_lr in enumerate(self.start_LR)]
 
 
 

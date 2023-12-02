@@ -1,6 +1,7 @@
 from math import log2
-import argparse
+from dataclasses import dataclass
 
+import tyro
 import pytorch_lightning as pl
 import torch as th
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
@@ -18,27 +19,27 @@ from model_interpolation import NerfInterpolation, uniform_sampling_strategies, 
 from model_barf import BarfModel
 from model_mip import MipNeRF, MipBarf
 
+@dataclass(frozen=True)
+class Args:
+    camera_origin_noise_sigma: float = 0.15
+    camera_rotation_noise_sigma: float = 0.15 
+    start_blur_sigma: float = 200. 
+    start_pixel_width_sigma: float = 200
+    max_blur_sigma: float = 200 
+    n_blur_sigmas: int = 10
+    seed: int = 134534 
+    optimize_camera: bool = True
+
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--camera_origin_noise_sigma", type=float, default=0.4)
-    parser.add_argument("--camera_rotation_noise_sigma", type=float, default=0.4)
-    parser.add_argument("--start_blur_sigma", type=float, default=10.)
-    parser.add_argument("--start_pixel_width_sigma", type=float, default=200,)
-    parser.add_argument("--max_blur_sigma", type=float, default = 20)
-    parser.add_argument("--n_blur_sigmas", type=int, default=2)
-    parser.add_argument("--seed", type=int, default=134534)
-    parser.add_argument("--optimize_camera", action=argparse.BooleanOptionalAction, default=True)
-
-    args = parser.parse_args()
+    args = tyro.cli(Args)
     print(args)
     # print(f"mip that test barf runs")
-    # exit()
     # Set up data module
     BATCH_SIZE = 1024
     NUM_WORKERS = 3
-    IMAGE_SIZE = 400 # TODO 400
+    IMAGE_SIZE = 400
 
     if args.max_blur_sigma <= 0.25:
         SIGMAS_FOR_BLUR = [0.0, 0.0]
@@ -49,8 +50,9 @@ if __name__ == "__main__":
 
 
     print(SIGMAS_FOR_BLUR)
-    DECAY_END_STEP = 200000
-    DECAY_START_STEP = 20000
+    LR_DECAY_END_STEP = 200000
+    SIGMA_SCHEDULE_DECAY_START_STEP = 2000 #TODO 20000
+    SIGMA_SCHEDULE_DECAY_END_STEP = 100000
 
 
 
@@ -67,7 +69,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name=f"mipBaRF noise={args.camera_origin_noise_sigma} blur={args.start_blur_sigma} pixel_width={args.start_pixel_width_sigma} sigmas_for_blur={SIGMAS_FOR_BLUR}"
+        name=f"bipBARF noise={args.camera_origin_noise_sigma} blur={args.start_blur_sigma} pixel_width={args.start_pixel_width_sigma} sigmas_for_blur={SIGMAS_FOR_BLUR}"
         # name=f"testing integration/sample_strats - proposal={args.use_proposal}, {args.uniform_sampling_strategy}, {args.integration_strategy}, {args.uniform_sampling_offset_size}",
     )
 
@@ -81,8 +83,8 @@ if __name__ == "__main__":
         validation_fraction=0.06,
         validation_fraction_shuffle=1234,
         gaussian_blur_sigmas = SIGMAS_FOR_BLUR,
-        rotation_noise_sigma = args.camera_origin_noise_sigma,
-        translation_noise_sigma = args.camera_rotation_noise_sigma,
+        rotation_noise_sigma = args.camera_rotation_noise_sigma,
+        translation_noise_sigma = args.camera_origin_noise_sigma,
         batch_size=BATCH_SIZE,
         num_workers=NUM_WORKERS,
         shuffle=True,
@@ -161,7 +163,7 @@ if __name__ == "__main__":
         direction_encoder=direction_encoder,
         learning_rate_start=5e-4,
         learning_rate_stop=1e-5,
-        learning_rate_decay_end=DECAY_END_STEP
+        learning_rate_decay_end=LR_DECAY_END_STEP
     )
 
 
@@ -169,7 +171,7 @@ if __name__ == "__main__":
         n_training_images=dm.n_training_images,
         camera_learning_rate_start=1e-3 if args.optimize_camera else 0.,
         camera_learning_rate_stop=1e-5 if args.optimize_camera else 0.,
-        camera_learning_rate_decay_end=DECAY_END_STEP,
+        camera_learning_rate_decay_end=LR_DECAY_END_STEP,
         near_sphere_normalized=2,
         far_sphere_normalized=8,
         samples_per_ray_radiance=126,# 256,
@@ -177,8 +179,8 @@ if __name__ == "__main__":
         model_radiance=model_radiance,
         uniform_sampling_strategy = "equidistant",
         uniform_sampling_offset_size=-1.,
-        sigma_decay_start_step=DECAY_START_STEP,
-        sigma_decay_end_step=DECAY_END_STEP, #TODO fixme
+        sigma_decay_start_step=SIGMA_SCHEDULE_DECAY_START_STEP,
+        sigma_decay_end_step=SIGMA_SCHEDULE_DECAY_END_STEP,
         start_blur_sigma=args.start_blur_sigma,
         start_pixel_width_sigma=args.start_pixel_width_sigma,
     )
