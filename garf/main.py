@@ -23,7 +23,7 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name="garf-merge-test",
+        name="garf-",
     )
 
 
@@ -32,8 +32,8 @@ if __name__ == "__main__":
     NUM_WORKERS = 8
 
     dm = ImagePoseDataModule(
-        image_width=800,
-        image_height=800,
+        image_width=400,
+        image_height=400,
         scene_path="../data/lego",
         space_transform_scale=1,
         space_transform_translate=None,
@@ -103,9 +103,9 @@ if __name__ == "__main__":
 
     # Set up model
     # NOTE: Period is in epoch fractions
-    CAMERA_LEARNING_RATE_START = 1e-4
-    CAMERA_LEARNING_RATE_STOP = 1e-5
-    CAMERA_LEARNING_RATE_STOP_EPOCH = 3
+    CAMERA_LEARNING_RATE_START = 2e-3
+    CAMERA_LEARNING_RATE_STOP = 5e-5
+    CAMERA_LEARNING_RATE_STOP_EPOCH = 5.0
     CAMERA_LEARNING_RATE_PERIOD = 0.01
     CAMERA_LEARNING_RATE_DECAY: float = 2**(log2(CAMERA_LEARNING_RATE_STOP/CAMERA_LEARNING_RATE_START) * CAMERA_LEARNING_RATE_PERIOD/CAMERA_LEARNING_RATE_STOP_EPOCH) # type: ignore
     
@@ -133,8 +133,8 @@ if __name__ == "__main__":
         far_plane=7,
         proposal_samples_per_ray=64,
         radiance_samples_per_ray=192,
-        gaussian_init_min=1/2.,
-        gaussian_init_max=16,
+        gaussian_init_min=0.5,
+        gaussian_init_max=2.0,
         gaussian_learning_rate_factor=128.,
         proposal_learning_rate=PROPOSAL_LEARNING_RATE_START,
         proposal_learning_rate_stop_epoch=PROPOSAL_LEARNING_RATE_STOP_EPOCH,
