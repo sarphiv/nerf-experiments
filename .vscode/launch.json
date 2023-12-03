@@ -11,7 +11,7 @@
             "program": "${fileDirname}/main.py",
             "console": "integratedTerminal",
             "cwd": "${fileDirname}",
-            "justMyCode": true
+            "justMyCode": false
         },
         {
             "name": "Python: Current file",
@@ -20,7 +20,7 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "cwd": "${fileDirname}",
-            "justMyCode": true
+            "justMyCode": false
         }
     ]
 }

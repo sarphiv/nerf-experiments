@@ -537,9 +537,14 @@ class NerfInterpolation(pl.LightningModule):
 
         optimizer = th.optim.Adam(
             [
-                {"params": param_group["parameters"], "lr": param_group["learning_rate_start"]}
+                {
+                    "params": param_group["parameters"], 
+                    "lr": param_group["learning_rate_start"],
+                    "weight_decay": param_group["weight_decay"],
+                }
                 for param_group in self.param_groups
-            ]
+            ],
+            eps=1e-5
         )
 
         lr_scheduler = SchedulerLeNice(

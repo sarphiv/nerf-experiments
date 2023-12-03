@@ -40,7 +40,7 @@ class ProposalNetwork(NerfBaseModel):
             learning_rate_start, 
             learning_rate_stop, 
             learning_rate_decay_end,
-            weight_decay=weight_decay
+            weight_decay
         )
 
         self._add_param_group(
@@ -48,7 +48,7 @@ class ProposalNetwork(NerfBaseModel):
             learning_rate_start * gaussian_learning_rate_factor,
             learning_rate_stop * gaussian_learning_rate_factor,
             learning_rate_decay_end,
-            weight_decay=weight_decay
+            weight_decay
         )
 
 

@@ -52,6 +52,8 @@ class GarfModel(CameraCalibrationModel):
         # Samples per ray for radiance network for the volumetric rendering
         self.radiance_samples_per_ray = radiance_samples_per_ray
         
+        # Integration strategy
+        self.integration_strategy = "middle"
 
 
         # Proposal network estimates sampling density
@@ -341,6 +343,11 @@ class GarfModel(CameraCalibrationModel):
         self.log_dict(logs)
 
 
+        # # NOTE: Potentially fixes https://github.com/pytorch/pytorch/issues/13246#issuecomment-905703662
+        # if radiance_loss.is_cuda:
+        #     th.cuda.empty_cache()
+
+
         # Return loss
         return radiance_loss + proposal_loss
 
@@ -376,6 +383,11 @@ class GarfModel(CameraCalibrationModel):
 
         # Log metrics
         self.log_dict(logs)
+
+
+        # # NOTE: Potentially fixes https://github.com/pytorch/pytorch/issues/13246#issuecomment-905703662
+        # if radiance_loss.is_cuda:
+        #     th.cuda.empty_cache()
 
 
         return radiance_loss + proposal_loss

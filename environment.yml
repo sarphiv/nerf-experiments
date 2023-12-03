@@ -1,29 +1,28 @@
 name: nerf-experiments-env
 channels:
   - defaults
-  - conda-forge
   - nvidia
+  - conda-forge
 dependencies:
-  - pip
   - python=3.10.8
-  - gcc=12.3.0
+  - pip
   - gxx
+  - gcc=12.3.0
   - ninja
   - cuda-toolkit
   - cuda-nvcc
   - pip:
+    - --extra-index-url https://download.pytorch.org/whl/cu118
     - ipython
     - ipykernel
     - ipympl
     - tqdm
     - numpy
     - matplotlib
-    - scikit-learn
-    - scipy
-    - torch
+    - torch==2.0.0
     - torchvision
     - torchaudio
     - pytorch-lightning
-    - nerfacc
+    - nerfacc -f https://nerfacc-bucket.s3.us-west-2.amazonaws.com/whl/torch-2.0.0_cu118.html
     - tyro
     - wandb

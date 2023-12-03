@@ -70,7 +70,7 @@ class Log2dImageReconstruction(Callback):
             raise ValueError(f"period_start must be smaller than period_end, but is {delay_start} and {delay_end}")
         if reconstruction_batch_size <= 0:
             raise ValueError(f"reconstruction_batch_size must be positive, but is {reconstruction_batch_size}")
-        if reconstruction_num_workers <= 0:
+        if reconstruction_num_workers < 0:
             raise ValueError(f"reconstruction_num_workers must be positive, but is {reconstruction_num_workers}")
         if len(metric_name_val) == 0:
             raise ValueError(f"metric_name must not be empty")

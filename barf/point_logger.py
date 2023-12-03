@@ -58,7 +58,7 @@ class LogCameraExtrinsics(Callback):
             raise ValueError(f"period_start must be smaller than period_end, but is {delay_start} and {delay_end}")
         if batch_size <= 0:
             raise ValueError(f"batch_size must be positive, but is {batch_size}")
-        if num_workers <= 0:
+        if num_workers < 0:
             raise ValueError(f"num_workers must be positive, but is {num_workers}")
         if len(metric_name) == 0:
             raise ValueError(f"metric_name must not be empty")

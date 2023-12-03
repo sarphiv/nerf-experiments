@@ -11,21 +11,21 @@ from positional_encodings import PositionalEncoding
 class NerfBaseModel(nn.Module):
     def __init__(self):
         super().__init__()
-        self.param_groups: list[dict[Literal["parameters", "learning_rate_start", "learning_rate_stop", "learning_rate_decay_end"], float]] = []
+        self.param_groups: list[dict[Literal["parameters", "learning_rate_start", "learning_rate_stop", "learning_rate_decay_end", "weight_decay"], float]] = []
     
     def _add_param_group(self,
                          parameters: Iterator,
                          learning_rate_start: float,
                          learning_rate_stop: float,
                          learning_rate_decay_end: float,
-                         **optimizer_kwargs
+                         weight_decay: float = 0.0
                          ):
         self.param_groups.append({
             "parameters": parameters,
             "learning_rate_start": learning_rate_start,
             "learning_rate_stop": learning_rate_stop,
             "learning_rate_decay_end": learning_rate_decay_end,
-            **optimizer_kwargs
+            "weight_decay": weight_decay
          })
         
 

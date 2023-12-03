@@ -20,12 +20,12 @@ class Args:
     
     camera_origin_noise_sigma: float = 0.15
     camera_rotation_noise_sigma: float = 0.15
-    camera_learning_rate_start: float = 5e-3
+    camera_learning_rate_start: float = 2e-3
     camera_learning_rate_stop: float = 5e-5
-    camera_learning_rate_decay_end: float = 8.0
+    camera_learning_rate_decay_end: float = 5.0
     
-    gaussian_learning_rate_factor: float = 32.0
-    gaussian_init_max: float = 8.0
+    gaussian_learning_rate_factor: float = 128.0
+    gaussian_init_max: float = 2.0
     gaussian_init_min: float = 0.5
     
     radiance_learning_rate_start: float = 2e-4
@@ -40,7 +40,7 @@ class Args:
     
     image_size: int = 400
     batch_size: int = 1024
-    num_workers: int = 8
+    num_workers: int = 0
 
 
 
@@ -79,8 +79,6 @@ if __name__ == "__main__":
         shuffle=True,
         pin_memory=True
     )
-
-    dm.setup("fit")
 
 
     # Set up trainer

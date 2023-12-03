@@ -31,6 +31,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
                                                            # ANSWER: has already been done: if sigma is less than 0.25 no blur is applied
         validation_fraction: float = 1.0,
         validation_fraction_shuffle: Literal["disabled", "random"] | int = "disabled",
+        dataloader_seed: int = 0,
         verbose=False,
         *dataloader_args, **dataloader_kwargs
     ):
@@ -50,6 +51,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
             validation_fraction_shuffle (Literal["disabled", "random"] | int, optional): Whether to shuffle the validation data. 
                 If "disabled", validation data is not shuffled. If "random", validation data is shuffled randomly. 
                 If an integer, validation data is shuffled using the given random seed. Defaults to "disabled".
+            dataset_seed (int, optional): Seed for the dataset. Defaults to 0.
             *dataloader_args (Any): Additional arguments to pass to data loaders.
             **dataloader_kwargs (Any): Additional keyword arguments to pass to data loaders.
         """
@@ -77,6 +79,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         self.verbose = verbose
 
         # Store data loader arguments
+        self.dataloader_seed = dataloader_seed
         self.dataloader_args = dataloader_args
         self.dataloader_kwargs = dataloader_kwargs
 
@@ -200,6 +203,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         return DataLoader(
             self.dataset_train,
             # worker_init_fn=ImagePoseDataModule._worker_init_fn,
+            generator=th.Generator().manual_seed(self.dataloader_seed),
             *self.dataloader_args,
             **self.dataloader_kwargs
         )
@@ -253,6 +257,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         return DataLoader(
             dataset,
             # worker_init_fn=ImagePoseDataModule._worker_init_fn,
+            generator=th.Generator().manual_seed(self.dataloader_seed),
             *args,
             **kwargs
         )
@@ -262,6 +267,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         return DataLoader(
             self.dataset_test,
             # worker_init_fn=ImagePoseDataModule._worker_init_fn,
+            generator=th.Generator().manual_seed(self.dataloader_seed),
             *args,
             **kwargs
         )
