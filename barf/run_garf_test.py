@@ -40,7 +40,7 @@ class Args:
     
     image_size: int = 400
     batch_size: int = 1024
-    num_workers: int = 0
+    num_workers: int = 8
 
 
 
