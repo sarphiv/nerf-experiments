@@ -5,52 +5,57 @@ import pytorch_lightning as pl
 import torch as th
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger  # type: ignore
+import wandb
 
 from data_module import ImagePoseDataModule
 from image_logger import Log2dImageReconstruction
 from point_logger import LogCameraExtrinsics
 from epoch_fraction_logger import LogEpochFraction
-from model_builders import nerf_interpolation_builder, mip_barf_builder
-from model_camera_calibration import CameraCalibrationModel
 from model_interpolation_architecture import NerfModel
 from positional_encodings import BarfPositionalEncoding, IntegratedFourierFeatures, IntegratedBarfFourierFeatures, FourierFeatures
-from model_interpolation import NerfInterpolation, uniform_sampling_strategies, integration_strategies
 from model_barf import BarfModel
-from model_mip import MipNeRF, MipBarf
+
+
+def convert_iterations_to_epochs(iterations: int, batch_size: int, dataset_size_samples: int) -> float:
+    return iterations * batch_size / dataset_size_samples
 
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--camera_origin_noise_sigma", type=float, default=0.4)
-    parser.add_argument("--camera_rotation_noise_sigma", type=float, default=0.4)
-    parser.add_argument("--start_blur_sigma", type=float, default=10.)
-    parser.add_argument("--start_pixel_width_sigma", type=float, default=200,)
-    parser.add_argument("--max_blur_sigma", type=float, default = 20)
-    parser.add_argument("--n_blur_sigmas", type=int, default=2)
+    parser.add_argument("--camera_origin_noise_sigma", type=float, default=0.15)
+    parser.add_argument("--camera_rotation_noise_sigma", type=float, default=0.15)
+    parser.add_argument("--learn_camera", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--start_blur_sigma", type=float, default=0.)
+    parser.add_argument("--n_blur_sigmas", type=int, default=10)
     parser.add_argument("--seed", type=int, default=134534)
     parser.add_argument("--optimize_camera", action=argparse.BooleanOptionalAction, default=True)
 
     args = parser.parse_args()
+
+    if args.start_blur_sigma <= 0.25:
+        wandb_name = f"Naive-as-BARF translation={args.camera_origin_noise_sigma} rotation={args.camera_rotation_noise_sigma} learn_camera={args.learn_camera}"
+    else:
+        wandb_name = f"Naive-as-BARF translation={args.camera_origin_noise_sigma} rotation={args.camera_rotation_noise_sigma} learn_camera={args.learn_camera} blur={args.start_blur_sigma}"
+
     print(args)
     # print(f"mip that test barf runs")
     # exit()
     # Set up data module
     BATCH_SIZE = 1024
-    NUM_WORKERS = 3
-    IMAGE_SIZE = 400 # TODO 400
+    NUM_WORKERS = 4
+    IMAGE_SIZE = 400
 
-    if args.max_blur_sigma <= 0.25:
+    if args.start_blur_sigma <= 0.25:
         SIGMAS_FOR_BLUR = [0.0, 0.0]
     elif args.n_blur_sigmas <= 2:
-        SIGMAS_FOR_BLUR = [args.max_blur_sigma, 0.0]
+        SIGMAS_FOR_BLUR = [args.start_blur_sigma, 0.0]
     else:
-        SIGMAS_FOR_BLUR = (2**th.flip(th.linspace(-1, log2(args.max_blur_sigma), args.n_blur_sigmas - 1), dims=(0,))).round(decimals=2).tolist() + [0.0] 
+        SIGMAS_FOR_BLUR = (2**th.flip(th.linspace(-1, log2(args.start_blur_sigma), args.n_blur_sigmas - 1), dims=(0,))).round(decimals=2).tolist() + [0.0] 
 
 
     print(SIGMAS_FOR_BLUR)
-    DECAY_END_STEP = 200000
-    DECAY_START_STEP = 20000
+    LR_DECAY_END_STEP = 200000
 
 
 
@@ -67,22 +72,22 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name=f"mipBaRF noise={args.camera_origin_noise_sigma} blur={args.start_blur_sigma} pixel_width={args.start_pixel_width_sigma} sigmas_for_blur={SIGMAS_FOR_BLUR}"
+        name=wandb_name
         # name=f"testing integration/sample_strats - proposal={args.use_proposal}, {args.uniform_sampling_strategy}, {args.integration_strategy}, {args.uniform_sampling_offset_size}",
     )
 
     dm = ImagePoseDataModule(
         image_width=IMAGE_SIZE,
         image_height=IMAGE_SIZE,
-        space_transform_scale=1.,
+        space_transform_scale=1., # there is no scale right now
         space_transform_translate=th.Tensor([0,0,0]),
         scene_path="../data/lego",
         verbose=True,
         validation_fraction=0.06,
         validation_fraction_shuffle=1234,
         gaussian_blur_sigmas = SIGMAS_FOR_BLUR,
-        rotation_noise_sigma = args.camera_origin_noise_sigma,
-        translation_noise_sigma = args.camera_rotation_noise_sigma,
+        rotation_noise_sigma = args.camera_rotation_noise_sigma,
+        translation_noise_sigma = args.camera_origin_noise_sigma,
         batch_size=BATCH_SIZE,
         num_workers=NUM_WORKERS,
         shuffle=True,
@@ -142,14 +147,23 @@ if __name__ == "__main__":
     )
 
 
-    position_encoder = IntegratedFourierFeatures(
-        levels=10,
+    position_encoder = BarfPositionalEncoding(
+        levels=0,
+        alpha_start=0,
+        alpha_increase_start_epoch=0,
+        alpha_increase_end_epoch=0, 
         include_identity=True,
-        scale=1.,
-        distribute_variance=False,
+        scale=1.
     )
 
-    direction_encoder = BarfPositionalEncoding(0, 1, 0, 1, True)
+    direction_encoder = BarfPositionalEncoding(
+        levels=0,
+        alpha_start=0,
+        alpha_increase_start_epoch=0,
+        alpha_increase_end_epoch=0, 
+        include_identity=True,
+        scale=1.
+    )
 
     model_radiance = NerfModel(
         n_hidden=4,
@@ -161,26 +175,22 @@ if __name__ == "__main__":
         direction_encoder=direction_encoder,
         learning_rate_start=5e-4,
         learning_rate_stop=1e-5,
-        learning_rate_decay_end=DECAY_END_STEP
+        learning_rate_decay_end=LR_DECAY_END_STEP
     )
 
-
-    model = MipBarf(
+    model = BarfModel(
         n_training_images=dm.n_training_images,
-        camera_learning_rate_start=1e-3 if args.optimize_camera else 0.,
-        camera_learning_rate_stop=1e-5 if args.optimize_camera else 0.,
-        camera_learning_rate_decay_end=DECAY_END_STEP,
+        camera_learning_rate_start=1e-3 if args.learn_camera else 0.0,
+        camera_learning_rate_stop=1e-5 if args.learn_camera else 0.0,
+        camera_learning_rate_decay_end=LR_DECAY_END_STEP,
         near_sphere_normalized=2,
         far_sphere_normalized=8,
-        samples_per_ray_radiance=126,# 256,
-        samples_per_ray_proposal=0,# 64,
+        samples_per_ray_radiance=256,
+        samples_per_ray_proposal=0,
         model_radiance=model_radiance,
         uniform_sampling_strategy = "equidistant",
         uniform_sampling_offset_size=-1.,
-        sigma_decay_start_step=DECAY_START_STEP,
-        sigma_decay_end_step=DECAY_END_STEP, #TODO fixme
-        start_blur_sigma=args.start_blur_sigma,
-        start_pixel_width_sigma=args.start_pixel_width_sigma,
+        max_gaussian_sigma=args.start_blur_sigma
     )
 
 

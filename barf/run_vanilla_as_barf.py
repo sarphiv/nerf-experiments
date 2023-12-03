@@ -25,6 +25,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--camera_origin_noise_sigma", type=float, default=0.15)
     parser.add_argument("--camera_rotation_noise_sigma", type=float, default=0.15)
+    parser.add_argument("--learn_camera", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--start_blur_sigma", type=float, default=0.)
     parser.add_argument("--n_blur_sigmas", type=int, default=10)
     parser.add_argument("--seed", type=int, default=134534)
@@ -33,9 +34,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.start_blur_sigma <= 0.25:
-        wandb_name = f"BARF translation={args.camera_origin_noise_sigma} rotation={args.camera_rotation_noise_sigma}"
+        wandb_name = f"Vanilla-as-BARF translation={args.camera_origin_noise_sigma} rotation={args.camera_rotation_noise_sigma} learn_camera={args.learn_camera}"
     else:
-        wandb_name = f"BARF translation={args.camera_origin_noise_sigma} rotation={args.camera_rotation_noise_sigma} blur={args.start_blur_sigma}"
+        wandb_name = f"Vanilla-as-BARF translation={args.camera_origin_noise_sigma} rotation={args.camera_rotation_noise_sigma} learn_camera={args.learn_camera} blur={args.start_blur_sigma}"
 
     print(args)
     # print(f"mip that test barf runs")
@@ -55,8 +56,6 @@ if __name__ == "__main__":
 
     print(SIGMAS_FOR_BLUR)
     LR_DECAY_END_STEP = 200000
-    ALPHA_DECAY_START_STEP = 20000
-    ALPHA_DECAY_END_STEP = 100000
 
 
 
@@ -150,19 +149,19 @@ if __name__ == "__main__":
 
     position_encoder = BarfPositionalEncoding(
         levels=10,
-        alpha_start=0,
-        alpha_increase_start_epoch=convert_iterations_to_epochs(ALPHA_DECAY_START_STEP, BATCH_SIZE, dm.n_training_images*IMAGE_SIZE**2),
-        alpha_increase_end_epoch=convert_iterations_to_epochs(ALPHA_DECAY_END_STEP, BATCH_SIZE, dm.n_training_images*IMAGE_SIZE**2), 
-        include_identity=True,
+        alpha_start=10,
+        alpha_increase_start_epoch=0,
+        alpha_increase_end_epoch=0, 
+        include_identity=False,
         scale=1.
     )
 
     direction_encoder = BarfPositionalEncoding(
         levels=4,
-        alpha_start=0,
-        alpha_increase_start_epoch=convert_iterations_to_epochs(ALPHA_DECAY_START_STEP, BATCH_SIZE, dm.n_training_images*IMAGE_SIZE**2),
-        alpha_increase_end_epoch=convert_iterations_to_epochs(ALPHA_DECAY_END_STEP, BATCH_SIZE, dm.n_training_images*IMAGE_SIZE**2), 
-        include_identity=True,
+        alpha_start=4,
+        alpha_increase_start_epoch=0,
+        alpha_increase_end_epoch=0, 
+        include_identity=False,
         scale=1.
     )
 
@@ -179,17 +178,31 @@ if __name__ == "__main__":
         learning_rate_decay_end=LR_DECAY_END_STEP
     )
 
+    model_proposal = NerfModel(
+        n_hidden=4,
+        hidden_dim=256,
+        delayed_direction=True,
+        delayed_density=False,
+        n_segments=2,
+        position_encoder=position_encoder,
+        direction_encoder=direction_encoder,
+        learning_rate_start=5e-4,
+        learning_rate_stop=1e-5,
+        learning_rate_decay_end=LR_DECAY_END_STEP
+    )
+
 
     model = BarfModel(
         n_training_images=dm.n_training_images,
-        camera_learning_rate_start=1e-3,
-        camera_learning_rate_stop=1e-5,
+        camera_learning_rate_start=1e-3 if args.learn_camera else 0.0,
+        camera_learning_rate_stop=1e-5 if args.learn_camera else 0.0,
         camera_learning_rate_decay_end=LR_DECAY_END_STEP,
         near_sphere_normalized=2,
         far_sphere_normalized=8,
-        samples_per_ray_radiance=128,# 256,
-        samples_per_ray_proposal=0,# 64,
+        samples_per_ray_radiance=256,
+        samples_per_ray_proposal=64,
         model_radiance=model_radiance,
+        model_proposal=model_proposal,
         uniform_sampling_strategy = "equidistant",
         uniform_sampling_offset_size=-1.,
         max_gaussian_sigma=args.start_blur_sigma

@@ -89,7 +89,7 @@ class BarfPositionalEncoding(PositionalEncoding):
         if epoch < self.alpha_increase_start_epoch:
             alpha = self.alpha_start
 
-        elif self.alpha_increase_start_epoch <= epoch <= self.alpha_increase_end_epoch:
+        elif self.alpha_increase_start_epoch <= epoch < self.alpha_increase_end_epoch:
             alpha = (
                 self.alpha_start
                 + (epoch - self.alpha_increase_start_epoch)

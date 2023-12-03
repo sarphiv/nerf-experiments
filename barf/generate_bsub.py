@@ -2,7 +2,8 @@ import os
 from model_interpolation import uniform_sampling_strategies, integration_strategies
 
 def executer(*args):
-    raise NotImplementedError
+    print("WARN: called not working executer")
+    return False, "nothin"
 
 # helper function for combining argument iterables.
 def combinations_iterator(*args):
@@ -109,15 +110,17 @@ tmp_scripts_path   = "/work3/s204111/nerf-experiments/bsub_scripts" # where to w
 
 
 #################### sampling tests
-main_file          = "run_sampling_test.py"
-# argument_iterables = [[23423,3446,444444], uniform_sampling_strategies.__args__[::-1], integration_strategies.__args__, [0, -1]]
-args_iter = combinations_iterator([23423,3446,444444], uniform_sampling_strategies.__args__[::-1], ["middle"], [0, -1])
 
-args_iter = [
-    f"python {main_file} --uniform_sampling_strategy=equidistant --integration_strategy=middle --uniform_sampling_offset_size=-1 --seed=5436456",
-    f"python {main_file} --uniform_sampling_strategy=equidistant --integration_strategy=middle --uniform_sampling_offset_size=-1 --seed=23423",
-    f"python {main_file} --uniform_sampling_strategy=equidistant --integration_strategy=middle --uniform_sampling_offset_size=-1 --seed=7886",
-]
+
+# main_file          = "run_sampling_test.py"
+# # argument_iterables = [[23423,3446,444444], uniform_sampling_strategies.__args__[::-1], integration_strategies.__args__, [0, -1]]
+# args_iter = combinations_iterator([23423,3446,444444], uniform_sampling_strategies.__args__[::-1], ["middle"], [0, -1])
+
+# args_iter = [
+#     f"python {main_file} --uniform_sampling_strategy=equidistant --integration_strategy=middle --uniform_sampling_offset_size=-1 --seed=5436456",
+#     f"python {main_file} --uniform_sampling_strategy=equidistant --integration_strategy=middle --uniform_sampling_offset_size=-1 --seed=23423",
+#     f"python {main_file} --uniform_sampling_strategy=equidistant --integration_strategy=middle --uniform_sampling_offset_size=-1 --seed=7886",
+# ]
 
 
 
@@ -127,16 +130,21 @@ args_iter = [
 ###################### # mip barf
 
 
-# main_file        = "run_mip_barf_test.py"
-# start_pixel_width_sigmas = [200, None]
-# start_blur_sigmas = [0, 3, 15]
-# camera_noise_sigmas = [0.15, 0.3]
-# n_blur_sigmass = [2, 10]
-# seeds = [12312]#,422,1114]#,2]
+main_file        = "run_bip_barf.py"
+start_pixel_width_sigmas = [None]
+start_blur_sigmas = [0, 20, 100, 200]
+camera_noise_sigmas = [0.15]
+n_blur_sigmass = [10]
+seeds = [12312]#,422,1114]#,2]
 
 
-# argument_iterables = [seeds, start_pixel_width_sigmas, start_blur_sigmas, n_blur_sigmass, camera_noise_sigmas]
+argument_iterables = [seeds, start_pixel_width_sigmas, start_blur_sigmas, n_blur_sigmass, camera_noise_sigmas]
 
+def executer(seed, start_pixel_width_sigma, start_blur_sigma, n_blur_sigmas, camera_noise_sigma, ):
+    if start_pixel_width_sigma is None: start_pixel_width_sigma = start_blur_sigma
+    return True, f"python {main_file} --seed {seed}  --start_pixel_width_sigma {start_pixel_width_sigma}  --start_blur_sigma {start_blur_sigma}  --n_blur_sigmas {n_blur_sigmas}  --camera_origin_noise_sigma {camera_noise_sigma} --camera_rotation_noise_sigma {camera_noise_sigma}"  
+
+args_iter = combinations_iterator(*argument_iterables)
 
 ########################### don't touch below this line ############################################
 
