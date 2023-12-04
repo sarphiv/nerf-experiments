@@ -34,7 +34,7 @@ class Args:
     proposal_weight_decay: float = 1e-8
 
     learning_rate_minimum: float = 2e-5
-    learning_rate_period: float = 1.5
+    learning_rate_period: float = 0.7
     momentum: float = 0.9
 
     image_size: int = 400
@@ -83,7 +83,6 @@ if __name__ == "__main__":
     th.set_float32_matmul_precision("medium")
 
     trainer = pl.Trainer(
-        enable_progress_bar=False,
         accelerator="auto",
         max_epochs=40,
         precision="16-mixed",

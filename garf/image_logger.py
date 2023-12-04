@@ -146,8 +146,14 @@ class Log2dImageReconstruction(Callback):
             # Get rays for image
             idx = dataset.image_name_to_index[name]
             idx_underlying = dataset.index_to_index[idx] 
-            origins = dataset.ray_origins[idx].view(-1, 3)
-            directions = dataset.ray_directions[idx].view(-1, 3)
+
+            if self.dataset_name == "train":
+                origins = dataset.ray_origins_noisy[idx].view(-1, 3)
+                directions = dataset.ray_directions_noisy[idx].view(-1, 3)
+            else:
+                origins = dataset.ray_origins[idx].view(-1, 3)
+                directions = dataset.ray_directions[idx].view(-1, 3)
+
 
             # Set up data loader for validation image
             data_loader = DataLoader(

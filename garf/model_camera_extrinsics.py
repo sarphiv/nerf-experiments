@@ -54,9 +54,6 @@ class CameraExtrinsics(nn.Module):
         """
         # Translation
         t = self.translation[i]
-         
-        # Create the rotation matrix
-        
 
         # Get the new rotation and translation
         new_o = o + t
