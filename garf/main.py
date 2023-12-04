@@ -21,24 +21,21 @@ class Args:
     
     camera_origin_noise_sigma: float = 0.15
     camera_rotation_noise_sigma: float = 0.15
-    camera_learning_rate_start: float = 2e-3
-    camera_learning_rate_stop: float = 5e-5
-    camera_learning_rate_decay_end: float = 5.0
+    camera_learning_rate: float = 2e-3
     
     gaussian_learning_rate_factor: float = 128.0
     gaussian_init_max: float = 2.0
     gaussian_init_min: float = 0.5
     
-    radiance_learning_rate_start: float = 2e-4
-    radiance_learning_rate_stop: float = 8e-6
-    radiance_learning_rate_decay_end: float = 8.0
+    radiance_learning_rate: float = 2e-4
     radiance_weight_decay: float = 1e-9
     
-    proposal_learning_rate_start: float = 5e-4
-    proposal_learning_rate_stop: float = 5e-6
-    proposal_learning_rate_decay_end: float = 8.0
+    proposal_learning_rate: float = 5e-4
     proposal_weight_decay: float = 1e-8
-    
+
+    learning_rate_minimum: float = 2e-5
+    learning_rate_period: float = 1.5
+
     image_size: int = 400
     batch_size: int = 1024
     num_workers: int = 8
@@ -157,11 +154,7 @@ if __name__ == "__main__":
 
     model = CameraCalibrationModel(
         n_training_images=dm.n_training_images,
-        
-        camera_learning_rate_start=args.camera_learning_rate_start,
-        camera_learning_rate_stop=args.camera_learning_rate_stop,
-        camera_learning_rate_decay_end=epoch_fraction_to_steps(args.camera_learning_rate_decay_end),
-
+        camera_learning_rate=args.camera_learning_rate,
         pose_error_logging_period=10,
 
         near_plane=2,
@@ -173,15 +166,14 @@ if __name__ == "__main__":
         gaussian_init_max=args.gaussian_init_max,
         gaussian_learning_rate_factor=args.gaussian_learning_rate_factor,
 
-        proposal_learning_rate_start=args.proposal_learning_rate_start,
-        proposal_learning_rate_stop=args.proposal_learning_rate_stop,
-        proposal_learning_rate_decay_end=epoch_fraction_to_steps(args.proposal_learning_rate_decay_end),
+        proposal_learning_rate=args.proposal_learning_rate,
         proposal_weight_decay=args.proposal_weight_decay,
         
-        radiance_learning_rate_start=args.radiance_learning_rate_start,
-        radiance_learning_rate_stop=args.radiance_learning_rate_stop,
-        radiance_learning_rate_decay_end=epoch_fraction_to_steps(args.radiance_learning_rate_decay_end),
+        radiance_learning_rate=args.radiance_learning_rate,
         radiance_weight_decay=args.radiance_weight_decay,
+        
+        learning_rate_minimum=args.learning_rate_minimum,
+        learning_rate_period=epoch_fraction_to_steps(args.learning_rate_period)
     )
 
     # Log model gradients and parameters

@@ -15,9 +15,7 @@ class CameraCalibrationModel(GarfModel):
     def __init__(
         self, 
         n_training_images: int,
-        camera_learning_rate_start: float,
-        camera_learning_rate_stop: int = 10,
-        camera_learning_rate_decay_end: float = 0.999,
+        camera_learning_rate: float,
         pose_error_logging_period: int = 10,
         *inner_model_args, 
         **inner_model_kwargs,
@@ -29,10 +27,9 @@ class CameraCalibrationModel(GarfModel):
         self.camera_extrinsics = CameraExtrinsics(n_training_images)
 
         # Store hyperparameters
-        self.camera_learning_rate_start = camera_learning_rate_start
-        self.camera_learning_rate_stop = camera_learning_rate_stop
-        self.camera_learning_rate_decay_end = camera_learning_rate_decay_end
+        self.camera_learning_rate = camera_learning_rate
 
+        # Store logging parameters
         self.pose_error_logging_period = pose_error_logging_period
 
 
@@ -309,25 +306,6 @@ class CameraCalibrationModel(GarfModel):
         )
 
 
-    def _camera_optimizer_step(self, loss: th.Tensor):
-        # NOTE: Assuming camera loss is calculated right after radiance loss.
-        #  This saves a backwards pass by using the same graph.
-        #  If this is not the case, then the step function should be altered
-        self._camera_optimizer.zero_grad()
-        self.manual_backward(loss)
-        self._camera_optimizer.step()
-
-
-    def _camera_scheduler_step(self, batch_idx: int):
-        epoch_fraction = self.trainer.current_epoch + batch_idx/self.trainer.num_training_batches
-
-        if (
-            epoch_fraction >= self._camera_learning_rate_milestone and
-            epoch_fraction <= self.camera_learning_rate_stop
-        ):
-            self._camera_learning_rate_milestone += self.camera_learning_rate_period
-            
-
 
     def _forward_loss(self, batch: DatasetOutput):
         # Decontsruct batch
@@ -347,16 +325,10 @@ class CameraCalibrationModel(GarfModel):
             ray_colors_raw
         ))
 
-
-        # Compute the camera loss
-        # TODO: Should probably be changed to a different loss function
-        camera_loss = nn.functional.mse_loss(ray_colors_pred, ray_colors_raw)
-
-
         # Return color prediction and losses
         return (
             ray_colors_pred,
-            (proposal_loss, radiance_loss, camera_loss)
+            (proposal_loss, radiance_loss)
         )
 
 
@@ -418,20 +390,7 @@ class CameraCalibrationModel(GarfModel):
         batch = self.training_transform(batch)
 
         # Forward pass
-        _, (proposal_loss, radiance_loss, camera_loss) = self._forward_loss(batch)
-
-        # Backward pass and step through each optimizer
-        self._proposal_optimizer_step(proposal_loss)
-        self._radiance_optimizer_step(radiance_loss)
-        # NOTE: Assuming camera loss is calculated right after radiance loss.
-        #  This saves a backwards pass by using the same graph.
-        #  If this is not the case, then the step function should be altered
-        self._camera_optimizer_step(camera_loss)
-
-        # Step learning rate schedulers
-        self._proposal_learning_rate_scheduler.step()
-        self._radiance_learning_rate_scheduler.step()
-        self._camera_learning_rate_scheduler.step()
+        _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
 
         # Log metrics
         self.log_dict(self._get_logging_losses(
@@ -443,7 +402,7 @@ class CameraCalibrationModel(GarfModel):
 
 
         # Return loss
-        return radiance_loss
+        return radiance_loss + proposal_loss
 
 
     def validation_step(self, batch: DatasetOutput, batch_idx: int):
@@ -452,7 +411,7 @@ class CameraCalibrationModel(GarfModel):
         batch = self.validation_transform(batch)
 
         # Forward pass
-        _, (proposal_loss, radiance_loss, camera_loss) = self._forward_loss(batch)
+        _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
 
         # Log metrics
         self.log_dict(self._get_logging_losses(
@@ -463,35 +422,23 @@ class CameraCalibrationModel(GarfModel):
         ))
 
         # Return loss
-        return radiance_loss
-
+        return radiance_loss + proposal_loss
 
 
 
     def configure_optimizers(self):
         # Configure super optimizers
-        optimizers, schedulers = super().configure_optimizers()
+        optimizer_config = super().configure_optimizers()
         
-        # Set up optimizer and schedulers for camera extrinsics
-        self._camera_optimizer = th.optim.Adam(
-            self.camera_extrinsics.parameters(), 
-            lr=self.camera_learning_rate_start
-        )
+        # Add camera extrinsics parameters to optimizer
+        optimizer_config["optimizer"].add_param_group({
+            "params": self.camera_extrinsics.parameters(),
+            "lr": self.camera_learning_rate
+        })
 
-        self._camera_learning_rate_scheduler = th.optim.lr_scheduler.ExponentialLR(
-            self._camera_optimizer, 
-            gamma=self._calculate_decay_factor(
-                self.camera_learning_rate_start, 
-                self.camera_learning_rate_stop, 
-                self.camera_learning_rate_decay_end
-            )
-        )
+        optimizer_config["lr_scheduler"]["scheduler"].base_lrs.append(self.camera_learning_rate)
 
 
         # Set optimizers and schedulers
-        return (
-            optimizers + [self._camera_optimizer],
-            schedulers + [self._camera_learning_rate_scheduler]
-        )
-
+        return optimizer_config
 
