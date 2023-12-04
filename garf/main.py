@@ -35,6 +35,7 @@ class Args:
 
     learning_rate_minimum: float = 2e-5
     learning_rate_period: float = 1.5
+    momentum: float = 0.9
 
     image_size: int = 400
     batch_size: int = 1024
@@ -174,7 +175,8 @@ if __name__ == "__main__":
         radiance_weight_decay=args.radiance_weight_decay,
         
         learning_rate_minimum=args.learning_rate_minimum,
-        learning_rate_period=epoch_fraction_to_steps(args.learning_rate_period)
+        learning_rate_period=epoch_fraction_to_steps(args.learning_rate_period),
+        momentum=args.momentum
     )
 
     # Log model gradients and parameters
