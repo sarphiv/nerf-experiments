@@ -21,16 +21,16 @@ class Args:
     
     camera_origin_noise_sigma: float = 0.15
     camera_rotation_noise_sigma: float = 0.15
-    camera_learning_rate: float = 2e-3
+    camera_learning_rate: float = 6e-3
     
     gaussian_learning_rate_factor: float = 128.0
     gaussian_init_max: float = 2.0
     gaussian_init_min: float = 0.5
     
-    radiance_learning_rate: float = 2e-4
+    radiance_learning_rate: float = 8e-4
     radiance_weight_decay: float = 1e-9
     
-    proposal_learning_rate: float = 5e-4
+    proposal_learning_rate: float = 8e-4
     proposal_weight_decay: float = 1e-8
 
     learning_rate_minimum: float = 2e-5
