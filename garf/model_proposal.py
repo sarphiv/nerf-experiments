@@ -7,7 +7,8 @@ from gaussian import GaussAct
 
 
 class ProposalNetwork(nn.Module):
-    def __init__(self, 
+    def __init__(
+        self, 
         gaussian_init_min: float,
         gaussian_init_max: float,
     ):
@@ -51,5 +52,5 @@ class ProposalNetwork(nn.Module):
         return iter(self._parameters_gaussian)
 
 
-    def forward(self, pos: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+    def forward(self, pos: th.Tensor) -> th.Tensor:
         return self.model(pos)

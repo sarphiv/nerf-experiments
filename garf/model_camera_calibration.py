@@ -15,11 +15,10 @@ class CameraCalibrationModel(GarfModel):
     def __init__(
         self, 
         n_training_images: int,
-        camera_learning_rate: float,
-        camera_learning_rate_stop_epoch: int = 10,
-        camera_learning_rate_decay: float = 0.999,
-        camera_learning_rate_period: float = 0.4,
-        camera_weight_decay: float = 0.0,
+        camera_learning_rate_start: float,
+        camera_learning_rate_stop: int = 10,
+        camera_learning_rate_decay_end: float = 0.999,
+        pose_error_logging_period: int = 10,
         *inner_model_args, 
         **inner_model_kwargs,
     ):  
@@ -30,14 +29,11 @@ class CameraCalibrationModel(GarfModel):
         self.camera_extrinsics = CameraExtrinsics(n_training_images)
 
         # Store hyperparameters
-        self.camera_learning_rate = camera_learning_rate
-        self.camera_learning_rate_stop_epoch = camera_learning_rate_stop_epoch
-        self.camera_learning_rate_decay = camera_learning_rate_decay
-        self.camera_learning_rate_period = camera_learning_rate_period
-        self.camera_weight_decay = camera_weight_decay
+        self.camera_learning_rate_start = camera_learning_rate_start
+        self.camera_learning_rate_stop = camera_learning_rate_stop
+        self.camera_learning_rate_decay_end = camera_learning_rate_decay_end
 
-        self._camera_learning_rate_milestone = camera_learning_rate_period
-
+        self.pose_error_logging_period = pose_error_logging_period
 
 
     ##############################################################
@@ -45,7 +41,7 @@ class CameraCalibrationModel(GarfModel):
 
     # TODO: make static method.
     # TODO: maybe change convention, such that output R has shape (1, 3, 3) - makes broadcasting easier?
-    def kabsch_algorithm(self, point_cloud_from: th.Tensor, point_cloud_to: th.Tensor): 
+    def kabsch_algorithm(self, point_cloud_from: th.Tensor, point_cloud_to: th.Tensor, remove_outliers: bool=True): 
         """
         Align "point_cloud_from" to "point_cloud_to" with a matrix R and a vector t.
         align_rotation: helper function that optimizes the subproblem ||P - R@Q||^2 using SVD
@@ -111,6 +107,26 @@ class CameraCalibrationModel(GarfModel):
 
         # C1_hat = R@(C2 - m2)*c + m1 = R@c*C2 + (m1 - R@c*m2) => t = m1 - R@c*m2
         t = mean_to - (th.matmul(R, mean_from.T)*c).T
+        
+        # If remove outliers, compute the transformed points and run the algorithm again
+        if remove_outliers: 
+            # Get from in to coordinates 
+            point_cloud_from_hat = th.matmul(R, point_cloud_from.unsqueeze(-1)).squeeze(-1)*c + t
+            # Get distances 
+            distances = th.linalg.norm(point_cloud_from_hat - point_cloud_to, dim=1)
+            
+            # Find the 10 % max quantile 
+            to_remove_quantile = th.quantile(distances, 0.9)
+            # Create mask that keeps smaller distances than the quantile
+            point_cloud_mask = distances < to_remove_quantile
+            
+            # Remove outliers
+            point_cloud_from = point_cloud_from[point_cloud_mask]
+            point_cloud_to = point_cloud_to[point_cloud_mask]
+            
+            # Run the algorithm again
+            R, t, c = self.kabsch_algorithm(point_cloud_from, point_cloud_to, remove_outliers=False)
+            
 
         return R, t, c
 
@@ -149,11 +165,14 @@ class CameraCalibrationModel(GarfModel):
         origs_model = th.matmul(R, origs_val.unsqueeze(-1)).squeeze(-1)*c + t
         dirs_model = th.matmul(R, dirs_val.unsqueeze(-1)).squeeze(-1)
 
-        return origs_model, dirs_model, post_transform_params   
+        return origs_model, dirs_model, post_transform_params
 
 
     def compute_post_transform_params(
             self,
+            from_raw_to_pred = True,
+            return_origs = False,
+            remove_outliers = True
             ) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
         """
         Computes the transform params (R, t, c) used for transforming
@@ -187,25 +206,31 @@ class CameraCalibrationModel(GarfModel):
         #               (provided by datamodule and fed to camera extrinsics)
         dataset = cast(ImagePoseDataset, self.trainer.datamodule.dataset_train)
         # NOTE (lauge): Get the original indices of the images - to be passed to camera_extrinsics
-        img_idxs = list(dataset.index_to_index.values())
+        img_idxs = list([dataset.index_to_index[idx] for idx in range(dataset.n_images)])
         img_idxs = th.tensor(img_idxs, device=self.device, dtype=th.int32)
         origs_raw = dataset.camera_origins.to(self.device)
         origs_noisy = dataset.camera_origins_noisy.to(self.device)
         origs_pred, _ = self.camera_extrinsics.forward_origins(img_idxs, origs_noisy)
 
-
         # Align raw space to predicted model space
-        post_transform_params = self.kabsch_algorithm(origs_raw, origs_pred)
+        if from_raw_to_pred:
+            post_transform_params = self.kabsch_algorithm(origs_raw, origs_pred, remove_outliers=remove_outliers)
+        else:
+            post_transform_params = self.kabsch_algorithm(origs_pred, origs_raw, remove_outliers=remove_outliers)
 
-        return post_transform_params
+        if return_origs:
+            return post_transform_params, origs_raw, origs_pred
+        else:
+            return post_transform_params
+
+
 
     ##############################################################
     # Batch transformations
-
     def validation_transform(self, batch: DatasetOutput) -> DatasetOutput:
         """
-        Takes in a validation batch and transforms the noisy rays to the predicting space
-        using the validation_transform_rays() method.
+        Takes in a validation batch and transforms the raw rays (ground truth poses)
+        to the predicting space using the validation_transform_rays() method.
         
         Parameters:
         -----------
@@ -237,7 +262,7 @@ class CameraCalibrationModel(GarfModel):
             ray_origs_pred, 
             ray_dirs_raw, 
             ray_dirs_pred, 
-            ray_colors_raw[:, 0, ...], 
+            ray_colors_raw, 
             img_idx
         )
 
@@ -279,11 +304,9 @@ class CameraCalibrationModel(GarfModel):
             ray_origs_pred, 
             ray_dirs_raw, 
             ray_dirs_pred, 
-            ray_colors_raw[:, 0, ...], 
+            ray_colors_raw, 
             img_idx
         )
-
-
 
 
     def _camera_optimizer_step(self, loss: th.Tensor):
@@ -300,10 +323,10 @@ class CameraCalibrationModel(GarfModel):
 
         if (
             epoch_fraction >= self._camera_learning_rate_milestone and
-            epoch_fraction <= self.camera_learning_rate_stop_epoch
+            epoch_fraction <= self.camera_learning_rate_stop
         ):
             self._camera_learning_rate_milestone += self.camera_learning_rate_period
-            self._camera_learning_rate_scheduler.step()
+            
 
 
     def _forward_loss(self, batch: DatasetOutput):
@@ -337,6 +360,49 @@ class CameraCalibrationModel(GarfModel):
         )
 
 
+    def _get_logging_losses(
+        self, 
+        stage: Literal["train", "val", "test"],
+        batch_idx: int, 
+        proposal_loss: th.Tensor, 
+        radiance_loss: th.Tensor,
+        *args, 
+        **kwargs
+    ) -> dict[str, th.Tensor]:
+        # Get usual losses
+        losses = super()._get_logging_losses(
+            stage, 
+            batch_idx, 
+            proposal_loss, 
+            radiance_loss, 
+            *args, 
+            **kwargs
+        )
+        
+        # If pose error should be calculated, log pose error too
+        if batch_idx % self.pose_error_logging_period == 0:
+            (R, t, c), origs_raw, origs_pred = self.compute_post_transform_params(
+                from_raw_to_pred=False, 
+                return_origs=True,
+                remove_outliers=True
+            )
+
+            origs_pred_aligned = th.matmul(
+                R.unsqueeze(0), 
+                origs_pred.unsqueeze(2)
+            ).squeeze(2)*c + t
+
+            pose_error = (((origs_raw - origs_pred_aligned)**2).sum(dim=1)**0.5).mean()
+
+            return {
+                **losses,
+                f"{stage}_pose_error": pose_error
+            }
+        # Else, return usual losses
+        else:
+            return losses
+        
+
 
     def training_step(self, batch: DatasetOutput, batch_idx: int):
         """Perform a single training forward pass, optimization step, and logging.
@@ -363,13 +429,14 @@ class CameraCalibrationModel(GarfModel):
         self._camera_optimizer_step(camera_loss)
 
         # Step learning rate schedulers
-        self._proposal_scheduler_step(batch_idx)
-        self._radiance_scheduler_step(batch_idx)
-        self._camera_scheduler_step(batch_idx)
+        self._proposal_learning_rate_scheduler.step()
+        self._radiance_learning_rate_scheduler.step()
+        self._camera_learning_rate_scheduler.step()
 
         # Log metrics
-        self.log_dict(super()._get_logging_losses(
+        self.log_dict(self._get_logging_losses(
             "train",
+            batch_idx,
             proposal_loss,
             radiance_loss
         ))
@@ -388,8 +455,9 @@ class CameraCalibrationModel(GarfModel):
         _, (proposal_loss, radiance_loss, camera_loss) = self._forward_loss(batch)
 
         # Log metrics
-        self.log_dict(super()._get_logging_losses(
+        self.log_dict(self._get_logging_losses(
             "val",
+            batch_idx,
             proposal_loss,
             radiance_loss
         ))
@@ -407,13 +475,16 @@ class CameraCalibrationModel(GarfModel):
         # Set up optimizer and schedulers for camera extrinsics
         self._camera_optimizer = th.optim.Adam(
             self.camera_extrinsics.parameters(), 
-            lr=self.camera_learning_rate, 
-            weight_decay=self.camera_weight_decay,
+            lr=self.camera_learning_rate_start
         )
 
         self._camera_learning_rate_scheduler = th.optim.lr_scheduler.ExponentialLR(
             self._camera_optimizer, 
-            gamma=self.camera_learning_rate_decay
+            gamma=self._calculate_decay_factor(
+                self.camera_learning_rate_start, 
+                self.camera_learning_rate_stop, 
+                self.camera_learning_rate_decay_end
+            )
         )
 
 

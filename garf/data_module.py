@@ -2,6 +2,7 @@ import os
 from copy import copy
 from typing import Any, Optional, Literal, cast, Union
 from itertools import product
+import warnings
 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import LambdaCallback
@@ -26,9 +27,10 @@ class ImagePoseDataModule(pl.LightningDataModule):
         rotation_noise_sigma: float=1.0,
         translation_noise_sigma: float=1.0,
         camera_noise_seed: Optional[int]=None,
-        gaussian_blur_sigmas: Optional[list[float]]=[0.0], # TODO: change such that default argument is none, and then gaussian blur is disabled
         validation_fraction: float = 1.0,
         validation_fraction_shuffle: Literal["disabled", "random"] | int = "disabled",
+        dataloader_seed: int = 0,
+        verbose=False,
         *dataloader_args, **dataloader_kwargs
     ):
         """Initialize the data module.
@@ -42,13 +44,11 @@ class ImagePoseDataModule(pl.LightningDataModule):
             rotation_noise_sigma (float, optional): Standard deviation of rotation noise in radians. Defaults to 1.0.
             translation_noise_sigma (float, optional): Standard deviation of translation noise. Defaults to 1.0.
             camera_noise_seed (Optional[int], optional): Seed for the camera noise generator. Defaults to None.
-            gaussian_blur_kernel_size (int, optional): Kernel size of the Gaussian blur. Defaults to 40.
-            gaussian_blur_relative_sigma_start (float, optional): Starting relative sigma of the Gaussian blur. Defaults to 0..
-            gaussian_blur_relative_sigma_decay (float, optional): Relative sigma decay of the Gaussian blur. Defaults to 1..
             validation_fraction (float, optional): Fraction of the validation dataset to use for validation. Defaults to 1.0.
             validation_fraction_shuffle (Literal["disabled", "random"] | int, optional): Whether to shuffle the validation data. 
                 If "disabled", validation data is not shuffled. If "random", validation data is shuffled randomly. 
                 If an integer, validation data is shuffled using the given random seed. Defaults to "disabled".
+            dataset_seed (int, optional): Seed for the dataset. Defaults to 0.
             *dataloader_args (Any): Additional arguments to pass to data loaders.
             **dataloader_kwargs (Any): Additional keyword arguments to pass to data loaders.
         """
@@ -68,19 +68,29 @@ class ImagePoseDataModule(pl.LightningDataModule):
         self.translation_noise_sigma = translation_noise_sigma
         self.camera_noise_seed = camera_noise_seed
         
-        self.gaussian_blur_sigmas = gaussian_blur_sigmas
         # Store validation dataset splitting arguments
         self.validation_fraction = validation_fraction
         self.validation_fraction_shuffle = validation_fraction_shuffle
 
+        self.verbose = verbose
+
         # Store data loader arguments
+        self.dataloader_seed = dataloader_seed
         self.dataloader_args = dataloader_args
         self.dataloader_kwargs = dataloader_kwargs
 
 
-    @staticmethod
-    def _worker_init_fn(worker_id):
-        os.sched_setaffinity(0, range(os.cpu_count())) 
+    @property
+    def n_training_images(self):
+        if hasattr(self, "dataset_train"):
+            return self.dataset_train.n_images
+        elif hasattr(self, "_n_training_images"):
+            return self._n_training_images
+        else:
+            images_path = os.path.join(self.scene_path, "train").replace("\\", "/")
+            self._n_training_images = len(os.listdir(images_path))
+            return self._n_training_images
+
 
     def _get_dataset(self, purpose: Literal["train", "val", "test"]) -> ImagePoseDataset:
         """Get dataset for given purpose.
@@ -104,7 +114,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
             rotation_noise_sigma=self.rotation_noise_sigma,
             translation_noise_sigma=self.translation_noise_sigma,
             noise_seed=None if self.camera_noise_seed is None else self.camera_noise_seed + hash(purpose),
-            gaussian_blur_sigmas = self.gaussian_blur_sigmas,
+            verbose=self.verbose
         )
 
         return dataset
@@ -119,12 +129,11 @@ class ImagePoseDataModule(pl.LightningDataModule):
         match stage:
             case "fit":
                 self.dataset_val = self._get_dataset("val")
-                
-                # TODO: What is this? 
-                # Prepare cache of validation data
+ 
+                # Prepare cache of validation dataset fraction
                 self._dataset_val_cache = None
                 self._dataset_val_cache_settings = None
-                # self.val_dataloader()
+                self.val_dataloader()
 
 
             case "test":
@@ -133,6 +142,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
 
             case "predict":
                 pass
+
 
 
     def _disable_shuffle_arg(self, dataloader_args: tuple, dataloader_kwargs: dict) -> Any:
@@ -150,7 +160,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
     def train_dataloader(self):
         return DataLoader(
             self.dataset_train,
-            worker_init_fn=ImagePoseDataModule._worker_init_fn,
+            generator=th.Generator().manual_seed(self.dataloader_seed),
             *self.dataloader_args,
             **self.dataloader_kwargs
         )
@@ -203,7 +213,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         # Return data loader of validation dataset
         return DataLoader(
             dataset,
-            worker_init_fn=ImagePoseDataModule._worker_init_fn,
+            generator=th.Generator().manual_seed(self.dataloader_seed),
             *args,
             **kwargs
         )
@@ -212,84 +222,7 @@ class ImagePoseDataModule(pl.LightningDataModule):
         args, kwargs = self._disable_shuffle_arg(self.dataloader_args, self.dataloader_kwargs)
         return DataLoader(
             self.dataset_test,
-            worker_init_fn=ImagePoseDataModule._worker_init_fn,
+            generator=th.Generator().manual_seed(self.dataloader_seed),
             *args,
             **kwargs
         )
-
-
-
-    # def _get_camera_center_rays(self, dataset: ImagePoseDataset, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
-    #     """Get camera center rays from dataset. Rays are ordered by camera index.
-        
-    #     Args:
-    #         dataset (ImagePoseDataset): Dataset to get camera center rays from.
-    #         device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
-
-    #     Returns:
-    #         tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]: Raw and noisy camera center rays (origins, directions).
-    #     """
-    #     # Get indices to access corners of image
-    #     corner_idx = list(zip(*product((0, dataset.image_height-1), range(dataset.image_width))))
-
-    #     def get_center_ray(
-    #         origins_store: dict[str, th.Tensor], 
-    #         directions_store: dict[str, th.Tensor]
-    #     ) -> tuple[th.Tensor, th.Tensor]:
-    #         # Retrieve camera focal point
-    #         origins = th.vstack([origin[0, 0] for origin in origins_store.values()])
-    #         origins.to()
-
-    #         # Retrieve image corners and take their mean to get optical center ray (normalized)
-    #         directions = th.stack([direction[corner_idx] for direction in directions_store.values()])
-    #         directions = directions.mean(dim=1)
-    #         directions = directions / th.norm(directions, dim=1, keepdim=True)
-
-    #         # If device given, move to device
-    #         if device is not None:
-    #             origins = origins.to(device)
-    #             directions = directions.to(device)
-
-    #         # Return center rays for each image
-    #         return origins, directions
-
-
-    #     # Return raw and noisy camera center rays
-    #     return (
-    #         get_center_ray(dataset.origins_raw, dataset.directions_raw), 
-    #         get_center_ray(dataset.origins_noisy, dataset.directions_noisy)
-    #     )
-
-
-    # def train_camera_center_rays(self, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
-    #     """Get camera center rays from training dataset. Rays are ordered by camera index.
-
-    #     Args:
-    #         device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
-
-    #     Returns:
-    #         tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]: Raw and noisy camera center rays (origins, directions).
-    #     """
-    #     return self._get_camera_center_rays(self.dataset_train, device)
-
-    # def val_camera_center_rays(self, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
-    #     """Get camera center rays from training dataset. Rays are ordered by camera index.
-
-    #     Args:
-    #         device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
-
-    #     Returns:
-    #         tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]: Raw and noisy camera center rays (origins, directions).
-    #     """
-    #     return self._get_camera_center_rays(self.dataset_val, device)
-
-    # def test_camera_center_rays(self, device: Optional[Union[th.device, str]] = None) -> tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]:
-    #     """Get camera center rays from training dataset. Rays are ordered by camera index.
-
-    #     Args:
-    #         device (Optional[Union[th.device, str]], optional): Device to put camera center rays on. Defaults to None, which uses default device.
-
-    #     Returns:
-    #         tuple[tuple[th.Tensor, th.Tensor], tuple[th.Tensor, th.Tensor]]: Raw and noisy camera center rays (origins, directions).
-    #     """
-    #     return self._get_camera_center_rays(self.dataset_test, device)

@@ -1,7 +1,5 @@
 import torch as th
 import torch.nn as nn
-
-
 class CameraExtrinsics(nn.Module):
     def __init__(self, n_train_images: int) -> None:
         super().__init__()

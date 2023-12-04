@@ -33,7 +33,6 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         rotation_noise_sigma: float=1.0,
         translation_noise_sigma: float=1.0,
         noise_seed: Optional[int]=None,
-        gaussian_blur_sigmas: list[float]=[0.0], # NOTE: the last element is reserved for the original image (0.0)
         verbose: bool=False, 
     ) -> None:
         """Loads images, camera info, and generates rays for each pixel in each image.
@@ -55,15 +54,14 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             * `rotation_noise_sigma` `(float, optional)`: Sigma parameter for the rotation noise in radians. Defaults to 1.0.
             * `translation_noise_sigma` `(float, optional)`: Sigma parameter for the translation noise. Defaults to 1.0.
             * `noise_seed` `(Optional[int], optional)`: Seed for the noise generator. Defaults to None.
-            * `sigmas` `(list[float], optional)`: List of sigmas/radii for the gaussian smoothing. Defaults to [0.0], which means no smoothing.
             * `verbose` `(bool, optional)`: Whether to print progress. Defaults to False.
         
         Details:
         --------
         `space_transform_scale` and `space_transform_translate` are used to transform the camera to world matrices such that the cameras are centered.
-        However, it uses the convention, where the input is actually the inverse of the transformation that is applied to the camera to world matrices.
+        However, it uses the convention, where the transform arguments are actually the inverse of the transformation that is applied to the camera to world matrices.
         This means, that, camera_poses_original = space_transform_scale * camera_poses_transformed + space_transform_translate,
-        where camera_poses_original is the original camera to world matrices, and camera_poses_transformed is the transformed camera to world matrices.
+        where camera_poses_original are the original camera to world matrices, and camera_poses_transformed are the transformed camera to world matrices.
 
         """
         super().__init__()
@@ -85,7 +83,6 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         self.rotation_noise_sigma = rotation_noise_sigma
         self.translation_noise_sigma = translation_noise_sigma
         self.noise_seed = noise_seed
-        self.gaussian_blur_sigmas = gaussian_blur_sigmas
 
 
         print_verbose("Loading camera info...")
@@ -96,17 +93,17 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             self.image_width,
         )
 
-        
         # Load images
-        (self.images,
-         self.image_name_to_index,
-         self.image_index_to_name,
-         self.index_to_index,
-         self.n_images) = ImagePoseDataset._load_images(
+        (
+            self.images,
+            self.image_name_to_index,
+            self.image_index_to_name,
+            self.index_to_index,
+            self.n_images
+        ) = ImagePoseDataset._load_images(
             self.images_path, 
             self.image_height,
             self.image_width, 
-            self.gaussian_blur_sigmas,
             verbose,
         )
 
@@ -120,7 +117,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             space_transform_scale,
             space_transform_translate,
             self.image_index_to_name,
-            self.n_images
+            self.n_images,
         )
 
         print_verbose("Generating rays...")
@@ -153,9 +150,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         )
         
         print_verbose("Done loading data!")
-        
-        # NOTE: This is only for bug fixing (to see that validation transform works)
-        # self._screw_up_original_camera_poses_for_testing_validation_transform_in_CameraCalibrationModel()
+
 
     ######### static methods ###############
 
@@ -163,7 +158,6 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
     def _load_images(images_path: str,
                      image_height: int,
                      image_width,
-                     sigmas: list[float],
                      verbose=False
                      ) -> tuple[th.Tensor, dict[str, int], dict[int, str], dict[int, int], int]: 
         """
@@ -176,15 +170,13 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             * `images_path`: str - path to the directory containing the images
             * `img_height`: int - height of the images
             * `img_width`: int - width of the images
-            * `sigmas`: list[float] - list of sigmas/radii for the gaussian smoothing
         
         Returns:
         --------
-            * `images`: `th.Tensor(N, H, W, n_sigmas, 3)` - the images, where
+            * `images`: `th.Tensor(N, H, W, 3)` - the images, where
                 N is the number of images,
                 H is the height of the images,
                 W is the width of the images, and 
-                n_sigmas is the number of sigmas/radii for the gaussian smoothing.
             * `image_name_to_index`: `dict[str, int]` - a dict that maps from image name
                 to the index of the corresponding image in images.
             * `image_index_to_name`: `dict[int, str]` - a dict that maps from the index
@@ -228,39 +220,15 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         white_image = Image.new("RGBA", (image_width, image_height), (255, 255, 255, 255))
         images = [Image.alpha_composite(white_image, img).convert('RGB') for img in images]
 
-        # Apply gaussian smoothing
-        if verbose: iterator = tqdm(images, desc="Applying gaussian blur")
-        else: iterator = images
-        images = [ImagePoseDataset.gaussian_blur(img, sigmas) for img in iterator]
-
         # Convert to tensor
         PIL_to_tensor = tv.transforms.ToTensor()
-        if verbose: iterator = tqdm(images, desc="Converting to tensor")
-        else: iterator = images
-        images = th.stack([th.stack([PIL_to_tensor(img) for img in imgs]) for imgs in iterator]) # shape is (N, n_sigmas, 3, H, W)
+        images = th.stack([PIL_to_tensor(img) for img in images]) # shape is (N, 3, H, W)
 
         # Permute channels to (N, H, W, n_sigmas, C) for each image
-        images = images.permute(0, 3, 4, 1, 2)
-        # images = th[imgs.permute(2, 3, 0, 1) for imgs in images]
-
-        # Store all images in one Tensor(N, H, W, n_sigmas, 3)
-        # images = th.stack(images, dim=0)
+        images = images.permute(0, 2, 3, 1)
 
         return images, image_name_to_index, image_index_to_name, index_to_index, n_images
 
-    @staticmethod
-    def gaussian_blur(img: Image.Image, sigmas: list[float], min_sigma = 0.25) -> list[Image.Image]:
-        """
-        Apply gaussian blurring to the image with the given sigmas.
-        """
-        imgs = [] 
-
-        # Apply gaussian smoothing
-        for sigma in sigmas:
-            if sigma > min_sigma: imgs.append(img.filter(ImageFilter.GaussianBlur(radius=sigma)))
-            else: imgs.append(img)
-
-        return imgs
 
     @staticmethod
     def _load_camera_info(camera_info_path: str, image_width: int) -> tuple[float, dict[str, th.Tensor]]:
@@ -372,7 +340,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
 
         camera_to_worlds_output = th.stack(
             [
-                (camera_to_worlds[image_index_to_name[index]] - translate_matrix)/scale_matrix
+                (camera_to_worlds[image_index_to_name[index]] - translate_matrix) / scale_matrix 
                 for index in range(n_images)
             ],
             dim = 0
@@ -406,6 +374,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
         camera_directions = th.matmul(camera_to_worlds[:, :3, :3], th.tensor([0,0,-1.]).view(1,3,1)).squeeze(-1) # th.stack([th.tensor([0., 0., -1.])@c2w[:3, :3].T for c2w in camera_to_worlds.values()], dim=0)# old code: 
 
         return camera_origins, camera_directions
+
 
     @staticmethod
     def _get_directions_meshgrid(image_height: int, image_width: int, focal_length: float) -> th.Tensor:
@@ -485,6 +454,7 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             th.matmul(camera_to_worlds[:, :3, :3].unsqueeze(1), meshgrid.unsqueeze(0).unsqueeze(-1)).squeeze(-1) 
         )
 
+
     @staticmethod
     def _apply_noise(camera_origins: th.Tensor,
                      camera_directions: th.Tensor,
@@ -535,8 +505,9 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
 
         return camera_origins_noisy, camera_directions_noisy, ray_origins_noisy, ray_directions_noisy
 
-    ######### instance methods ###############
 
+
+    ######### Instance methods ###############
     def subset_dataset(self, image_indices: th.Tensor | list[int|str]):
         """
         Subset data by image indices.
@@ -606,8 +577,8 @@ class ImagePoseDataset(Dataset[DatasetOutput]):
             o_n, 
             d_r.view(-1, 3)[i], 
             d_n.view(-1, 3)[i], 
-            img.view(-1, len(self.gaussian_blur_sigmas), 3)[i],
-            th.tensor(self.index_to_index[img_idx])
+            img.view(-1, 3)[i],
+            th.tensor(self.index_to_index[img_idx]),
         )
 
 

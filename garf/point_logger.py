@@ -7,7 +7,6 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import Callback
 from pytorch_lightning.loggers import WandbLogger #type: ignore
 import wandb
-from tqdm import tqdm
 
 from data_module import ImagePoseDataModule
 from model_camera_calibration import CameraCalibrationModel
@@ -58,7 +57,7 @@ class LogCameraExtrinsics(Callback):
             raise ValueError(f"period_start must be smaller than period_end, but is {delay_start} and {delay_end}")
         if batch_size <= 0:
             raise ValueError(f"batch_size must be positive, but is {batch_size}")
-        if num_workers <= 0:
+        if num_workers < 0:
             raise ValueError(f"num_workers must be positive, but is {num_workers}")
         if len(metric_name) == 0:
             raise ValueError(f"metric_name must not be empty")
@@ -113,9 +112,9 @@ class LogCameraExtrinsics(Callback):
         if step < self.logging_start:
             return
 
-        # # If not at the right step, return
-        # if step < self.logging_milestone:
-        #     return
+        # If not at the right step, return
+        if step < self.logging_milestone and step != 0:
+            return
 
         # Update logging milestop and log
         self.logging_milestone = step + self._get_next_delay(step)
@@ -155,8 +154,10 @@ class LogCameraExtrinsics(Callback):
         origins_raw_colors = blue.repeat(n_images, 1) # th.hstack((th.ones(n_images, 2, device=model.device) * 255, th.zeros(n_images, 1, device=model.device)))
         
         # NOTE: Red is wrong everything, green is correct origin, blue is correct direction
-        # NOTE: See that everything that is outside one standard deviation of the original origins are red, and within a standard devition we graduate from green to red
-        origins_pred_errors = th.norm(camera_origs_raw - camera_origs_pred, dim=1).view(-1, 1) / th.std(camera_origs_raw, dim=0).norm()
+        # relic : # NOTE: See that everything that is outside one standard deviation of the original origins are red, and within a standard devition we graduate from green to red
+        # origins_pred_errors = th.norm(camera_origs_raw - camera_origs_pred, dim=1).view(-1, 1) / th.std(camera_origs_raw, dim=0).norm()
+        # NOTE: A point is red if it is one 10'th of the maximum distance between any two points away from the original point cloud
+        origins_pred_errors = th.norm(camera_origs_raw - camera_origs_pred, dim=1).view(-1, 1)* 10 / th.cdist(camera_origs_raw, camera_origs_raw).max()
         origins_pred_errors = origins_pred_errors.clip(0, 1)
         origins_pred_colors = red * origins_pred_errors + green*(1- origins_pred_errors) #th.hstack((origins_pred_errors, 255 - origins_pred_errors, th.zeros(n_images, 1, device=model.device)))
 

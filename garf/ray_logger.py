@@ -17,33 +17,31 @@ from data_module import ImagePoseDataset
 from model_camera_calibration import CameraCalibrationModel
 
 
-class Log2dImageReconstruction(Callback):
+class LogRay(Callback):
     def __init__(
         self, 
         wandb_logger: WandbLogger, 
         dataset_name: Literal["train", "val"],
         image_names: list[str],
+        samples_per_ray: int,
         logging_start: float | int,
         delay_start: float | int,
         delay_end: float | int,
         delay_taper: float | int,
-        batch_size: int,
-        num_workers: int,
-        metric_name="val_img",
+        metric_name="val_ray",
     ) -> None:
-        """Log a 2D image reconstruction of some image.
+        """Log rays of the validation image.
         
         Args:
             wandb_logger (WandbLogger): Weights and biases logger.
             dataset_name (Literal["train", "val"]): Name of the dataset to log.
-            image_names (list[str]): Names of the images.
+            image_names (list[str]): Names of the images to use rays from.
+            samples_per_ray (int): Number of samples per ray.
             skip_start (float | int): Epoch fraction at which logging starts.
             delay_start (float | int): Initial delay between reconstructions.
             delay_end (float | int): Final delay between reconstructions to approach.
             delay_taper (float | int): At half `delay_taper` steps, 
                 the logging delay should be halfway between `delay_start` and `delay_end`.
-            batch_size (int): Batch size for the reconstruction.
-            num_workers (int): Number of workers for the data loader.
             metric_name (str): Name of the metric to log.
 
         """
@@ -52,6 +50,8 @@ class Log2dImageReconstruction(Callback):
         # Verify arguments
         if len(image_names) == 0:
             raise ValueError(f"image_names must not be empty")
+        if samples_per_ray <= 0:
+            raise ValueError(f"samples_per_ray must be positive, but is {samples_per_ray}")
         if logging_start < 0:
             raise ValueError(f"logging_start must be non-negative, but is {logging_start}")
         if delay_start < 0:
@@ -62,10 +62,6 @@ class Log2dImageReconstruction(Callback):
             raise ValueError(f"delay_taper must be positive, but is {delay_taper}")
         if delay_start > delay_end:
             raise ValueError(f"period_start must be smaller than period_end, but is {delay_start} and {delay_end}")
-        if batch_size <= 0:
-            raise ValueError(f"batch_size must be positive, but is {batch_size}")
-        if num_workers < 0:
-            raise ValueError(f"num_workers must be positive, but is {num_workers}")
         if len(metric_name) == 0:
             raise ValueError(f"metric_name must not be empty")
 
@@ -75,14 +71,13 @@ class Log2dImageReconstruction(Callback):
 
         self.dataset_name = dataset_name
         self.image_names = image_names
+        self.samples_per_ray = samples_per_ray
 
         self.logging_start = logging_start
         self.delay_start = delay_start
         self.delay_end = delay_end
         self.delay_taper = delay_taper
-        
-        self.batch_size = batch_size
-        self.num_workers = num_workers
+
         self.metric_name = metric_name
 
         # Calculate next reconstruction step
@@ -136,65 +131,120 @@ class Log2dImageReconstruction(Callback):
             dataset = cast(ImagePoseDataset, trainer.datamodule.dataset_val)
 
 
-        # Store reconstructed images on CPU
-        images = []
+        # Store reconstructed ray plots on CPU
+        ray_plots = []
         transform_params = None
-
-
-        # Reconstruct each image
-        for name in tqdm(self.image_names, desc=f"Reconstructing images ({self.metric_name})", leave=False):
+        
+        # Examine rays of images
+        for name in tqdm(self.image_names, desc=f"Reconstructing rays ({self.metric_name})", leave=False):
             # Get rays for image
             idx = dataset.image_name_to_index[name]
-            idx_underlying = dataset.index_to_index[idx] 
-            origins = dataset.ray_origins[idx].view(-1, 3)
-            directions = dataset.ray_directions[idx].view(-1, 3)
+            idx_underlying = th.tensor([dataset.index_to_index[idx]]).to(model.device).view(1, 1)
+            ray_orig_center = dataset.camera_origins[idx].to(model.device).view(1, 3)
+            ray_dir_center = dataset.camera_directions[idx].to(model.device).view(1, 3)
 
-            # Set up data loader for validation image
-            data_loader = DataLoader(
-                dataset=TensorDataset(
-                    origins, 
-                    directions
-                ),
-                batch_size=self.batch_size,
-                num_workers=self.num_workers,
-                shuffle=False,
-                pin_memory=True
-            )
+            # Transform rays
+            if self.dataset_name == "train":
+                ray_orig_center, ray_dir_center, _, _ = model.camera_extrinsics.forward(
+                    idx_underlying, 
+                    ray_orig_center, 
+                    ray_dir_center
+                )
+            else:
+                ray_orig_center, ray_dir_center, transform_params = model.validation_transform_rays(
+                    ray_orig_center, 
+                    ray_dir_center, 
+                    transform_params
+                )
 
-            # Iterate over batches of rays to get RGB values
-            rgb = th.empty((dataset.image_batch_size, 3), dtype=cast(th.dtype, model.dtype))
-            i = 0
+
+            bin_width = (model.far_plane - model.near_plane)/self.samples_per_ray
             
-            for ray_origs, ray_dirs in tqdm(data_loader, desc="Predicting RGB values", leave=False):
-                # Prepare for model prediction
-                ray_origs = ray_origs.to(model.device)
-                ray_dirs = ray_dirs.to(model.device)
+            # Compute the intervals for the center ray
+            center_ray_t_start = th.linspace(
+                model.near_plane, 
+                model.far_plane, 
+                self.samples_per_ray, 
+                device=model.device
+            )
 
-                # Transform origins to model space
-                if self.dataset_name == "train":
-                    ray_origs, ray_dirs, _, _ = model.camera_extrinsics.forward(idx_underlying, ray_origs, ray_dirs)
-                else:
-                    ray_origs, ray_dirs, transform_params = model.validation_transform_rays(ray_origs, ray_dirs, transform_params)
+            center_ray_t_end = center_ray_t_start + bin_width
+            
+            # Compute the positions for the given t values
+            pos_samples = model._get_positions(
+                ray_orig_center, 
+                ray_dir_center, 
+                center_ray_t_start.view(1,-1), 
+                center_ray_t_end.view(1,-1)
+            )
 
-                # Get size of batch
-                batch_size = ray_origs.shape[0]
-                
-                # Predict RGB values
-                rgb[i:i+batch_size, :] = model.forward(ray_origs, ray_dirs)[0].clip(0, 1).cpu()
+            # Evaluate density and color at sample positions
+            radiance_color, radiance_density = model.radiance_network.forward(
+                pos_samples.view(-1, 3),
+                ray_dir_center.broadcast_to(pos_samples.shape).view(-1, 3)
+            )
 
-                # Update write head
-                i += batch_size
-
-
-            # Store image on CPU
-            # NOTE: Cannot pass tensor as channel dimension is in numpy format
-            images.append(
-                rgb.view(dataset.image_height, dataset.image_width, 3).detach().numpy()
+            proposal_density = model.proposal_network.forward(
+                pos_samples.view(-1, 3)
             )
 
 
-        # Log all images
+            # Make a Figure and attach it to a canvas.
+            fig = Figure(figsize=(5, 4), dpi=300)
+            canvas = FigureCanvasAgg(fig)
+
+            # Plot the center ray
+            ax = fig.add_subplot(111)
+
+            x = center_ray_t_start.view(-1).cpu().detach().numpy()
+            col = radiance_color.view(-1, 3).cpu().detach().numpy()
+            y = radiance_density.view(-1).cpu().detach().numpy()
+            y2 = proposal_density.view(-1).cpu().detach().numpy()
+            y_max = max(y.max(), y2.max())
+
+            # Plot vertical bars with adjusted width
+            for xi, radiance_color in zip(x, col):
+                ax.bar(
+                    xi, 
+                    y_max*1.1, 
+                    color=radiance_color, 
+                    alpha=1., 
+                    align='edge', 
+                    width=bin_width*1.1
+                )
+
+            # Plot the density graph
+            ax.plot(x, y, color='red', markersize=0.3, label = "Radiance density")
+            ax.plot(x, y2, color='green', markersize=0.3, label = "Proposal density")
+
+
+            # Get handles for data that have already been plotted to axis
+            handles, labels = ax.get_legend_handles_labels()
+
+            # Manually define a new patch 
+            patch = mpatches.Patch(color=[100/255,75/255,0/255], label='Color')
+
+            # Append manual color patch
+            handles.append(patch) 
+
+            # Set axis labels
+            ax.set_xlabel("t")
+            ax.set_ylabel("density")
+            ax.legend(handles=handles)
+            ax.set_title(f"Center ray ({name})")
+
+            # Retrieve a view on the render buffer
+            canvas.draw()
+            buf = canvas.buffer_rgba()
+
+
+            # Convert to NumPy array and store for logging
+            ray_plots.append(np.asarray(buf))
+
+
+        # Log all plots
         self.logger.log_image(
             key=self.metric_name, 
-            images=images
+            images=ray_plots
         )
+
