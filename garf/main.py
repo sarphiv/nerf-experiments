@@ -82,7 +82,7 @@ if __name__ == "__main__":
     th.set_float32_matmul_precision("medium")
 
     trainer = pl.Trainer(
-        show_progress_bar=False,
+        enable_progress_bar=False,
         accelerator="auto",
         max_epochs=40,
         precision="16-mixed",
