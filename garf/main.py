@@ -97,7 +97,7 @@ if __name__ == "__main__":
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
                 logging_start=0.000,
-                delay_start=1/200,
+                delay_start=1/32,
                 delay_end=1/4,
                 delay_taper=5.0,
                 dataset_name="train",
@@ -109,7 +109,7 @@ if __name__ == "__main__":
             Log2dImageReconstruction(
                 wandb_logger=wandb_logger,
                 logging_start=0.000,
-                delay_start=1/200,
+                delay_start=1/32,
                 delay_end=1/4,
                 delay_taper=5.0,
                 dataset_name="val",
@@ -121,7 +121,7 @@ if __name__ == "__main__":
             LogRay(
                 wandb_logger=wandb_logger,
                 logging_start=0.000,
-                delay_start=1/800,
+                delay_start=1/32,
                 delay_end=1/4,
                 delay_taper=5.0,
                 dataset_name="val",
