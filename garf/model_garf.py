@@ -30,8 +30,7 @@ class GarfModel(pl.LightningModule):
         radiance_learning_rate: float,
         radiance_weight_decay: float,
         learning_rate_minimum: float,
-        learning_rate_period: int,
-        momentum: float
+        learning_rate_period: int
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -59,7 +58,6 @@ class GarfModel(pl.LightningModule):
         
         self.learning_rate_minimum = learning_rate_minimum
         self.learning_rate_period = learning_rate_period
-        self.momentum = momentum
 
         # Proposal network estimates sampling density
         self.proposal_network = ProposalNetwork(
@@ -333,7 +331,7 @@ class GarfModel(pl.LightningModule):
 
 
     def configure_optimizers(self):
-        optimizer = th.optim.SGD(
+        optimizer = th.optim.Adam(
             [
                 # Set up proposal parameter groups
                 { 
@@ -359,8 +357,7 @@ class GarfModel(pl.LightningModule):
                     "weight_decay": self.radiance_weight_decay,
                 },
             ],
-            momentum=self.momentum,
-            nesterov=True
+            eps=1e-4
         )
 
 
