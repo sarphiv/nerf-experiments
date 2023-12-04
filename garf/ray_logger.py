@@ -214,8 +214,8 @@ class LogRay(Callback):
                 )
 
             # Plot the density graph
-            ax.plot(x, y, color='red', markersize=0.3, label = "Radiance density")
-            ax.plot(x, y2, color='green', markersize=0.3, label = "Proposal density")
+            ax.plot(x, y, color='red', markersize=0.3, label = "Radiance")
+            ax.plot(x, y2, color='green', markersize=0.3, label = "Proposal")
 
 
             # Get handles for data that have already been plotted to axis
@@ -229,7 +229,7 @@ class LogRay(Callback):
 
             # Set axis labels
             ax.set_xlabel("t")
-            ax.set_ylabel("density")
+            ax.set_ylabel("Density")
             ax.legend(handles=handles)
             ax.set_title(f"Center ray ({name})")
 
