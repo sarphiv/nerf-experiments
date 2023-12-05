@@ -55,8 +55,11 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(
         project="nerf-experiments", 
         entity="metrics_logger",
-        name=args.name,
+        name=args.name or f"garf:r{args.camera_rotation_noise_sigma:.2f}+t{args.camera_origin_noise_sigma:.2f}",
     )
+
+    # Add arguments
+    wandb_logger.experiment.config.update(args)
 
 
     # Set up data module
