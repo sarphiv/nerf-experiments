@@ -297,24 +297,15 @@ class GarfModel(pl.LightningModule):
 
 
         # Optimization step
-        self.proposal_optimizer.zero_grad()
-        self.radiance_optimizer.zero_grad()
-        self.manual_backward(proposal_loss + radiance_loss)
-        self.proposal_optimizer.step()
-        self.radiance_optimizer.step()
+        optimizer = self.optimizers(use_pl_optimizer=False)
+        scheduler = self.lr_schedulers()
 
-        self.proposal_scheduler.step()
-        self.radiance_scheduler.step()
-        # self.proposal_optimizer.zero_grad()
-        # self.manual_backward(proposal_loss, retain_graph=True)
-        # self.proposal_optimizer.step()
+        optimizer.zero_grad()
+        loss = radiance_loss + proposal_loss
+        self.manual_backward(loss)
 
-        # self.radiance_optimizer.zero_grad()
-        # self.manual_backward(radiance_loss)
-        # self.radiance_optimizer.step()
-
-        # self.proposal_scheduler.step()
-        # self.radiance_scheduler.step()
+        optimizer.step()
+        scheduler.step()
 
 
         # Log metrics
@@ -356,9 +347,9 @@ class GarfModel(pl.LightningModule):
 
 
     def configure_optimizers(self):
-        # Set up proposal optimizer
-        self.proposal_optimizer = th.optim.Adam(
+        optimizer = th.optim.Adam(
             [
+                # Set up proposal parameter groups
                 { 
                     "params": self.proposal_network.parameters_linear(),
                     "lr": self.proposal_learning_rate,
@@ -368,22 +359,10 @@ class GarfModel(pl.LightningModule):
                     "params": self.proposal_network.parameters_gaussian(), 
                     "lr": self.gaussian_learning_rate_factor * self.proposal_learning_rate,
                     "weight_decay": self.proposal_weight_decay,
-                }
-            ],
-            eps=1e-4
-        )
-        
-        self.proposal_scheduler = th.optim.lr_scheduler.CosineAnnealingLR(
-            self.proposal_optimizer,
-            T_max=self.learning_rate_period,
-            eta_min=self.learning_rate_minimum
-        )
-
-
-        # Set up radiance optimizer
-        self.radiance_optimizer = th.optim.Adam(
-            [
-                {
+                },
+                
+                # Set up radiance optimizers
+                { 
                     "params": self.radiance_network.parameters_linear(),
                     "lr": self.radiance_learning_rate,
                     "weight_decay": self.radiance_weight_decay,
@@ -397,12 +376,13 @@ class GarfModel(pl.LightningModule):
             eps=1e-4
         )
 
-        self.radiance_scheduler = th.optim.lr_scheduler.CosineAnnealingLR(
-            self.radiance_optimizer,
+
+        scheduler = th.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
             T_max=self.learning_rate_period,
             eta_min=self.learning_rate_minimum
         )
 
 
         # Set optimizers and schedulers
-        return None
+        return [optimizer], [scheduler]

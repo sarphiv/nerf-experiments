@@ -21,7 +21,7 @@ class Args:
     
     camera_origin_noise_sigma: float = 0.15
     camera_rotation_noise_sigma: float = 0.15
-    camera_learning_rate: float = 2e-3
+    camera_learning_rate: float = 1e-3
     
     gaussian_learning_rate_factor: float = 128.0
     gaussian_init_max: float = 2.0
