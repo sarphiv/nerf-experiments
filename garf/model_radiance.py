@@ -20,37 +20,43 @@ class RadianceNetwork(nn.Module):
 
 
         # Creates the first module of the network 
-        self.model_density_1 = nn.Sequential(
-            self._create_linear(3, 1024),
-            self._create_gaussian(1024),
-            self._create_linear(1024, 256),
-            self._create_gaussian(256),
-            self._create_linear(256, 128),
-            self._create_gaussian(128),
-            self._create_linear(128, 128),
-            self._create_gaussian(128),
+        self.model_density_1 = th.compile(
+            nn.Sequential(
+                self._create_linear(3, 1024),
+                self._create_gaussian(1024),
+                self._create_linear(1024, 256),
+                self._create_gaussian(256),
+                self._create_linear(256, 128),
+                self._create_gaussian(128),
+                self._create_linear(128, 128),
+                self._create_gaussian(128),
+            )
         )
 
         # Creates the second module of the network (skip connection of input to the network again)
-        self.model_density_2 = nn.Sequential(
-            self._create_linear(128 + 3, 512),
-            self._create_gaussian(512),
-            self._create_linear(512, 256),
-            self._create_gaussian(256),
-            self._create_linear(256, 128),
-            self._create_gaussian(128),
-            self._create_linear(128, 128 + 1)
+        self.model_density_2 = th.compile(
+            nn.Sequential(
+                self._create_linear(128 + 3, 512),
+                self._create_gaussian(512),
+                self._create_linear(512, 256),
+                self._create_gaussian(256),
+                self._create_linear(256, 128),
+                self._create_gaussian(128),
+                self._create_linear(128, 128 + 1)
+            )
         )
 
         # Creates activation function for density
         self.softplus = nn.Softplus(threshold=8)
 
         # Creates the final module of the model that outputs the color
-        self.model_color = nn.Sequential(
-            self._create_linear(128 + 3, 256),
-            self._create_gaussian(256),
-            self._create_linear(256, 3),
-            nn.Sigmoid()
+        self.model_color = th.compile(
+            nn.Sequential(
+                self._create_linear(128 + 3, 256),
+                self._create_gaussian(256),
+                self._create_linear(256, 3),
+                nn.Sigmoid()
+            )
         )
 
 

@@ -392,6 +392,19 @@ class CameraCalibrationModel(GarfModel):
         # Forward pass
         _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
 
+
+        # Optimization step
+        optimizer = self.optimizers()
+        scheduler = self.lr_schedulers()
+
+        optimizer.optimizer.zero_grad()
+        loss = radiance_loss + proposal_loss
+        self.manual_backward(loss)
+
+        optimizer.step()
+        scheduler.step()
+
+
         # Log metrics
         self.log_dict(self._get_logging_losses(
             "train",
@@ -402,7 +415,7 @@ class CameraCalibrationModel(GarfModel):
 
 
         # Return loss
-        return radiance_loss + proposal_loss
+        return loss
 
 
     def validation_step(self, batch: DatasetOutput, batch_idx: int):
@@ -428,17 +441,17 @@ class CameraCalibrationModel(GarfModel):
 
     def configure_optimizers(self):
         # Configure super optimizers
-        optimizer_config = super().configure_optimizers()
+        [optimizer], [scheduler] = super().configure_optimizers()
         
         # Add camera extrinsics parameters to optimizer
-        optimizer_config["optimizer"].add_param_group({
+        optimizer.add_param_group({
             "params": self.camera_extrinsics.parameters(),
             "lr": self.camera_learning_rate
         })
 
-        optimizer_config["lr_scheduler"]["scheduler"].base_lrs.append(self.camera_learning_rate)
+        scheduler.base_lrs.append(self.camera_learning_rate)
 
 
         # Set optimizers and schedulers
-        return optimizer_config
+        return [optimizer], [scheduler]
 

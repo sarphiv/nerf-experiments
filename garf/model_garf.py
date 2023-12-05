@@ -1,5 +1,4 @@
 from typing import Callable, Literal, Optional, Dict
-from math import log2
 
 import torch as th
 import torch.nn as nn
@@ -60,9 +59,11 @@ class GarfModel(pl.LightningModule):
         self.learning_rate_period = learning_rate_period
 
         # Proposal network estimates sampling density
-        self.proposal_network = ProposalNetwork(
-            gaussian_init_min=gaussian_init_min,
-            gaussian_init_max=gaussian_init_max,
+        self.proposal_network = th.compile(
+            ProposalNetwork(
+                gaussian_init_min=gaussian_init_min,
+                gaussian_init_max=gaussian_init_max,
+            )
         )
 
         # Nerf network estimates colors and densities for volume rendering
@@ -73,6 +74,9 @@ class GarfModel(pl.LightningModule):
 
         # Transmittance estimator
         self.transmittance_estimator = nerfacc.PropNetEstimator()
+
+        # Turn off automatic optimization because training literally gets stuck
+        self.automatic_optimization = False
 
 
     def _get_positions(
@@ -292,6 +296,18 @@ class GarfModel(pl.LightningModule):
         _, (proposal_loss, radiance_loss) = self._forward_loss(batch)
 
 
+        # Optimization step
+        optimizer = self.optimizers()
+        scheduler = self.lr_schedulers()
+
+        optimizer.optimizer.zero_grad()
+        loss = radiance_loss + proposal_loss
+        self.manual_backward(loss)
+
+        optimizer.step()
+        scheduler.step()
+
+
         # Log metrics
         self.log_dict(self._get_logging_losses(
             "train",
@@ -302,7 +318,7 @@ class GarfModel(pl.LightningModule):
 
 
         # Return loss
-        return radiance_loss + proposal_loss
+        return loss
 
 
     def validation_step(self, batch: InnerModelBatchInput, batch_idx: int):
@@ -369,12 +385,4 @@ class GarfModel(pl.LightningModule):
 
 
         # Set optimizers and schedulers
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": "step",
-                "frequency": 1
-            }
-        }
-
+        return [optimizer], [scheduler]
