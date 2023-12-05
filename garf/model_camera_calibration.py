@@ -394,15 +394,24 @@ class CameraCalibrationModel(GarfModel):
 
 
         # Optimization step
-        optimizer = self.optimizers()
-        scheduler = self.lr_schedulers()
+        self.proposal_optimizer.zero_grad()
+        self.radiance_optimizer.zero_grad()
+        self.manual_backward(proposal_loss + radiance_loss)
+        self.proposal_optimizer.step()
+        self.radiance_optimizer.step()
 
-        optimizer.optimizer.zero_grad()
-        loss = radiance_loss + proposal_loss
-        self.manual_backward(loss)
+        self.proposal_scheduler.step()
+        self.radiance_scheduler.step()
+        # self.proposal_optimizer.zero_grad()
+        # self.manual_backward(proposal_loss, retain_graph=True)
+        # self.proposal_optimizer.step()
 
-        optimizer.step()
-        scheduler.step()
+        # self.radiance_optimizer.zero_grad()
+        # self.manual_backward(radiance_loss)
+        # self.radiance_optimizer.step()
+
+        # self.proposal_scheduler.step()
+        # self.radiance_scheduler.step()
 
 
         # Log metrics
@@ -415,7 +424,7 @@ class CameraCalibrationModel(GarfModel):
 
 
         # Return loss
-        return loss
+        return radiance_loss + proposal_loss
 
 
     def validation_step(self, batch: DatasetOutput, batch_idx: int):
@@ -441,17 +450,17 @@ class CameraCalibrationModel(GarfModel):
 
     def configure_optimizers(self):
         # Configure super optimizers
-        [optimizer], [scheduler] = super().configure_optimizers()
+        super().configure_optimizers()
         
         # Add camera extrinsics parameters to optimizer
-        optimizer.add_param_group({
+        self.radiance_optimizer.add_param_group({
             "params": self.camera_extrinsics.parameters(),
             "lr": self.camera_learning_rate
         })
 
-        scheduler.base_lrs.append(self.camera_learning_rate)
+        self.radiance_scheduler.base_lrs.append(self.camera_learning_rate)
 
 
         # Set optimizers and schedulers
-        return [optimizer], [scheduler]
+        return None
 
