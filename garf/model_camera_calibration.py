@@ -15,7 +15,9 @@ class CameraCalibrationModel(GarfModel):
     def __init__(
         self, 
         n_training_images: int,
-        camera_learning_rate: float,
+        camera_learning_rate_start: float,
+        camera_learning_rate_stop: float,
+        camera_learning_rate_decay_end: int,
         pose_error_logging_period: int = 10,
         *inner_model_args, 
         **inner_model_kwargs,
@@ -27,7 +29,10 @@ class CameraCalibrationModel(GarfModel):
         self.camera_extrinsics = CameraExtrinsics(n_training_images)
 
         # Store hyperparameters
-        self.camera_learning_rate = camera_learning_rate
+        self.camera_learning_rate = camera_learning_rate_start
+        self.camera_learning_rate_start = camera_learning_rate_start
+        self.camera_learning_rate_stop = camera_learning_rate_stop
+        self.camera_learning_rate_decay_end = camera_learning_rate_decay_end
 
         # Store logging parameters
         self.pose_error_logging_period = pose_error_logging_period
@@ -394,15 +399,17 @@ class CameraCalibrationModel(GarfModel):
 
 
         # Optimization step
-        optimizer = self.optimizers(use_pl_optimizer=False)
-        scheduler = self.lr_schedulers()
+        optimizers = self.optimizers(use_pl_optimizer=False)
+        schedulers = self.lr_schedulers()
 
-        optimizer.zero_grad()
-        loss = radiance_loss + proposal_loss
-        self.manual_backward(loss)
+        for optimizer in optimizers:
+            optimizer.zero_grad()
 
-        optimizer.step()
-        scheduler.step()
+        self.manual_backward(radiance_loss + proposal_loss)
+        
+        for optimizer, scheduler in zip(optimizers, schedulers):
+            optimizer.step()
+            scheduler.step()
 
 
         # Log metrics
@@ -441,17 +448,32 @@ class CameraCalibrationModel(GarfModel):
 
     def configure_optimizers(self):
         # Configure super optimizers
-        [optimizer], [scheduler] = super().configure_optimizers()
+        optimizers, schedulers = super().configure_optimizers()
         
-        # Add camera extrinsics parameters to optimizer
-        optimizer.add_param_group({
-            "params": self.camera_extrinsics.parameters(),
-            "lr": self.camera_learning_rate
-        })
+        # Set up optimizer and schedulers for camera extrinsics
+        self._camera_optimizer = th.optim.Adam(
+            [
+                { 
+                    "params": self.camera_extrinsics.parameters(),
+                    "lr": self.camera_learning_rate_start,
+                    "initial_lr": self.camera_learning_rate_start
+                },
+            ]
+        )
 
-        scheduler.base_lrs.append(self.camera_learning_rate)
+        self._camera_learning_rate_scheduler = th.optim.lr_scheduler.ExponentialLR(
+            self._camera_optimizer, 
+            gamma=self._calculate_decay_factor(
+                self.camera_learning_rate_start, 
+                self.camera_learning_rate_stop, 
+                self.camera_learning_rate_decay_end
+            ),
+            last_epoch=self.camera_learning_rate_decay_end+1
+        )
 
 
         # Set optimizers and schedulers
-        return [optimizer], [scheduler]
-
+        return (
+            optimizers + [self._camera_optimizer],
+            schedulers + [self._camera_learning_rate_scheduler]
+        )

@@ -1,4 +1,5 @@
 from typing import Callable, Literal, Optional, Dict
+from math import log2
 
 import torch as th
 import torch.nn as nn
@@ -24,12 +25,14 @@ class GarfModel(pl.LightningModule):
         gaussian_init_min: float,
         gaussian_init_max: float,
         gaussian_learning_rate_factor: float,
-        proposal_learning_rate: float,
+        proposal_learning_rate_start: float,
+        proposal_learning_rate_stop: float,
+        proposal_learning_rate_decay_end: int,
         proposal_weight_decay: float,
-        radiance_learning_rate: float,
-        radiance_weight_decay: float,
-        learning_rate_minimum: float,
-        learning_rate_period: int
+        radiance_learning_rate_start: float,
+        radiance_learning_rate_stop: float,
+        radiance_learning_rate_decay_end: int,
+        radiance_weight_decay: float
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -49,14 +52,16 @@ class GarfModel(pl.LightningModule):
         self.gaussian_learning_rate_factor = gaussian_learning_rate_factor
 
         # Hyper parameters for the network training
-        self.proposal_learning_rate = proposal_learning_rate
+        self.proposal_learning_rate_start = proposal_learning_rate_start
+        self.proposal_learning_rate_stop = proposal_learning_rate_stop
+        self.proposal_learning_rate_decay_end = proposal_learning_rate_decay_end
         self.proposal_weight_decay = proposal_weight_decay
         
-        self.radiance_learning_rate = radiance_learning_rate
+        self.radiance_learning_rate_start = radiance_learning_rate_start
+        self.radiance_learning_rate_stop = radiance_learning_rate_stop
+        self.radiance_learning_rate_decay_end = radiance_learning_rate_decay_end
         self.radiance_weight_decay = radiance_weight_decay
-        
-        self.learning_rate_minimum = learning_rate_minimum
-        self.learning_rate_period = learning_rate_period
+
 
         # Proposal network estimates sampling density
         self.proposal_network = th.compile(
@@ -297,15 +302,17 @@ class GarfModel(pl.LightningModule):
 
 
         # Optimization step
-        optimizer = self.optimizers(use_pl_optimizer=False)
-        scheduler = self.lr_schedulers()
+        optimizers = self.optimizers(use_pl_optimizer=False)
+        schedulers = self.lr_schedulers()
 
-        optimizer.zero_grad()
-        loss = radiance_loss + proposal_loss
-        self.manual_backward(loss)
+        for optimizer in optimizers:
+            optimizer.zero_grad()
 
-        optimizer.step()
-        scheduler.step()
+        self.manual_backward(radiance_loss + proposal_loss)
+        
+        for optimizer, scheduler in zip(optimizers, schedulers):
+            optimizer.step()
+            scheduler.step()
 
 
         # Log metrics
@@ -346,43 +353,76 @@ class GarfModel(pl.LightningModule):
 
 
 
+    def _calculate_decay_factor(
+        self,
+        learning_rate_start: float, 
+        learning_rate_stop: float, 
+        learning_rate_decay_end: int
+    ) -> float:
+        return 2**(log2(learning_rate_stop / learning_rate_start) / learning_rate_decay_end)
+
+
     def configure_optimizers(self):
-        optimizer = th.optim.Adam(
+        # Set up proposal optimizers
+        self._proposal_optimizer = th.optim.Adam(
             [
-                # Set up proposal parameter groups
                 { 
                     "params": self.proposal_network.parameters_linear(),
-                    "lr": self.proposal_learning_rate,
+                    "lr": self.proposal_learning_rate_start,
+                    "initial_lr": self.proposal_learning_rate_start,
                     "weight_decay": self.proposal_weight_decay,
                 },
                 {
                     "params": self.proposal_network.parameters_gaussian(), 
-                    "lr": self.gaussian_learning_rate_factor * self.proposal_learning_rate,
+                    "lr": self.gaussian_learning_rate_factor * self.proposal_learning_rate_start,
+                    "initial_lr": self.gaussian_learning_rate_factor * self.proposal_learning_rate_start,
                     "weight_decay": self.proposal_weight_decay,
                 },
-                
-                # Set up radiance optimizers
+            ]
+        )
+
+        self._proposal_learning_rate_scheduler = th.optim.lr_scheduler.ExponentialLR(
+            self._proposal_optimizer, 
+            gamma=self._calculate_decay_factor(
+                self.proposal_learning_rate_start,
+                self.proposal_learning_rate_stop,
+                self.proposal_learning_rate_decay_end
+            ),
+            last_epoch=self.proposal_learning_rate_decay_end+1
+        )
+
+    
+        # Set up radiance optimizers
+        self._radiance_optimizer = th.optim.Adam(
+            [
                 { 
                     "params": self.radiance_network.parameters_linear(),
-                    "lr": self.radiance_learning_rate,
+                    "lr": self.radiance_learning_rate_start,
+                    "initial_lr": self.radiance_learning_rate_start,
                     "weight_decay": self.radiance_weight_decay,
                 },
                 {
                     "params": self.radiance_network.parameters_gaussian(), 
-                    "lr": self.gaussian_learning_rate_factor * self.radiance_learning_rate,
+                    "lr": self.gaussian_learning_rate_factor * self.radiance_learning_rate_start,
+                    "initial_lr": self.gaussian_learning_rate_factor * self.radiance_learning_rate_start,
                     "weight_decay": self.radiance_weight_decay,
                 },
-            ],
-            eps=1e-4
+            ]
         )
 
-
-        scheduler = th.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=self.learning_rate_period,
-            eta_min=self.learning_rate_minimum
+        self._radiance_learning_rate_scheduler = th.optim.lr_scheduler.ExponentialLR(
+            self._radiance_optimizer, 
+            gamma=self._calculate_decay_factor(
+                self.radiance_learning_rate_start,
+                self.radiance_learning_rate_stop,
+                self.radiance_learning_rate_decay_end
+            ),
+            last_epoch=self.radiance_learning_rate_decay_end+1
         )
 
 
         # Set optimizers and schedulers
-        return [optimizer], [scheduler]
+        return (
+            [self._proposal_optimizer, self._radiance_optimizer], 
+            [self._proposal_learning_rate_scheduler, self._radiance_learning_rate_scheduler]
+        )
