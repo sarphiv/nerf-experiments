@@ -388,7 +388,7 @@ class GarfModel(pl.LightningModule):
                 self.proposal_learning_rate_stop,
                 self.proposal_learning_rate_decay_end
             ),
-            last_epoch=self.proposal_learning_rate_decay_end+1
+            last_epoch=-self.proposal_learning_rate_decay_end-1
         )
 
     
@@ -417,7 +417,7 @@ class GarfModel(pl.LightningModule):
                 self.radiance_learning_rate_stop,
                 self.radiance_learning_rate_decay_end
             ),
-            last_epoch=self.radiance_learning_rate_decay_end+1
+            last_epoch=-self.radiance_learning_rate_decay_end-1
         )
 
 

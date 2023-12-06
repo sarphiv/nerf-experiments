@@ -468,7 +468,7 @@ class CameraCalibrationModel(GarfModel):
                 self.camera_learning_rate_stop, 
                 self.camera_learning_rate_decay_end
             ),
-            last_epoch=self.camera_learning_rate_decay_end+1
+            last_epoch=-self.camera_learning_rate_decay_end-1
         )
 
 
