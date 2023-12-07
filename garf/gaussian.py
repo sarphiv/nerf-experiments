@@ -60,5 +60,5 @@ class GaussAct(nn.Module):
 
 
     def forward(self, x: th.Tensor):
-        return th.exp(-x**2 * 0.5*10**2)
+        return th.exp(-x**2 * 0.5*5**2)
         # return GaussActivation.apply(x, self.inv_standard_deviation**2 + 1e-6)
