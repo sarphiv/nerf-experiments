@@ -11,7 +11,7 @@ class SarfActivation(th.autograd.Function):
     def forward(ctx: FunctionCtx, x: th.Tensor, f: th.Tensor):
         # Avoid division by zero
         # NOTE: Approaches f for x = 0, so small numbers should be fine
-        x = th.sign(x) * (th.abs(x) + 1e-4)
+        x = (th.signbit(x)*2-1) * (th.abs(x) + 1e-4)
 
         # Save parameters
         ctx.save_for_backward(x, f)
