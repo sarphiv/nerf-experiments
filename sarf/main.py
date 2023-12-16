@@ -26,8 +26,8 @@ class Args:
     camera_learning_rate_decay_end: float = 2.0
 
     frequency_learning_rate_factor: float = 128
-    frequency_init_max: float = 6.0
-    frequency_init_min: float = 1.0
+    frequency_init_max: float = 2.0
+    frequency_init_min: float = 0.5
 
     proposal_learning_rate_start: float = 5e-4
     proposal_learning_rate_stop: float = 5e-5
