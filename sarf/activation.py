@@ -61,4 +61,6 @@ class SarfAct(nn.Module):
 
 
     def forward(self, x: th.Tensor):
-        return SarfActivation.apply(x, self.frequency)
+        x = (th.signbit(x)*2-1) * (th.abs(x) + 1e-4)
+        return th.sin(self.frequency*x) / x
+        # return SarfActivation.apply(x, self.frequency)

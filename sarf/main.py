@@ -19,15 +19,15 @@ from model_camera_calibration import CameraCalibrationModel
 class Args:
     name: str | None = None
     
-    camera_origin_noise_sigma: float = 0.15
-    camera_rotation_noise_sigma: float = 0.15
-    camera_learning_rate_start: float = 4e-3
-    camera_learning_rate_stop: float = 8e-4
+    camera_origin_noise_sigma: float = 0.0
+    camera_rotation_noise_sigma: float = 0.0
+    camera_learning_rate_start: float = 4e-9
+    camera_learning_rate_stop: float = 8e-9
     camera_learning_rate_decay_end: float = 2.0
 
-    frequency_learning_rate_factor: float = 16.0
-    frequency_init_max: float = 2.0
-    frequency_init_min: float = 0.5
+    frequency_learning_rate_factor: float = 128
+    frequency_init_max: float = 6.0
+    frequency_init_min: float = 1.0
 
     proposal_learning_rate_start: float = 5e-4
     proposal_learning_rate_stop: float = 5e-5
